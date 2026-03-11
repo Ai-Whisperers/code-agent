@@ -62,6 +62,85 @@ public class JiraService {
     }
 
     /**
+     * Search the JIRA issue description for Aikido issue candidate IDs.
+     * Extracts all numeric IDs from Aikido URLs (groupId, sidebarIssue, /issues/groups/ path).
+     * Returns them in priority order so the caller can try each against the API.
+     */
+    public java.util.List<Integer> extractAikidoCandidateIds(String issueKey) {
+        String json = get("/rest/api/3/issue/" + issueKey + "?fields=description",
+                "fetch description " + issueKey);
+        if (json == null) return java.util.List.of();
+
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            var description = root.path("fields").path("description");
+
+            String allText = extractAdfTextAndLinks(description);
+            LOG.infof("JIRA %s description extracted text+links (%d chars): %s",
+                    issueKey, allText.length(),
+                    allText.length() > 500 ? allText.substring(0, 500) + "..." : allText);
+
+            var candidates = new java.util.LinkedHashSet<Integer>();
+
+            var patterns = new java.util.regex.Pattern[]{
+                    java.util.regex.Pattern.compile("aikido\\.dev/issues/groups/(\\d+)"),
+                    java.util.regex.Pattern.compile("aikido\\.dev[^\\s]*[?&]sidebarIssue=(\\d+)"),
+                    java.util.regex.Pattern.compile("aikido\\.dev[^\\s]*[?&]groupId=(\\d+)")
+            };
+            for (var pattern : patterns) {
+                var matcher = pattern.matcher(allText);
+                while (matcher.find()) {
+                    candidates.add(Integer.parseInt(matcher.group(1)));
+                }
+            }
+
+            LOG.infof("JIRA %s: found %d Aikido candidate IDs: %s", issueKey, candidates.size(), candidates);
+            return new java.util.ArrayList<>(candidates);
+        } catch (Exception e) {
+            LOG.warnf("Failed to extract Aikido IDs from %s: %s", issueKey, e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Extract text AND href URLs from ADF nodes (to capture Aikido links).
+     */
+    private String extractAdfTextAndLinks(com.fasterxml.jackson.databind.JsonNode node) {
+        if (node == null || node.isMissingNode() || node.isNull()) return "";
+
+        var sb = new StringBuilder();
+
+        if (node.has("text")) {
+            sb.append(node.path("text").asText(""));
+        }
+
+        var marks = node.path("marks");
+        if (marks.isArray()) {
+            for (var mark : marks) {
+                if ("link".equals(mark.path("type").asText(""))) {
+                    String href = mark.path("attrs").path("href").asText("");
+                    if (!href.isBlank()) sb.append(" ").append(href);
+                }
+            }
+        }
+
+        if ("inlineCard".equals(node.path("type").asText(""))) {
+            String url = node.path("attrs").path("url").asText("");
+            if (!url.isBlank()) sb.append(" ").append(url);
+        }
+
+        var content = node.path("content");
+        if (content.isArray()) {
+            for (var child : content) {
+                sb.append(" ").append(extractAdfTextAndLinks(child));
+            }
+        }
+
+        return sb.toString();
+    }
+
+    /**
      * Fetch the issue summary and description (ADF rendered to plain text).
      * Returns "SUMMARY\n\nDESCRIPTION" or just "SUMMARY" if description is empty.
      */

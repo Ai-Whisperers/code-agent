@@ -8,7 +8,10 @@ import java.util.concurrent.Semaphore;
 
 import com.eneve.agent.agent.AgentRunner;
 import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.aikido.AikidoIssueInfo;
+import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
@@ -48,6 +51,7 @@ public class RunFixResource {
     @Inject AgentRunner agentRunner;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
+    @Inject AikidoService aikidoService;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(MAX_CONCURRENT_JOBS);
     private final Semaphore semaphore = new Semaphore(MAX_CONCURRENT_JOBS);
@@ -190,6 +194,146 @@ public class RunFixResource {
 
         LOG.infof("Quick-fix job %s accepted for %s (branch: %s)", jobId, request.jiraKey(), branchName);
         return Response.accepted(Map.of("jobId", jobId, "branch", branchName)).build();
+    }
+
+    @POST
+    @Path("/aikido-fix")
+    @Tag(name = "Aikido")
+    @Operation(
+            operationId = "aikidoFix",
+            summary = "Submit an Aikido-driven fix job",
+            description = "Resolves vulnerability context from Aikido Security (package, versions, CVE, changelog) "
+                    + "using either a JIRA key or an Aikido issue group ID. Builds an enriched prompt with full "
+                    + "vulnerability details, auto-generates a branch name, and uses 'develop' as the base branch. "
+                    + "After the PR is created, optionally triggers an Aikido CI scan to verify the fix."
+    )
+    @RequestBody(
+            required = true,
+            description = "JIRA key and/or Aikido issue group ID",
+            content = @Content(schema = @Schema(implementation = AikidoFixRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"...\", \"branch\": \"agent/JTP-10967-upgrade-log4j\", \"aikidoIssue\": {\"package\": \"log4j-core\", \"cve\": \"CVE-2024-XXXXX\"}}"))),
+            @APIResponse(responseCode = "400", description = "Missing fields or Aikido issue not found"),
+            @APIResponse(responseCode = "429", description = "Too many concurrent jobs"),
+            @APIResponse(responseCode = "503", description = "Aikido integration not configured")
+    })
+    public Response aikidoFix(AikidoFixRequest request) {
+        if (!aikidoService.isEnabled()) {
+            return Response.status(503)
+                    .entity(Map.of("error", "Aikido integration not configured. Set AIKIDO_CLIENT_ID and AIKIDO_CLIENT_SECRET."))
+                    .build();
+        }
+
+        if ((request.jiraKey() == null || request.jiraKey().isBlank())
+                && request.aikidoGroupId() == null) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Either jiraKey or aikidoGroupId is required"))
+                    .build();
+        }
+
+        // 1. Resolve Aikido issue group ID (try multiple strategies)
+        Integer groupId = request.aikidoGroupId();
+        if (groupId == null) {
+            groupId = aikidoService.findIssueGroupByJiraKey(request.jiraKey());
+        }
+        // 1b. Fallback: check JIRA description for Aikido URLs and try each candidate
+        AikidoIssueInfo issueInfo = null;
+        if (groupId != null) {
+            issueInfo = aikidoService.getIssueGroupDetail(groupId);
+        }
+
+        if (issueInfo == null && request.jiraKey() != null) {
+            LOG.infof("Aikido API lookup failed for %s, checking JIRA description for Aikido URL", request.jiraKey());
+            var candidateIds = jiraService.extractAikidoCandidateIds(request.jiraKey());
+            for (Integer candidateId : candidateIds) {
+                LOG.infof("Trying Aikido candidate ID: %d", candidateId);
+                issueInfo = aikidoService.getIssueGroupDetail(candidateId);
+                if (issueInfo != null) {
+                    groupId = candidateId;
+                    LOG.infof("Aikido issue resolved via JIRA description: group ID %d", groupId);
+                    break;
+                }
+            }
+        }
+
+        if (issueInfo == null) {
+            return Response.status(400)
+                    .entity(Map.of("error", "No Aikido issue found for JIRA key: "
+                            + request.jiraKey() + ". Checked: Aikido linked issues, JIRA description for Aikido URL."))
+                    .build();
+        }
+
+        // 3. Resolve repo URL
+        String repoUrl = request.repoUrl();
+        if (repoUrl == null || repoUrl.isBlank()) {
+            repoUrl = issueInfo.repoUrl();
+        }
+        if (repoUrl == null || repoUrl.isBlank()) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Could not resolve repository URL from Aikido. Provide repoUrl explicitly."))
+                    .build();
+        }
+
+        // 4. Resolve JIRA key (may come from request or we derive it)
+        String jiraKey = request.jiraKey();
+        if (jiraKey == null || jiraKey.isBlank()) {
+            jiraKey = "AIKIDO-" + groupId;
+        }
+
+        // 5. Build enriched prompt and branch name
+        String prompt = issueInfo.toPromptSection();
+        String branchSlug = slugify(issueInfo.packageName() + "-" + (issueInfo.fixedVersion() != null
+                ? issueInfo.fixedVersion() : "fix"));
+        String branchName = "agent/" + jiraKey + "-" + branchSlug;
+
+        RunFixRequest fullRequest = new RunFixRequest(
+                repoUrl,
+                branchName,
+                jiraKey,
+                prompt,
+                "develop",
+                null, null, null, null
+        );
+
+        if (!semaphore.tryAcquire()) {
+            return Response.status(429)
+                    .entity(Map.of("error", "Too many concurrent jobs. Max: " + MAX_CONCURRENT_JOBS))
+                    .build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, fullRequest);
+        jobStore.put(job);
+
+        executor.submit(() -> {
+            try {
+                agentRunner.execute(job);
+            } catch (Exception e) {
+                LOG.errorf("Unhandled error in aikido-fix job %s: %s", jobId, e.getMessage());
+                job.setStatus(JobStatus.FAILED);
+                job.setErrorMessage("Unhandled error: " + e.getMessage());
+            } finally {
+                semaphore.release();
+            }
+        });
+
+        LOG.infof("Aikido-fix job %s accepted for %s (group=%d, package=%s, branch=%s)",
+                jobId, jiraKey, groupId, issueInfo.packageName(), branchName);
+
+        return Response.accepted(Map.of(
+                "jobId", jobId,
+                "branch", branchName,
+                "aikidoIssue", Map.of(
+                        "groupId", groupId,
+                        "package", issueInfo.packageName(),
+                        "currentVersion", issueInfo.currentVersion() != null ? issueInfo.currentVersion() : "",
+                        "fixedVersion", issueInfo.fixedVersion() != null ? issueInfo.fixedVersion() : "",
+                        "cve", issueInfo.cveId() != null ? issueInfo.cveId() : "",
+                        "severity", issueInfo.severity()
+                )
+        )).build();
     }
 
     @GET
