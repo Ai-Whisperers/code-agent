@@ -9,6 +9,7 @@ import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.core.JsonValue;
 import com.anthropic.errors.RateLimitException;
+import com.anthropic.models.messages.CacheControlEphemeral;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.ContentBlockParam;
 import com.anthropic.models.messages.Message;
@@ -18,6 +19,7 @@ import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
+import com.anthropic.models.messages.Usage;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -78,12 +80,14 @@ public class ClaudeToolUseLoop {
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(Model.of(modelName))
                     .maxTokens(maxTokens)
+                    .cacheControl(CacheControlEphemeral.builder().build())
                     .system(systemPrompt)
                     .messages(messages)
                     .tools(ToolDefinitions.all())
                     .build();
 
             Message response = callWithRetry(client, params);
+            logUsage(response, iteration + 1);
 
             boolean hasToolUse = false;
             List<ContentBlockParam> toolResults = new ArrayList<>();
@@ -142,6 +146,16 @@ public class ClaudeToolUseLoop {
 
         LOG.warnf("Agent loop hit max iterations (%d)", maxIterations);
         return "Agent loop reached maximum iterations without completing. Partial work may exist.";
+    }
+
+    private void logUsage(Message response, int iteration) {
+        Usage usage = response.usage();
+        long input = usage.inputTokens();
+        long output = usage.outputTokens();
+        long cacheWrite = usage.cacheCreationInputTokens().orElse(0L);
+        long cacheRead = usage.cacheReadInputTokens().orElse(0L);
+        LOG.infof("Iteration %d tokens — input: %d, output: %d, cache_write: %d, cache_read: %d",
+                iteration, input, output, cacheWrite, cacheRead);
     }
 
     private static final int MAX_RETRIES = 5;

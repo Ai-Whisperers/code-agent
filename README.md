@@ -11,6 +11,7 @@ A self-hosted coding agent that automates issue fixing and dependency upgrades. 
   n8n/JIRA ──►│  POST /run-fix      (full control)          │
               │  POST /quick-fix    (JIRA key + repo)       │
   Aikido ────►│  POST /aikido-fix   (JIRA key only)         │
+  JIRA wh ───►│  POST /webhooks/jira (auto on assignment)   │
               └──────────────┬──────────────────────────────┘
                              │
                              ▼
@@ -56,6 +57,7 @@ A self-hosted coding agent that automates issue fixing and dependency upgrades. 
 | POST | `/run-fix` | Submit a fix job with full control over all parameters |
 | POST | `/quick-fix` | Simplified: JIRA key + repo URL, prompt from JIRA description |
 | POST | `/aikido-fix` | Aikido-driven: resolves everything from JIRA key via Aikido |
+| POST | `/webhooks/jira` | JIRA Cloud webhook — auto-triggers jobs on issue assignment |
 | GET | `/status/{jobId}` | Poll job status |
 | POST | `/jobs/{jobId}/approve` | Merge the PR, transition JIRA to Done |
 | POST | `/jobs/{jobId}/reject` | Decline the PR, add JIRA comment |
@@ -135,6 +137,30 @@ Response:
 }
 ```
 
+### POST /webhooks/jira (webhook)
+
+Receives JIRA Cloud webhook payloads. No request body to construct — JIRA sends this automatically.
+
+**Trigger:** assign a Bug to the agent user in JIRA.
+
+**Response (job triggered):**
+```json
+{
+  "action": "job_triggered",
+  "jobId": "...",
+  "jiraKey": "JTP-10967",
+  "branch": "agent/JTP-10967-cxf-xjc-boolean-fix"
+}
+```
+
+**Response (ignored):**
+```json
+{
+  "action": "ignored",
+  "reason": "Not assigned to agent user"
+}
+```
+
 ## Configuration
 
 All config via environment variables (or `application.properties` for local dev):
@@ -151,6 +177,9 @@ All config via environment variables (or `application.properties` for local dev)
 | `JIRA_TRANSITION_DONE` | Transition ID for "Done" | (optional) |
 | `JIRA_TRANSITION_REJECTED` | Transition ID for rejected | (optional) |
 | `JIRA_DEFAULT_WORKLOG` | Default time logged per fix | `30m` |
+| `JIRA_AGENT_ASSIGNEE` | Display name, email, or account ID of the agent user in JIRA | (optional) |
+| `JIRA_AGENT_ISSUE_TYPES` | Comma-separated issue types to handle (e.g. `Bug,Task`) | `Bug` |
+| `JIRA_AGENT_DEFAULT_REPO_URL` | Default repo URL when not resolvable from Aikido | (optional) |
 | `BITBUCKET_BASE_URL` | Bitbucket Cloud API base | `https://api.bitbucket.org/2.0` |
 | `BITBUCKET_WORKSPACE` | Bitbucket workspace slug | (required) |
 | `BITBUCKET_USER` | Bitbucket username | (required) |
@@ -259,6 +288,38 @@ The agent uses three strategies to find the Aikido issue (in order):
 1. In Aikido, go to **Settings > Public API** and create an OAuth client
 2. Set `AIKIDO_CLIENT_ID` and `AIKIDO_CLIENT_SECRET` in your `.env`
 3. (Optional) For post-PR scan verification, set `AIKIDO_CI_API_SECRET` from **Settings > CI Integration**
+
+## JIRA Webhook (auto-trigger on assignment)
+
+The agent can automatically start fixing issues when they are assigned to a dedicated JIRA user (e.g. "Code Agent").
+
+### How it works
+
+1. A Bug is assigned to the "Code Agent" user in JIRA
+2. JIRA fires a webhook to `POST /webhooks/jira`
+3. The agent checks: is it an allowed issue type? Is the assignee the agent user?
+4. If Aikido is configured, it tries the Aikido-enriched flow (package, CVE, changelog)
+5. Otherwise, falls back to JIRA description as the prompt
+6. A fix job is submitted automatically
+
+### Setup in JIRA Cloud
+
+1. Create a JIRA user for the agent (e.g. "Code Agent") or use an existing service account
+2. Go to **JIRA Settings > System > Webhooks** (admin required)
+3. Click **Create a WebHook**:
+   - **URL:** `https://your-agent-host:8080/webhooks/jira`
+   - **Events:** check `Issue created` and `Issue updated`
+   - **JQL filter (optional):** `assignee = "Code Agent" AND issuetype = Bug` to reduce noise
+4. Configure in `.env`:
+   ```
+   JIRA_AGENT_ASSIGNEE=Code Agent
+   JIRA_AGENT_ISSUE_TYPES=Bug
+   JIRA_AGENT_DEFAULT_REPO_URL=https://bitbucket.org/your-workspace/your-repo.git
+   ```
+
+`JIRA_AGENT_ASSIGNEE` can be the display name, email address, or Atlassian account ID.
+`JIRA_AGENT_ISSUE_TYPES` is a comma-separated list (e.g. `Bug,Task,Sub-task`).
+`JIRA_AGENT_DEFAULT_REPO_URL` is used as a fallback when the repo can't be resolved from Aikido.
 
 ## n8n Approval Flow
 
