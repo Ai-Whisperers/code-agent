@@ -44,6 +44,42 @@ public class JiraService {
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
+    public record JiraIssueRef(String key, String summary) {}
+
+    /**
+     * Search for open issues assigned to the given user.
+     * Accepts a display name, email, or account ID — JIRA resolves it via JQL.
+     */
+    public java.util.List<JiraIssueRef> searchAssignedIssues(String assignee) {
+        String jql = "assignee = \"" + escapeJson(assignee) + "\" AND statusCategory != Done ORDER BY created DESC";
+        String path = "/rest/api/3/search?jql=" + java.net.URLEncoder.encode(jql, StandardCharsets.UTF_8)
+                + "&fields=summary&maxResults=50";
+
+        String json = get(path, "search assigned issues");
+        if (json == null) return java.util.List.of();
+
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            var issues = root.path("issues");
+            if (!issues.isArray()) return java.util.List.of();
+
+            var results = new java.util.ArrayList<JiraIssueRef>();
+            for (var issue : issues) {
+                String key = issue.path("key").asText("");
+                String summary = issue.path("fields").path("summary").asText("");
+                if (!key.isBlank()) {
+                    results.add(new JiraIssueRef(key, summary));
+                }
+            }
+            LOG.infof("JIRA search: found %d open issues assigned to %s", results.size(), assignee);
+            return results;
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse JIRA search results: %s", e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
     /**
      * Fetch the issue summary only (for generating branch names, etc).
      */

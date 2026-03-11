@@ -1,12 +1,12 @@
 package com.eneve.agent;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
 
 import com.eneve.agent.agent.AgentRunner;
+import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
@@ -19,6 +19,7 @@ import com.eneve.agent.model.QuickFixRequest;
 import com.eneve.agent.model.RejectRequest;
 import com.eneve.agent.model.RunFixRequest;
 
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -46,15 +47,18 @@ import jakarta.ws.rs.core.Response;
 public class RunFixResource {
 
     private static final Logger LOG = Logger.getLogger(RunFixResource.class);
-    private static final int MAX_CONCURRENT_JOBS = 3;
 
     @Inject AgentRunner agentRunner;
+    @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
 
-    private final ExecutorService executor = Executors.newFixedThreadPool(MAX_CONCURRENT_JOBS);
-    private final Semaphore semaphore = new Semaphore(MAX_CONCURRENT_JOBS);
+    @ConfigProperty(name = "jira.agent.assignee", defaultValue = "")
+    String agentAssignee;
+
+    @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
+    String defaultRepoUrl;
 
     @POST
     @Path("/run-fix")
@@ -75,8 +79,8 @@ public class RunFixResource {
                     content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"))),
             @APIResponse(responseCode = "400", description = "Missing required fields",
                     content = @Content(schema = @Schema(example = "{\"error\": \"repoUrl is required\"}"))),
-            @APIResponse(responseCode = "429", description = "Too many concurrent jobs",
-                    content = @Content(schema = @Schema(example = "{\"error\": \"Too many concurrent jobs. Max: 3\"}")))
+            @APIResponse(responseCode = "429", description = "Job queue is full",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"Job queue is full\"}")))
     })
     public Response runFix(RunFixRequest request) {
         if (request.repoUrl() == null || request.repoUrl().isBlank()) {
@@ -89,27 +93,15 @@ public class RunFixResource {
             return Response.status(400).entity(Map.of("error", "jiraKey is required")).build();
         }
 
-        if (!semaphore.tryAcquire()) {
-            return Response.status(429)
-                    .entity(Map.of("error", "Too many concurrent jobs. Max: " + MAX_CONCURRENT_JOBS))
-                    .build();
-        }
-
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
         jobStore.put(job);
 
-        executor.submit(() -> {
-            try {
-                agentRunner.execute(job);
-            } catch (Exception e) {
-                LOG.errorf("Unhandled error in job %s: %s", jobId, e.getMessage());
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Unhandled error: " + e.getMessage());
-            } finally {
-                semaphore.release();
-            }
-        });
+        if (!jobQueue.submit(job)) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
 
         LOG.infof("Job %s accepted for %s", jobId, request.jiraKey());
         return Response.accepted(Map.of("jobId", jobId)).build();
@@ -135,7 +127,7 @@ public class RunFixResource {
                     content = @Content(schema = @Schema(example = "{\"jobId\": \"...\", \"branch\": \"agent/JTP-10967-upgrade-cxf-xjc\"}"))),
             @APIResponse(responseCode = "400", description = "Missing required fields or JIRA fetch failed",
                     content = @Content(schema = @Schema(example = "{\"error\": \"Could not fetch JIRA issue JTP-10967\"}"))),
-            @APIResponse(responseCode = "429", description = "Too many concurrent jobs")
+            @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response quickFix(QuickFixRequest request) {
         if (request.repoUrl() == null || request.repoUrl().isBlank()) {
@@ -170,27 +162,15 @@ public class RunFixResource {
                 null, null, null, null
         );
 
-        if (!semaphore.tryAcquire()) {
-            return Response.status(429)
-                    .entity(Map.of("error", "Too many concurrent jobs. Max: " + MAX_CONCURRENT_JOBS))
-                    .build();
-        }
-
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, fullRequest);
         jobStore.put(job);
 
-        executor.submit(() -> {
-            try {
-                agentRunner.execute(job);
-            } catch (Exception e) {
-                LOG.errorf("Unhandled error in job %s: %s", jobId, e.getMessage());
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Unhandled error: " + e.getMessage());
-            } finally {
-                semaphore.release();
-            }
-        });
+        if (!jobQueue.submit(job)) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
 
         LOG.infof("Quick-fix job %s accepted for %s (branch: %s)", jobId, request.jiraKey(), branchName);
         return Response.accepted(Map.of("jobId", jobId, "branch", branchName)).build();
@@ -216,7 +196,7 @@ public class RunFixResource {
             @APIResponse(responseCode = "202", description = "Job accepted and queued",
                     content = @Content(schema = @Schema(example = "{\"jobId\": \"...\", \"branch\": \"agent/JTP-10967-upgrade-log4j\", \"aikidoIssue\": {\"package\": \"log4j-core\", \"cve\": \"CVE-2024-XXXXX\"}}"))),
             @APIResponse(responseCode = "400", description = "Missing fields or Aikido issue not found"),
-            @APIResponse(responseCode = "429", description = "Too many concurrent jobs"),
+            @APIResponse(responseCode = "429", description = "Job queue is full"),
             @APIResponse(responseCode = "503", description = "Aikido integration not configured")
     })
     public Response aikidoFix(AikidoFixRequest request) {
@@ -299,27 +279,15 @@ public class RunFixResource {
                 request.extraRules()
         );
 
-        if (!semaphore.tryAcquire()) {
-            return Response.status(429)
-                    .entity(Map.of("error", "Too many concurrent jobs. Max: " + MAX_CONCURRENT_JOBS))
-                    .build();
-        }
-
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, fullRequest);
         jobStore.put(job);
 
-        executor.submit(() -> {
-            try {
-                agentRunner.execute(job);
-            } catch (Exception e) {
-                LOG.errorf("Unhandled error in aikido-fix job %s: %s", jobId, e.getMessage());
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Unhandled error: " + e.getMessage());
-            } finally {
-                semaphore.release();
-            }
-        });
+        if (!jobQueue.submit(job)) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
 
         LOG.infof("Aikido-fix job %s accepted for %s (group=%d, package=%s, branch=%s)",
                 jobId, jiraKey, groupId, issueInfo.packageName(), branchName);
@@ -354,7 +322,7 @@ public class RunFixResource {
             @Parameter(description = "UUID of the job returned by POST /run-fix", required = true, example = "550e8400-e29b-41d4-a716-446655440000")
             @PathParam("jobId") String jobId) {
         return jobStore.get(jobId)
-                .map(job -> Response.ok(JobStatusResponse.from(job)).build())
+                .map(job -> Response.ok(JobStatusResponse.from(job, jobQueue.getQueuePosition(jobId))).build())
                 .orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
     }
 
@@ -436,20 +404,149 @@ public class RunFixResource {
             description = "Returns service health status and available job slots."
     )
     @APIResponse(responseCode = "200", description = "Service is healthy",
-            content = @Content(schema = @Schema(example = "{\"status\": \"UP\", \"availableSlots\": 3, \"maxConcurrentJobs\": 3}")))
+            content = @Content(schema = @Schema(example = "{\"status\": \"UP\", \"availableSlots\": 3, \"runningJobs\": 0, \"queuedJobs\": 0}")))
     public Response health() {
         return Response.ok(Map.of(
                 "status", "UP",
-                "availableSlots", semaphore.availablePermits(),
-                "maxConcurrentJobs", MAX_CONCURRENT_JOBS
+                "availableSlots", jobQueue.getAvailableSlots(),
+                "runningJobs", jobQueue.getRunningCount(),
+                "queuedJobs", jobQueue.getQueueDepth(),
+                "maxConcurrentJobs", jobQueue.getMaxConcurrentJobs(),
+                "maxQueueSize", jobQueue.getMaxQueueSize()
         )).build();
     }
 
-    /**
-     * Convert a JIRA summary to a git-safe branch slug.
-     * e.g. "Upgrade CXF-XJC Boolean plugin" → "upgrade-cxf-xjc-boolean-plugin"
-     */
+    @POST
+    @Path("/sync-jira")
+    @Operation(
+            operationId = "syncJira",
+            summary = "Sync open issues from JIRA",
+            description = "Searches JIRA for open issues assigned to the configured agent user "
+                    + "(jira.agent.assignee) and queues fix jobs for any that don't already have an active job. "
+                    + "For each new issue, tries Aikido-enriched context first, then falls back to JIRA description."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Sync completed",
+                    content = @Content(schema = @Schema(example = "{\"found\": 5, \"queued\": 2, \"skipped\": [{\"key\": \"PROJ-1\", \"reason\": \"Active job exists\"}]}"))),
+            @APIResponse(responseCode = "400", description = "Agent assignee not configured")
+    })
+    public Response syncJira() {
+        if (agentAssignee.isBlank()) {
+            return Response.status(400)
+                    .entity(Map.of("error", "jira.agent.assignee not configured"))
+                    .build();
+        }
+
+        var issues = jiraService.searchAssignedIssues(agentAssignee);
+        if (issues.isEmpty()) {
+            LOG.info("sync-jira: no open issues found assigned to agent");
+            return Response.ok(Map.of("found", 0, "queued", 0,
+                    "skipped", List.of())).build();
+        }
+
+        LOG.infof("sync-jira: found %d open issues assigned to %s:", issues.size(), agentAssignee);
+        for (var issue : issues) {
+            LOG.infof("  - %s: %s", issue.key(), issue.summary());
+        }
+
+        List<Map<String, String>> queued = new ArrayList<>();
+        List<Map<String, String>> skipped = new ArrayList<>();
+
+        for (var issue : issues) {
+            if (jobStore.hasActiveJobForJiraKey(issue.key())) {
+                skipped.add(Map.of("key", issue.key(), "reason", "Active job exists"));
+                continue;
+            }
+
+            String repoUrl = null;
+            String prompt = null;
+            String branchSuffix;
+
+            if (aikidoService.isEnabled()) {
+                var enrichment = resolveAikidoContext(issue.key());
+                if (enrichment != null) {
+                    repoUrl = enrichment.repoUrl;
+                    prompt = enrichment.prompt;
+                    branchSuffix = enrichment.branchSuffix;
+                    LOG.infof("sync-jira: Aikido context resolved for %s", issue.key());
+                } else {
+                    branchSuffix = slugify(issue.summary());
+                }
+            } else {
+                branchSuffix = slugify(issue.summary());
+            }
+
+            if (repoUrl == null || repoUrl.isBlank()) {
+                repoUrl = defaultRepoUrl;
+            }
+            if (repoUrl == null || repoUrl.isBlank()) {
+                skipped.add(Map.of("key", issue.key(), "reason", "No repo URL available"));
+                continue;
+            }
+
+            String branchName = "agent/" + issue.key() + "-" + branchSuffix;
+            RunFixRequest fullRequest = new RunFixRequest(
+                    repoUrl, branchName, issue.key(), prompt,
+                    "develop", null, null, null, null
+            );
+
+            String jobId = UUID.randomUUID().toString();
+            JobRecord job = new JobRecord(jobId, fullRequest);
+            jobStore.put(job);
+
+            if (!jobQueue.submit(job)) {
+                job.setStatus(JobStatus.FAILED);
+                job.setErrorMessage("Job queue is full");
+                skipped.add(Map.of("key", issue.key(), "reason", "Queue full"));
+                break;
+            }
+
+            queued.add(Map.of("key", issue.key(), "jobId", jobId, "branch", branchName));
+        }
+
+        LOG.infof("sync-jira: found=%d, queued=%d, skipped=%d",
+                issues.size(), queued.size(), skipped.size());
+
+        return Response.ok(Map.of(
+                "found", issues.size(),
+                "queued", queued.size(),
+                "queuedJobs", queued,
+                "skipped", skipped
+        )).build();
+    }
+
+    private record AikidoEnrichment(String repoUrl, String prompt, String branchSuffix) {}
+
+    private AikidoEnrichment resolveAikidoContext(String issueKey) {
+        Integer groupId = aikidoService.findIssueGroupByJiraKey(issueKey);
+
+        if (groupId == null) {
+            var candidateIds = jiraService.extractAikidoCandidateIds(issueKey);
+            for (Integer candidateId : candidateIds) {
+                AikidoIssueInfo info = aikidoService.getIssueGroupDetail(candidateId);
+                if (info != null) {
+                    groupId = candidateId;
+                    break;
+                }
+            }
+        }
+
+        if (groupId == null) return null;
+
+        AikidoIssueInfo issueInfo = aikidoService.getIssueGroupDetail(groupId);
+        if (issueInfo == null) return null;
+
+        String repoUrl = (issueInfo.repoUrl() != null && !issueInfo.repoUrl().isBlank())
+                ? issueInfo.repoUrl() : null;
+        String prompt = issueInfo.toPromptSection();
+        String branchSuffix = slugify(issueInfo.packageName() + "-"
+                + (issueInfo.fixedVersion() != null ? issueInfo.fixedVersion() : "fix"));
+
+        return new AikidoEnrichment(repoUrl, prompt, branchSuffix);
+    }
+
     private static String slugify(String text) {
+        if (text == null || text.isBlank()) return "fix";
         String slug = text.toLowerCase()
                 .replaceAll("[^a-z0-9]+", "-")
                 .replaceAll("^-|-$", "");

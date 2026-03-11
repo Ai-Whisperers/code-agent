@@ -58,10 +58,13 @@ A self-hosted coding agent that automates issue fixing and dependency upgrades. 
 | POST | `/quick-fix` | Simplified: JIRA key + repo URL, prompt from JIRA description |
 | POST | `/aikido-fix` | Aikido-driven: resolves everything from JIRA key via Aikido |
 | POST | `/webhooks/jira` | JIRA Cloud webhook — auto-triggers jobs on issue assignment |
+| POST | `/sync-jira` | Search JIRA for assigned issues and queue any missing jobs |
 | GET | `/status/{jobId}` | Poll job status |
 | POST | `/jobs/{jobId}/approve` | Merge the PR, transition JIRA to Done |
 | POST | `/jobs/{jobId}/reject` | Decline the PR, add JIRA comment |
-| GET | `/health` | Health check with available job slots |
+| GET | `/health` | Health check with queue status and available slots |
+
+All submission endpoints (`/run-fix`, `/quick-fix`, `/aikido-fix`, `/webhooks/jira`) queue jobs instead of rejecting them. Jobs are processed FIFO up to `RUN_FIX_MAX_CONCURRENT_JOBS` in parallel. A 429 is only returned when the queue itself is full (default capacity: 20). Poll `/status/{jobId}` to see queue position.
 
 ### POST /run-fix (full control)
 
@@ -111,7 +114,16 @@ The simplest endpoint — only a JIRA key is needed. The agent:
 4. **Builds an enriched prompt** with full vulnerability details for Claude
 5. **Auto-generates** the branch name and uses `develop` as base branch
 
-Optional fields: `aikidoGroupId` (skip JIRA lookup), `repoUrl` (override Aikido repo).
+Optional fields: `aikidoGroupId` (skip JIRA lookup), `repoUrl` (override Aikido repo), `ruleNames` (load specific rules from the shared rules repo configured via `RULES_REPO_URL`), `extraRules` (inline additional instructions appended to the system prompt).
+
+Example with rules:
+```json
+{
+  "jiraKey": "JTP-10967",
+  "ruleNames": ["java-conventions", "security-standards"],
+  "extraRules": "Ensure backward compatibility with Java 17"
+}
+```
 
 Response:
 ```json
@@ -141,7 +153,7 @@ Response:
 
 Receives JIRA Cloud webhook payloads. No request body to construct — JIRA sends this automatically.
 
-**Trigger:** assign a Bug to the agent user in JIRA.
+**Trigger:** assign any issue to the agent user in JIRA.
 
 **Response (job triggered):**
 ```json
@@ -158,6 +170,33 @@ Receives JIRA Cloud webhook payloads. No request body to construct — JIRA send
 {
   "action": "ignored",
   "reason": "Not assigned to agent user"
+}
+```
+
+### POST /sync-jira (active polling)
+
+No request body needed. Searches JIRA for all open issues (`statusCategory != Done`) assigned to the agent user and queues fix jobs for any that don't already have an active job in the queue.
+
+Useful as a catch-up mechanism (e.g. via a cron/scheduler) to pick up issues that were assigned while the agent was down, or as a manual trigger.
+
+```bash
+curl -X POST http://localhost:8080/sync-jira
+```
+
+**Response:**
+```json
+{
+  "found": 5,
+  "queued": 2,
+  "queuedJobs": [
+    { "key": "JTP-10967", "jobId": "...", "branch": "agent/JTP-10967-upgrade-log4j" },
+    { "key": "JTP-10980", "jobId": "...", "branch": "agent/JTP-10980-fix-null-check" }
+  ],
+  "skipped": [
+    { "key": "JTP-10950", "reason": "Active job exists" },
+    { "key": "JTP-10960", "reason": "Active job exists" },
+    { "key": "JTP-10970", "reason": "No repo URL available" }
+  ]
 }
 ```
 
@@ -190,6 +229,8 @@ All config via environment variables (or `application.properties` for local dev)
 | `RULES_REPO_URL` | Default shared Cursor rules repo | (optional) |
 | `RULES_REPO_CACHE_DIR` | Local cache for rules repo | `/tmp/cursor-rules-cache` |
 | `RULES_AUTO_READ_TARGET_REPO` | Auto-load .cursor/rules from target repo | `true` |
+| `RUN_FIX_MAX_CONCURRENT_JOBS` | Max jobs running in parallel | `3` |
+| `RUN_FIX_MAX_QUEUE_SIZE` | Max jobs waiting in the queue | `20` |
 | `RUN_FIX_BLOCKED_PATHS` | Comma-separated blocked paths | `src/main/security,...` |
 | `RUN_FIX_ALLOWED_COMMANDS` | Comma-separated allowed command prefixes | `mvn,gradle,...` |
 | `RUN_FIX_MAX_FILES_CHANGED` | Max files the agent may change | `10` |
@@ -290,13 +331,13 @@ The agent uses three strategies to find the Aikido issue (in order):
 
 ## JIRA Webhook (auto-trigger on assignment)
 
-The agent can automatically start fixing issues when they are assigned to a dedicated JIRA user (e.g. "Code Agent").
+The agent can automatically start fixing issues when they are assigned to a dedicated JIRA user (e.g. "Code Agent"). Any issue type (Bug, Task, Story, etc.) is supported — the webhook triggers based solely on the assignee.
 
 ### How it works
 
-1. A Bug is assigned to the "Code Agent" user in JIRA
+1. Any issue is assigned to the "Code Agent" user in JIRA
 2. JIRA fires a webhook to `POST /webhooks/jira`
-3. The agent checks: is it an allowed issue type? Is the assignee the agent user?
+3. The agent checks: is the assignee the agent user? Did the assignee actually change?
 4. If Aikido is configured, it tries the Aikido-enriched flow (package, CVE, changelog)
 5. Otherwise, falls back to JIRA description as the prompt
 6. A fix job is submitted automatically

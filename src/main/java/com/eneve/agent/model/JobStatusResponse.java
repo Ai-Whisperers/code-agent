@@ -10,7 +10,7 @@ public record JobStatusResponse(
         @Schema(description = "Unique job identifier", example = "550e8400-e29b-41d4-a716-446655440000")
         String jobId,
 
-        @Schema(description = "Current job status", enumeration = {"PENDING", "RUNNING", "SUCCESS", "FAILED", "AWAITING_APPROVAL"})
+        @Schema(description = "Current job status", enumeration = {"PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "AWAITING_APPROVAL"})
         JobStatus status,
 
         @Schema(description = "Timestamp when the job was created")
@@ -29,9 +29,12 @@ public record JobStatusResponse(
         int filesChanged,
 
         @Schema(description = "Number of lines changed by the agent")
-        int linesChanged
+        int linesChanged,
+
+        @Schema(description = "Position in the execution queue (1-based). 0 if not queued (running or completed).")
+        int queuePosition
 ) {
-    public static JobStatusResponse from(JobRecord record) {
+    public static JobStatusResponse from(JobRecord record, int queuePosition) {
         return new JobStatusResponse(
                 record.getJobId(),
                 record.getStatus(),
@@ -40,7 +43,8 @@ public record JobStatusResponse(
                 record.getErrorMessage(),
                 record.getPrUrl(),
                 record.getFilesChanged(),
-                record.getLinesChanged()
+                record.getLinesChanged(),
+                queuePosition
         );
     }
 }

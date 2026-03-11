@@ -2,11 +2,8 @@ package com.eneve.agent.webhooks;
 
 import java.util.Map;
 import java.util.UUID;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Semaphore;
 
-import com.eneve.agent.agent.AgentRunner;
+import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
@@ -46,9 +43,8 @@ import jakarta.ws.rs.core.Response;
 public class JiraWebhookResource {
 
     private static final Logger LOG = Logger.getLogger(JiraWebhookResource.class);
-    private static final int MAX_CONCURRENT_JOBS = 3;
 
-    @Inject AgentRunner agentRunner;
+    @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
@@ -59,8 +55,6 @@ public class JiraWebhookResource {
     @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
     String defaultRepoUrl;
 
-    private final ExecutorService executor = Executors.newFixedThreadPool(MAX_CONCURRENT_JOBS);
-    private final Semaphore semaphore = new Semaphore(MAX_CONCURRENT_JOBS);
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @POST
@@ -77,7 +71,7 @@ public class JiraWebhookResource {
             @APIResponse(responseCode = "200", description = "Webhook processed (job may or may not have been triggered)",
                     content = @Content(schema = @Schema(example = "{\"action\": \"job_triggered\", \"jobId\": \"...\", \"branch\": \"...\"}"))),
             @APIResponse(responseCode = "200", description = "Event ignored (not a matching issue or assignee change)"),
-            @APIResponse(responseCode = "429", description = "Too many concurrent jobs")
+            @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response handleJiraWebhook(String rawPayload) {
         try {
@@ -184,12 +178,6 @@ public class JiraWebhookResource {
             return ok("skipped", "No repository URL available for " + issueKey);
         }
 
-        if (!semaphore.tryAcquire()) {
-            return Response.status(429)
-                    .entity(Map.of("action", "rejected", "reason", "Too many concurrent jobs"))
-                    .build();
-        }
-
         String branchName = "agent/" + issueKey + "-" + branchSuffix;
 
         RunFixRequest fullRequest = new RunFixRequest(
@@ -201,17 +189,13 @@ public class JiraWebhookResource {
         JobRecord job = new JobRecord(jobId, fullRequest);
         jobStore.put(job);
 
-        executor.submit(() -> {
-            try {
-                agentRunner.execute(job);
-            } catch (Exception e) {
-                LOG.errorf("Unhandled error in webhook-triggered job %s: %s", jobId, e.getMessage());
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Unhandled error: " + e.getMessage());
-            } finally {
-                semaphore.release();
-            }
-        });
+        if (!jobQueue.submit(job)) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            return Response.status(429)
+                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
+                    .build();
+        }
 
         LOG.infof("JIRA webhook triggered job %s for %s (branch: %s)", jobId, issueKey, branchName);
         return Response.ok(Map.of(
