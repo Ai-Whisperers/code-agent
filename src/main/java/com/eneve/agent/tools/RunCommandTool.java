@@ -1,0 +1,67 @@
+package com.eneve.agent.tools;
+
+import java.io.IOException;
+import java.util.Map;
+import java.util.concurrent.TimeUnit;
+
+import com.eneve.agent.workspace.WorkspaceContext;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+@ApplicationScoped
+public class RunCommandTool implements ToolExecutor {
+
+    private static final long COMMAND_TIMEOUT_MINUTES = 15;
+    private static final int MAX_OUTPUT_CHARS = 50_000;
+
+    @Inject
+    GuardrailConfig guardrails;
+
+    @Override
+    public String name() {
+        return "run_command";
+    }
+
+    @Override
+    public String execute(WorkspaceContext workspace, Map<String, Object> input) {
+        String command = (String) input.get("command");
+        if (command == null || command.isBlank()) {
+            return "ERROR: 'command' parameter is required";
+        }
+
+        if (!isAllowed(command)) {
+            return "ERROR: Command not allowed. Allowed prefixes: " + guardrails.getAllowedCommands();
+        }
+
+        try {
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
+                    .directory(workspace.getRoot().toFile())
+                    .redirectErrorStream(true);
+
+            Process proc = pb.start();
+            String output = new String(proc.getInputStream().readAllBytes());
+            boolean finished = proc.waitFor(COMMAND_TIMEOUT_MINUTES, TimeUnit.MINUTES);
+
+            if (!finished) {
+                proc.destroyForcibly();
+                return "ERROR: Command timed out after " + COMMAND_TIMEOUT_MINUTES + " minutes";
+            }
+
+            if (output.length() > MAX_OUTPUT_CHARS) {
+                output = output.substring(0, MAX_OUTPUT_CHARS)
+                        + "\n... [output truncated at " + MAX_OUTPUT_CHARS + " chars]";
+            }
+
+            return "Exit code: " + proc.exitValue() + "\n" + output;
+        } catch (IOException | InterruptedException e) {
+            return "ERROR: " + e.getMessage();
+        }
+    }
+
+    private boolean isAllowed(String command) {
+        String trimmed = command.trim();
+        return guardrails.getAllowedCommands().stream()
+                .anyMatch(allowed -> trimmed.startsWith(allowed));
+    }
+}
