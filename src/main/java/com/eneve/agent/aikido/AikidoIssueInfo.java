@@ -15,6 +15,7 @@ public record AikidoIssueInfo(
         Double cvssScore,
         String repoName,
         String repoUrl,
+        String containerImage,
         String changelogSummary
 ) {
     /**
@@ -56,7 +57,18 @@ public record AikidoIssueInfo(
         } else {
             sb.append(" to the latest secure version");
         }
-        sb.append(" in this project.\n");
+        sb.append(" in this project.\n\n");
+        sb.append("**Important — check where the version is managed before making changes:**\n");
+        sb.append("1. First inspect the project's pom.xml for a `<parent>` element. ");
+        sb.append("If the project inherits from a parent POM (e.g. a superpom), the dependency version ");
+        sb.append("may be declared in `<dependencyManagement>` of the parent, not in this repo.\n");
+        sb.append("2. Run `mvn dependency:tree -Dincludes=").append(packageName);
+        sb.append("` to confirm the current resolved version and where it comes from.\n");
+        sb.append("3. Check if the version is set via a `<properties>` variable (e.g. `<some.version>`) ");
+        sb.append("— if so, update the property, not the `<dependency>` element directly.\n");
+        sb.append("4. If the version is managed entirely by the parent POM and cannot be overridden locally, ");
+        sb.append("note this in your summary so the fix can be applied to the parent POM repo instead.\n\n");
+        sb.append("**General rules:**\n");
         sb.append("- Only modify dependency version declarations (pom.xml, build.gradle, package.json, etc.)\n");
         sb.append("- Make minimal code changes ONLY if required for compilation after the version bump\n");
         sb.append("- Run tests to verify nothing is broken\n");

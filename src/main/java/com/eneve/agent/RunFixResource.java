@@ -54,8 +54,8 @@ public class RunFixResource {
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
 
-    @ConfigProperty(name = "jira.agent.assignee", defaultValue = "")
-    String agentAssignee;
+    @ConfigProperty(name = "jira.agent.label", defaultValue = "WALL-E")
+    String agentLabel;
 
     @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
     String defaultRepoUrl;
@@ -224,10 +224,11 @@ public class RunFixResource {
             issueInfo = aikidoService.getIssueGroupDetail(groupId);
         }
 
+        JiraService.JiraDescriptionContext descCtx = null;
         if (issueInfo == null && request.jiraKey() != null) {
             LOG.infof("Aikido API lookup failed for %s, checking JIRA description for Aikido URL", request.jiraKey());
-            var candidateIds = jiraService.extractAikidoCandidateIds(request.jiraKey());
-            for (Integer candidateId : candidateIds) {
+            descCtx = jiraService.extractDescriptionContext(request.jiraKey());
+            for (Integer candidateId : descCtx.aikidoCandidateIds()) {
                 LOG.infof("Trying Aikido candidate ID: %d", candidateId);
                 issueInfo = aikidoService.getIssueGroupDetail(candidateId);
                 if (issueInfo != null) {
@@ -245,14 +246,20 @@ public class RunFixResource {
                     .build();
         }
 
-        // 3. Resolve repo URL
+        // 3. Resolve repo URL (with container-to-repo fallback)
         String repoUrl = request.repoUrl();
         if (repoUrl == null || repoUrl.isBlank()) {
             repoUrl = issueInfo.repoUrl();
         }
         if (repoUrl == null || repoUrl.isBlank()) {
+            repoUrl = resolveRepoUrlFromContainer(issueInfo, descCtx, request.jiraKey());
+        }
+        if (repoUrl == null || repoUrl.isBlank()) {
             return Response.status(400)
-                    .entity(Map.of("error", "Could not resolve repository URL from Aikido. Provide repoUrl explicitly."))
+                    .entity(Map.of("error", "Could not resolve repository URL from Aikido. "
+                            + "Issue references a container image"
+                            + (issueInfo.containerImage() != null ? " (" + issueInfo.containerImage() + ")" : "")
+                            + " but no matching code repo was found. Provide repoUrl explicitly."))
                     .build();
         }
 
@@ -421,30 +428,30 @@ public class RunFixResource {
     @Operation(
             operationId = "syncJira",
             summary = "Sync open issues from JIRA",
-            description = "Searches JIRA for open issues assigned to the configured agent user "
-                    + "(jira.agent.assignee) and queues fix jobs for any that don't already have an active job. "
+            description = "Searches JIRA for open issues with the configured agent label "
+                    + "(jira.agent.label, default: WALL-E) and queues fix jobs for any that don't already have an active job. "
                     + "For each new issue, tries Aikido-enriched context first, then falls back to JIRA description."
     )
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Sync completed",
                     content = @Content(schema = @Schema(example = "{\"found\": 5, \"queued\": 2, \"skipped\": [{\"key\": \"PROJ-1\", \"reason\": \"Active job exists\"}]}"))),
-            @APIResponse(responseCode = "400", description = "Agent assignee not configured")
+            @APIResponse(responseCode = "400", description = "Agent label not configured")
     })
     public Response syncJira() {
-        if (agentAssignee.isBlank()) {
+        if (agentLabel.isBlank()) {
             return Response.status(400)
-                    .entity(Map.of("error", "jira.agent.assignee not configured"))
+                    .entity(Map.of("error", "jira.agent.label not configured"))
                     .build();
         }
 
-        var issues = jiraService.searchAssignedIssues(agentAssignee);
+        var issues = jiraService.searchIssuesByLabel(agentLabel);
         if (issues.isEmpty()) {
-            LOG.info("sync-jira: no open issues found assigned to agent");
+            LOG.infof("sync-jira: no open issues found with label %s", agentLabel);
             return Response.ok(Map.of("found", 0, "queued", 0,
                     "skipped", List.of())).build();
         }
 
-        LOG.infof("sync-jira: found %d open issues assigned to %s:", issues.size(), agentAssignee);
+        LOG.infof("sync-jira: found %d open issues with label %s:", issues.size(), agentLabel);
         for (var issue : issues) {
             LOG.infof("  - %s: %s", issue.key(), issue.summary());
         }
@@ -520,9 +527,10 @@ public class RunFixResource {
     private AikidoEnrichment resolveAikidoContext(String issueKey) {
         Integer groupId = aikidoService.findIssueGroupByJiraKey(issueKey);
 
+        JiraService.JiraDescriptionContext descCtx = null;
         if (groupId == null) {
-            var candidateIds = jiraService.extractAikidoCandidateIds(issueKey);
-            for (Integer candidateId : candidateIds) {
+            descCtx = jiraService.extractDescriptionContext(issueKey);
+            for (Integer candidateId : descCtx.aikidoCandidateIds()) {
                 AikidoIssueInfo info = aikidoService.getIssueGroupDetail(candidateId);
                 if (info != null) {
                     groupId = candidateId;
@@ -538,11 +546,44 @@ public class RunFixResource {
 
         String repoUrl = (issueInfo.repoUrl() != null && !issueInfo.repoUrl().isBlank())
                 ? issueInfo.repoUrl() : null;
+        if (repoUrl == null) {
+            repoUrl = resolveRepoUrlFromContainer(issueInfo, descCtx, issueKey);
+        }
+
         String prompt = issueInfo.toPromptSection();
         String branchSuffix = slugify(issueInfo.packageName() + "-"
                 + (issueInfo.fixedVersion() != null ? issueInfo.fixedVersion() : "fix"));
 
         return new AikidoEnrichment(repoUrl, prompt, branchSuffix);
+    }
+
+    /**
+     * Try to resolve a code repository URL from a container image reference.
+     * Checks the Aikido issue's container_image field first, then falls back to
+     * container names found in the JIRA description.
+     */
+    private String resolveRepoUrlFromContainer(AikidoIssueInfo issueInfo,
+                                                JiraService.JiraDescriptionContext descCtx,
+                                                String jiraKey) {
+        if (issueInfo.containerImage() != null && !issueInfo.containerImage().isBlank()) {
+            LOG.infof("Aikido issue references container image '%s', searching for matching code repo",
+                    issueInfo.containerImage());
+            String url = aikidoService.findCodeRepoUrlForContainer(issueInfo.containerImage());
+            if (url != null) return url;
+        }
+
+        if (descCtx == null && jiraKey != null) {
+            descCtx = jiraService.extractDescriptionContext(jiraKey);
+        }
+        if (descCtx != null) {
+            for (String container : descCtx.containerNames()) {
+                LOG.infof("JIRA description references container '%s', searching for matching code repo",
+                        container);
+                String url = aikidoService.findCodeRepoUrlForContainer(container);
+                if (url != null) return url;
+            }
+        }
+        return null;
     }
 
     private static String slugify(String text) {

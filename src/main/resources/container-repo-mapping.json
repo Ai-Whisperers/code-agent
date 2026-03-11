@@ -1,0 +1,135 @@
+{
+  "_comment": "Maps Aikido container image names to Bitbucket code repository URLs. Slugs verified against Bitbucket workspace 'csarenergy'. Review entries marked 'low' or 'unmapped'.",
+  "mappings": {
+    "julesenergy/engie-customerportal-backend": {
+      "repoUrl": "https://bitbucket.org/csarenergy/customer-portal-backend.git",
+      "codeRepo": "customer-portal-backend",
+      "confidence": "high"
+    },
+    "julesenergy/fit": {
+      "repoUrl": "https://bitbucket.org/csarenergy/fit.git",
+      "codeRepo": "fit",
+      "confidence": "high"
+    },
+    "julesenergy/jcp-backend": {
+      "repoUrl": "https://bitbucket.org/csarenergy/jcp-backend.git",
+      "codeRepo": "jcp-backend",
+      "confidence": "high"
+    },
+    "julesenergy/jtp": {
+      "repoUrl": "https://bitbucket.org/csarenergy/jtp.git",
+      "codeRepo": "jtp",
+      "confidence": "high"
+    },
+    "julesenergy/jtp-reporting": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-jtp-reporting.git",
+      "codeRepo": "ms-jtp-reporting",
+      "confidence": "high"
+    },
+    "julesenergy/jtp-result-calculation": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-resultcalculation.git",
+      "codeRepo": "ms-resultcalculation",
+      "confidence": "high"
+    },
+    "julesenergy/jules-msswitchbox": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-switchbox.git",
+      "codeRepo": "ms-switchbox",
+      "confidence": "medium"
+    },
+    "julesenergy/julesclick-audit": {
+      "repoUrl": "https://bitbucket.org/csarenergy/auditservice.git",
+      "codeRepo": "AuditService",
+      "confidence": "medium"
+    },
+    "julesenergy/julesclick-backend": {
+      "repoUrl": "https://bitbucket.org/csarenergy/julesclickbackend.git",
+      "codeRepo": "JulesClickBackEnd",
+      "confidence": "high"
+    },
+    "julesenergy/julesclick-backend-smart": {
+      "repoUrl": "https://bitbucket.org/csarenergy/julesclicksmart.git",
+      "codeRepo": "JulesClickSmart",
+      "confidence": "medium"
+    },
+    "julesenergy/julesclick-bridge": {
+      "repoUrl": "https://bitbucket.org/csarenergy/julesclickengiebridge.git",
+      "codeRepo": "JulesClickEngieBridge",
+      "confidence": "high"
+    },
+    "julesenergy/julesclick-files": {
+      "repoUrl": "https://bitbucket.org/csarenergy/fileservice.git",
+      "codeRepo": "FileService",
+      "confidence": "medium"
+    },
+    "julesenergy/julesclick-prices": {
+      "repoUrl": "https://bitbucket.org/csarenergy/priceservice.git",
+      "codeRepo": "PriceService",
+      "confidence": "high"
+    },
+    "julesenergy/julesnotify": {
+      "repoUrl": "https://bitbucket.org/csarenergy/julesnotify-backend.git",
+      "codeRepo": "JulesNotify-Backend",
+      "confidence": "high"
+    },
+    "julesenergy/julestender": {
+      "repoUrl": "https://bitbucket.org/csarenergy/julestender-backend.git",
+      "codeRepo": "julestender-backend",
+      "confidence": "high"
+    },
+    "julesenergy/messaging": {
+      "repoUrl": "https://bitbucket.org/csarenergy/messagingservice.git",
+      "codeRepo": "MessagingService",
+      "confidence": "high"
+    },
+    "julesenergy/meter-repository": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-meter.git",
+      "codeRepo": "ms-meter",
+      "confidence": "medium"
+    },
+    "julesenergy/meterdata-collector": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-meterdata-collector.git",
+      "codeRepo": "ms-meterdata-collector",
+      "confidence": "high"
+    },
+    "julesenergy/ms-bidsheet": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-bidsheet.git",
+      "codeRepo": "ms-bidsheet",
+      "confidence": "high"
+    },
+    "julesenergy/ms-customblocks": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-customblockprices.git",
+      "codeRepo": "ms-customblockprices",
+      "confidence": "medium"
+    },
+    "julesenergy/price-loader": {
+      "repoUrl": "https://bitbucket.org/csarenergy/engienlpriceloader.git",
+      "codeRepo": "EngieNLPriceLoader",
+      "confidence": "medium"
+    },
+    "julesenergy/prices-collector": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-pricescollector.git",
+      "codeRepo": "ms-pricescollector",
+      "confidence": "high"
+    },
+    "julesenergy/prices-service": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-prices-repository.git",
+      "codeRepo": "ms-prices-repository",
+      "confidence": "medium"
+    },
+    "julesenergy/reindexbatch": {
+      "repoUrl": "https://bitbucket.org/csarenergy/dbreindexdocker.git",
+      "codeRepo": "dbreindexdocker",
+      "confidence": "medium"
+    },
+    "julesenergy/sftp2s3": {
+      "repoUrl": null,
+      "codeRepo": null,
+      "confidence": "unmapped"
+    },
+    "julesenergy/tendergenie-website": {
+      "repoUrl": "https://bitbucket.org/csarenergy/tendergenie-website.git",
+      "codeRepo": "tendergenie-website",
+      "confidence": "high"
+    }
+  }
+}

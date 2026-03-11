@@ -47,15 +47,21 @@ public class JiraService {
     public record JiraIssueRef(String key, String summary) {}
 
     /**
-     * Search for open issues assigned to the given user.
-     * Accepts a display name, email, or account ID — JIRA resolves it via JQL.
+     * Parsed context from a JIRA issue description: Aikido candidate IDs and container names.
      */
-    public java.util.List<JiraIssueRef> searchAssignedIssues(String assignee) {
-        String jql = "assignee = \"" + escapeJson(assignee) + "\" AND statusCategory != Done ORDER BY created DESC";
-        String path = "/rest/api/3/search?jql=" + java.net.URLEncoder.encode(jql, StandardCharsets.UTF_8)
-                + "&fields=summary&maxResults=50";
+    public record JiraDescriptionContext(
+            java.util.List<Integer> aikidoCandidateIds,
+            java.util.List<String> containerNames
+    ) {}
 
-        String json = get(path, "search assigned issues");
+    /**
+     * Search for open issues with the given label.
+     */
+    public java.util.List<JiraIssueRef> searchIssuesByLabel(String label) {
+        String jql = "labels = \"" + escapeJson(label) + "\" AND statusCategory != Done ORDER BY created DESC";
+        String body = "{\"jql\":\"" + escapeJson(jql) + "\",\"fields\":[\"summary\"],\"maxResults\":50}";
+
+        String json = postForBody("/rest/api/3/search/jql", body, "search issues by label");
         if (json == null) return java.util.List.of();
 
         try {
@@ -72,7 +78,7 @@ public class JiraService {
                     results.add(new JiraIssueRef(key, summary));
                 }
             }
-            LOG.infof("JIRA search: found %d open issues assigned to %s", results.size(), assignee);
+            LOG.infof("JIRA search: found %d open issues with label %s", results.size(), label);
             return results;
         } catch (Exception e) {
             LOG.warnf("Failed to parse JIRA search results: %s", e.getMessage());
@@ -103,9 +109,17 @@ public class JiraService {
      * Returns them in priority order so the caller can try each against the API.
      */
     public java.util.List<Integer> extractAikidoCandidateIds(String issueKey) {
+        return extractDescriptionContext(issueKey).aikidoCandidateIds();
+    }
+
+    /**
+     * Parse the JIRA description for both Aikido candidate IDs and container image references.
+     * Fetches the description once and extracts all context.
+     */
+    public JiraDescriptionContext extractDescriptionContext(String issueKey) {
         String json = get("/rest/api/3/issue/" + issueKey + "?fields=description",
                 "fetch description " + issueKey);
-        if (json == null) return java.util.List.of();
+        if (json == null) return new JiraDescriptionContext(java.util.List.of(), java.util.List.of());
 
         try {
             var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
@@ -117,25 +131,38 @@ public class JiraService {
                     issueKey, allText.length(),
                     allText.length() > 500 ? allText.substring(0, 500) + "..." : allText);
 
-            var candidates = new java.util.LinkedHashSet<Integer>();
-
-            var patterns = new java.util.regex.Pattern[]{
+            var candidateIds = new java.util.LinkedHashSet<Integer>();
+            var aikidoPatterns = new java.util.regex.Pattern[]{
                     java.util.regex.Pattern.compile("aikido\\.dev/issues/groups/(\\d+)"),
                     java.util.regex.Pattern.compile("aikido\\.dev[^\\s]*[?&]sidebarIssue=(\\d+)"),
                     java.util.regex.Pattern.compile("aikido\\.dev[^\\s]*[?&]groupId=(\\d+)")
             };
-            for (var pattern : patterns) {
+            for (var pattern : aikidoPatterns) {
                 var matcher = pattern.matcher(allText);
                 while (matcher.find()) {
-                    candidates.add(Integer.parseInt(matcher.group(1)));
+                    candidateIds.add(Integer.parseInt(matcher.group(1)));
                 }
             }
+            LOG.infof("JIRA %s: found %d Aikido candidate IDs: %s", issueKey, candidateIds.size(), candidateIds);
 
-            LOG.infof("JIRA %s: found %d Aikido candidate IDs: %s", issueKey, candidates.size(), candidates);
-            return new java.util.ArrayList<>(candidates);
+            var containerNames = new java.util.ArrayList<String>();
+            var containerPattern = java.util.regex.Pattern.compile(
+                    "(?i)containers?\\s*:\\s*\\n?\\s*([a-zA-Z0-9._-]+/[a-zA-Z0-9._-]+)");
+            var containerMatcher = containerPattern.matcher(allText);
+            while (containerMatcher.find()) {
+                containerNames.add(containerMatcher.group(1));
+            }
+            if (!containerNames.isEmpty()) {
+                LOG.infof("JIRA %s: found container references: %s", issueKey, containerNames);
+            }
+
+            return new JiraDescriptionContext(
+                    new java.util.ArrayList<>(candidateIds),
+                    containerNames
+            );
         } catch (Exception e) {
-            LOG.warnf("Failed to extract Aikido IDs from %s: %s", issueKey, e.getMessage());
-            return java.util.List.of();
+            LOG.warnf("Failed to extract description context from %s: %s", issueKey, e.getMessage());
+            return new JiraDescriptionContext(java.util.List.of(), java.util.List.of());
         }
     }
 
@@ -313,6 +340,31 @@ public class JiraService {
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Accept", "application/json")
                     .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                LOG.infof("JIRA %s succeeded (HTTP %d)", operation, response.statusCode());
+                return response.body();
+            } else {
+                LOG.warnf("JIRA %s failed (HTTP %d): %s", operation, response.statusCode(), response.body());
+                return null;
+            }
+        } catch (Exception e) {
+            LOG.errorf("JIRA %s error: %s", operation, e.getMessage());
+            return null;
+        }
+    }
+
+    private String postForBody(String path, String body, String operation) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + path))
+                    .header("Authorization", "Basic " + basicAuth())
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

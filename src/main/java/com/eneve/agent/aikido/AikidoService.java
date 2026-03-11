@@ -175,6 +175,8 @@ public class AikidoService {
 
             String repoUrl = extractRepoUrl(root);
 
+            String containerImage = extractContainerImage(root);
+
             String cveDescription = null;
             Double cvssScore = null;
             if (cveId != null && !cveId.isBlank()) {
@@ -197,7 +199,7 @@ public class AikidoService {
 
             return new AikidoIssueInfo(
                     issueGroupId, severity, packageName, currentVersion, fixedVersion,
-                    cveId, cveDescription, cvssScore, repoName, repoUrl, changelogSummary
+                    cveId, cveDescription, cvssScore, repoName, repoUrl, containerImage, changelogSummary
             );
         } catch (Exception e) {
             LOG.errorf("Failed to parse Aikido issue group %d: %s", issueGroupId, e.getMessage());
@@ -365,6 +367,94 @@ public class AikidoService {
             return repo.path("name").asText(repo.path("repo_name").asText(""));
         }
         return "";
+    }
+
+    /**
+     * Look up the code repository URL for a container image using the static mapping
+     * in container-repo-mapping.json (loaded once, cached). Also tries matching
+     * by base name (e.g., "julestender" matches "julesenergy/julestender").
+     *
+     * @return the code repo's clone URL, or null if no mapping exists
+     */
+    public String findCodeRepoUrlForContainer(String containerImage) {
+        if (containerImage == null || containerImage.isBlank()) return null;
+
+        LOG.infof("Looking up code repo for container '%s'", containerImage);
+
+        if (containerMappingCache == null) {
+            containerMappingCache = loadContainerMappings();
+        }
+
+        String url = containerMappingCache.get(containerImage);
+        if (url != null) {
+            LOG.infof("Container mapping hit: '%s' → %s", containerImage, url);
+            return url;
+        }
+
+        String baseName = containerImage.contains("/")
+                ? containerImage.substring(containerImage.lastIndexOf('/') + 1)
+                : containerImage;
+        for (var entry : containerMappingCache.entrySet()) {
+            String key = entry.getKey();
+            String keyBase = key.contains("/") ? key.substring(key.lastIndexOf('/') + 1) : key;
+            if (keyBase.equalsIgnoreCase(baseName)) {
+                LOG.infof("Container mapping hit (base name '%s'): '%s' → %s",
+                        baseName, key, entry.getValue());
+                return entry.getValue();
+            }
+        }
+
+        LOG.warnf("No container-to-repo mapping found for '%s'. "
+                + "Add it to container-repo-mapping.json.", containerImage);
+        return null;
+    }
+
+    private java.util.Map<String, String> containerMappingCache;
+
+    private java.util.Map<String, String> loadContainerMappings() {
+        var map = new java.util.HashMap<String, String>();
+        try (var is = Thread.currentThread().getContextClassLoader()
+                .getResourceAsStream("container-repo-mapping.json")) {
+            if (is == null) {
+                LOG.warn("container-repo-mapping.json not found on classpath");
+                return map;
+            }
+            JsonNode root = objectMapper.readTree(is);
+            JsonNode mappings = root.path("mappings");
+            var it = mappings.fields();
+            while (it.hasNext()) {
+                var entry = it.next();
+                JsonNode repoUrlNode = entry.getValue().path("repoUrl");
+                if (!repoUrlNode.isMissingNode() && !repoUrlNode.isNull()) {
+                    String repoUrl = repoUrlNode.asText("");
+                    if (!repoUrl.isBlank()) {
+                        map.put(entry.getKey(), repoUrl);
+                    }
+                }
+            }
+            LOG.infof("Loaded %d container-to-repo mappings", map.size());
+        } catch (Exception e) {
+            LOG.warnf("Failed to load container-repo-mapping.json: %s", e.getMessage());
+        }
+        return map;
+    }
+
+    private static String extractContainerImage(JsonNode root) {
+        for (String field : new String[]{
+                "container_image", "image_name", "docker_image",
+                "affected_container", "container_name"}) {
+            JsonNode n = root.path(field);
+            if (!n.isMissingNode() && !n.isNull() && !n.asText("").isBlank()) {
+                return n.asText("");
+            }
+        }
+        JsonNode container = root.path("container");
+        if (!container.isMissingNode() && !container.isNull()) {
+            if (container.isTextual()) return container.asText("");
+            String img = container.path("image").asText(container.path("name").asText(""));
+            if (!img.isBlank()) return img;
+        }
+        return null;
     }
 
     private static String extractRepoUrl(JsonNode root) {

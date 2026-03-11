@@ -175,9 +175,9 @@ Receives JIRA Cloud webhook payloads. No request body to construct — JIRA send
 
 ### POST /sync-jira (active polling)
 
-No request body needed. Searches JIRA for all open issues (`statusCategory != Done`) assigned to the agent user and queues fix jobs for any that don't already have an active job in the queue.
+No request body needed. Searches JIRA for all open issues (`statusCategory != Done`) with the configured label (default: `WALL-E`) and queues fix jobs for any that don't already have an active job in the queue.
 
-Useful as a catch-up mechanism (e.g. via a cron/scheduler) to pick up issues that were assigned while the agent was down, or as a manual trigger.
+Useful as a catch-up mechanism (e.g. via a cron/scheduler) to pick up issues that were labelled while the agent was down, or as a manual trigger. Just add the `WALL-E` label to any JIRA issue to have the agent pick it up on the next sync.
 
 ```bash
 curl -X POST http://localhost:8080/sync-jira
@@ -216,7 +216,8 @@ All config via environment variables (or `application.properties` for local dev)
 | `JIRA_TRANSITION_DONE` | Transition ID for "Done" | (optional) |
 | `JIRA_TRANSITION_REJECTED` | Transition ID for rejected | (optional) |
 | `JIRA_DEFAULT_WORKLOG` | Default time logged per fix | `30m` |
-| `JIRA_AGENT_ASSIGNEE` | Display name, email, or account ID of the agent user in JIRA | (optional) |
+| `JIRA_AGENT_ASSIGNEE` | Display name, email, or account ID of the agent user in JIRA (for webhook) | (optional) |
+| `JIRA_AGENT_LABEL` | JIRA label used by `/sync-jira` to find issues for the agent | `WALL-E` |
 | `JIRA_AGENT_DEFAULT_REPO_URL` | Default repo URL when not resolvable from Aikido | (optional) |
 | `BITBUCKET_BASE_URL` | Bitbucket Cloud API base | `https://api.bitbucket.org/2.0` |
 | `BITBUCKET_WORKSPACE` | Bitbucket workspace slug | (required) |
