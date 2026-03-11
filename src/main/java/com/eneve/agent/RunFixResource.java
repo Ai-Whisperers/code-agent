@@ -8,9 +8,11 @@ import java.util.concurrent.Semaphore;
 
 import com.eneve.agent.agent.AgentRunner;
 import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
+import com.eneve.agent.model.QuickFixRequest;
 import com.eneve.agent.model.RejectRequest;
 import com.eneve.agent.model.RunFixRequest;
 
@@ -45,6 +47,7 @@ public class RunFixResource {
 
     @Inject AgentRunner agentRunner;
     @Inject JobStore jobStore;
+    @Inject JiraService jiraService;
 
     private final ExecutorService executor = Executors.newFixedThreadPool(MAX_CONCURRENT_JOBS);
     private final Semaphore semaphore = new Semaphore(MAX_CONCURRENT_JOBS);
@@ -81,9 +84,6 @@ public class RunFixResource {
         if (request.jiraKey() == null || request.jiraKey().isBlank()) {
             return Response.status(400).entity(Map.of("error", "jiraKey is required")).build();
         }
-        if (request.prompt() == null || request.prompt().isBlank()) {
-            return Response.status(400).entity(Map.of("error", "prompt is required")).build();
-        }
 
         if (!semaphore.tryAcquire()) {
             return Response.status(429)
@@ -109,6 +109,87 @@ public class RunFixResource {
 
         LOG.infof("Job %s accepted for %s", jobId, request.jiraKey());
         return Response.accepted(Map.of("jobId", jobId)).build();
+    }
+
+    @POST
+    @Path("/quick-fix")
+    @Operation(
+            operationId = "quickFix",
+            summary = "Submit a quick fix job from a JIRA ticket",
+            description = "Simplified endpoint that only requires a JIRA key and repo URL. "
+                    + "The agent fetches the issue summary and description from JIRA to use as the prompt, "
+                    + "auto-generates a branch name as agent/{JIRA_KEY}-{summary-slug}, "
+                    + "and always uses 'develop' as the base branch."
+    )
+    @RequestBody(
+            required = true,
+            description = "JIRA key and repository URL",
+            content = @Content(schema = @Schema(implementation = QuickFixRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"...\", \"branch\": \"agent/JTP-10967-upgrade-cxf-xjc\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields or JIRA fetch failed",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"Could not fetch JIRA issue JTP-10967\"}"))),
+            @APIResponse(responseCode = "429", description = "Too many concurrent jobs")
+    })
+    public Response quickFix(QuickFixRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+        if (request.jiraKey() == null || request.jiraKey().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "jiraKey is required")).build();
+        }
+
+        String summary;
+        try {
+            summary = jiraService.fetchIssueSummary(request.jiraKey());
+        } catch (Exception e) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Failed to fetch JIRA issue: " + e.getMessage()))
+                    .build();
+        }
+        if (summary == null || summary.isBlank()) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Could not fetch JIRA issue " + request.jiraKey()))
+                    .build();
+        }
+
+        String branchName = "agent/" + request.jiraKey() + "-" + slugify(summary);
+
+        RunFixRequest fullRequest = new RunFixRequest(
+                request.repoUrl(),
+                branchName,
+                request.jiraKey(),
+                null,
+                "develop",
+                null, null, null, null
+        );
+
+        if (!semaphore.tryAcquire()) {
+            return Response.status(429)
+                    .entity(Map.of("error", "Too many concurrent jobs. Max: " + MAX_CONCURRENT_JOBS))
+                    .build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, fullRequest);
+        jobStore.put(job);
+
+        executor.submit(() -> {
+            try {
+                agentRunner.execute(job);
+            } catch (Exception e) {
+                LOG.errorf("Unhandled error in job %s: %s", jobId, e.getMessage());
+                job.setStatus(JobStatus.FAILED);
+                job.setErrorMessage("Unhandled error: " + e.getMessage());
+            } finally {
+                semaphore.release();
+            }
+        });
+
+        LOG.infof("Quick-fix job %s accepted for %s (branch: %s)", jobId, request.jiraKey(), branchName);
+        return Response.accepted(Map.of("jobId", jobId, "branch", branchName)).build();
     }
 
     @GET
@@ -216,5 +297,19 @@ public class RunFixResource {
                 "availableSlots", semaphore.availablePermits(),
                 "maxConcurrentJobs", MAX_CONCURRENT_JOBS
         )).build();
+    }
+
+    /**
+     * Convert a JIRA summary to a git-safe branch slug.
+     * e.g. "Upgrade CXF-XJC Boolean plugin" → "upgrade-cxf-xjc-boolean-plugin"
+     */
+    private static String slugify(String text) {
+        String slug = text.toLowerCase()
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-|-$", "");
+        if (slug.length() > 60) {
+            slug = slug.substring(0, 60).replaceAll("-$", "");
+        }
+        return slug;
     }
 }

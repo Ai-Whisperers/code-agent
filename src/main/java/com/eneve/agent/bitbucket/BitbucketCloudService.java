@@ -102,7 +102,7 @@ public class BitbucketCloudService {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
-                    .header("Authorization", "Basic " + basicAuth())
+                    .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -127,8 +127,15 @@ public class BitbucketCloudService {
         }
     }
 
-    private String basicAuth() {
-        return Base64.getEncoder()
+    /**
+     * Repository/Workspace Access Tokens use Bearer auth for the REST API.
+     * App Passwords use Basic auth with username:password.
+     */
+    private String authHeader() {
+        if ("x-token-auth".equals(bbUser)) {
+            return "Bearer " + appPassword;
+        }
+        return "Basic " + Base64.getEncoder()
                 .encodeToString((bbUser + ":" + appPassword).getBytes(StandardCharsets.UTF_8));
     }
 

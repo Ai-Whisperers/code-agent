@@ -45,6 +45,23 @@ public class JiraService {
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     /**
+     * Fetch the issue summary only (for generating branch names, etc).
+     */
+    public String fetchIssueSummary(String issueKey) {
+        String json = get("/rest/api/3/issue/" + issueKey + "?fields=summary",
+                "fetch summary " + issueKey);
+        if (json == null) return null;
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            return root.path("fields").path("summary").asText(null);
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse JIRA summary for %s: %s", issueKey, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
      * Fetch the issue summary and description (ADF rendered to plain text).
      * Returns "SUMMARY\n\nDESCRIPTION" or just "SUMMARY" if description is empty.
      */

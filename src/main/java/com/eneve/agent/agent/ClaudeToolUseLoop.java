@@ -8,6 +8,7 @@ import java.util.Map;
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.core.JsonValue;
+import com.anthropic.errors.RateLimitException;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.ContentBlockParam;
 import com.anthropic.models.messages.Message;
@@ -82,7 +83,7 @@ public class ClaudeToolUseLoop {
                     .tools(ToolDefinitions.all())
                     .build();
 
-            Message response = client.messages().create(params);
+            Message response = callWithRetry(client, params);
 
             boolean hasToolUse = false;
             List<ContentBlockParam> toolResults = new ArrayList<>();
@@ -141,6 +142,31 @@ public class ClaudeToolUseLoop {
 
         LOG.warnf("Agent loop hit max iterations (%d)", maxIterations);
         return "Agent loop reached maximum iterations without completing. Partial work may exist.";
+    }
+
+    private static final int MAX_RETRIES = 5;
+    private static final long INITIAL_BACKOFF_MS = 30_000;
+
+    private Message callWithRetry(AnthropicClient client, MessageCreateParams params) {
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                return client.messages().create(params);
+            } catch (RateLimitException e) {
+                if (attempt == MAX_RETRIES) {
+                    throw e;
+                }
+                long waitMs = INITIAL_BACKOFF_MS * (1L << attempt);
+                LOG.warnf("Rate limited (attempt %d/%d), waiting %ds before retry...",
+                        attempt + 1, MAX_RETRIES, waitMs / 1000);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during rate limit backoff", ie);
+                }
+            }
+        }
+        throw new RuntimeException("Exhausted retries after rate limiting");
     }
 
     private String dispatchTool(ToolUseBlock toolUse, WorkspaceContext workspace) {
