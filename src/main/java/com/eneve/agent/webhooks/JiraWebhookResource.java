@@ -36,8 +36,8 @@ import jakarta.ws.rs.core.Response;
 
 /**
  * Handles incoming JIRA Cloud webhooks.
- * When a Bug is assigned to the configured agent user, automatically triggers a fix job.
- * Supports both Aikido-sourced issues and regular JIRA bugs.
+ * When any issue is assigned to the configured agent user, automatically triggers a fix job.
+ * Supports both Aikido-sourced issues and regular JIRA issues.
  */
 @Path("/webhooks")
 @Produces(MediaType.APPLICATION_JSON)
@@ -56,9 +56,6 @@ public class JiraWebhookResource {
     @ConfigProperty(name = "jira.agent.assignee", defaultValue = "")
     String agentAssignee;
 
-    @ConfigProperty(name = "jira.agent.issue-types", defaultValue = "Bug")
-    String allowedIssueTypes;
-
     @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
     String defaultRepoUrl;
 
@@ -72,7 +69,7 @@ public class JiraWebhookResource {
             operationId = "jiraWebhook",
             summary = "Handle JIRA Cloud webhook events",
             description = "Receives JIRA Cloud webhook payloads for issue_created and issue_updated events. "
-                    + "When a matching issue (correct type + assigned to the agent user) is detected, "
+                    + "When an issue is assigned to the configured agent user, "
                     + "automatically triggers a fix job. If Aikido is configured and the issue is Aikido-sourced, "
                     + "uses the enriched /aikido-fix flow. Otherwise falls back to /quick-fix behavior."
     )
@@ -101,13 +98,6 @@ public class JiraWebhookResource {
                 return ok("ignored", "No issue key in payload");
             }
 
-            // Check issue type
-            String issueType = fields.path("issuetype").path("name").asText("");
-            if (!isAllowedIssueType(issueType)) {
-                LOG.infof("JIRA webhook: ignoring %s (type: %s, allowed: %s)", issueKey, issueType, allowedIssueTypes);
-                return ok("ignored", "Issue type '" + issueType + "' not in allowed list");
-            }
-
             // Check assignee
             String assigneeDisplay = fields.path("assignee").path("displayName").asText("");
             String assigneeEmail = fields.path("assignee").path("emailAddress").asText("");
@@ -124,7 +114,7 @@ public class JiraWebhookResource {
                 return ok("ignored", "Assignee did not change in this update");
             }
 
-            LOG.infof("JIRA webhook: %s assigned to agent (type: %s) — triggering fix", issueKey, issueType);
+            LOG.infof("JIRA webhook: %s assigned to agent — triggering fix", issueKey);
 
             // Try Aikido-enriched flow first, fall back to quick-fix
             return triggerFixJob(issueKey, fields);
@@ -230,14 +220,6 @@ public class JiraWebhookResource {
                 "jiraKey", issueKey,
                 "branch", branchName
         )).build();
-    }
-
-    private boolean isAllowedIssueType(String issueType) {
-        if (allowedIssueTypes.isBlank()) return true;
-        for (String allowed : allowedIssueTypes.split(",")) {
-            if (allowed.trim().equalsIgnoreCase(issueType)) return true;
-        }
-        return false;
     }
 
     private boolean isAgentAssignee(String displayName, String email, String accountId) {

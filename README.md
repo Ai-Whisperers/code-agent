@@ -178,7 +178,6 @@ All config via environment variables (or `application.properties` for local dev)
 | `JIRA_TRANSITION_REJECTED` | Transition ID for rejected | (optional) |
 | `JIRA_DEFAULT_WORKLOG` | Default time logged per fix | `30m` |
 | `JIRA_AGENT_ASSIGNEE` | Display name, email, or account ID of the agent user in JIRA | (optional) |
-| `JIRA_AGENT_ISSUE_TYPES` | Comma-separated issue types to handle (e.g. `Bug,Task`) | `Bug` |
 | `JIRA_AGENT_DEFAULT_REPO_URL` | Default repo URL when not resolvable from Aikido | (optional) |
 | `BITBUCKET_BASE_URL` | Bitbucket Cloud API base | `https://api.bitbucket.org/2.0` |
 | `BITBUCKET_WORKSPACE` | Bitbucket workspace slug | (required) |
@@ -309,16 +308,14 @@ The agent can automatically start fixing issues when they are assigned to a dedi
 3. Click **Create a WebHook**:
    - **URL:** `https://your-agent-host:8080/webhooks/jira`
    - **Events:** check `Issue created` and `Issue updated`
-   - **JQL filter (optional):** `assignee = "Code Agent" AND issuetype = Bug` to reduce noise
+   - **JQL filter (optional):** `assignee = "Code Agent"` to reduce noise
 4. Configure in `.env`:
    ```
    JIRA_AGENT_ASSIGNEE=Code Agent
-   JIRA_AGENT_ISSUE_TYPES=Bug
    JIRA_AGENT_DEFAULT_REPO_URL=https://bitbucket.org/your-workspace/your-repo.git
    ```
 
 `JIRA_AGENT_ASSIGNEE` can be the display name, email address, or Atlassian account ID.
-`JIRA_AGENT_ISSUE_TYPES` is a comma-separated list (e.g. `Bug,Task,Sub-task`).
 `JIRA_AGENT_DEFAULT_REPO_URL` is used as a fallback when the repo can't be resolved from Aikido.
 
 ## n8n Approval Flow
