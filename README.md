@@ -5,31 +5,63 @@ A self-hosted coding agent that automates issue fixing and dependency upgrades. 
 ## Architecture
 
 ```
-n8n  ──POST /run-fix──►  Runner  ──clone──►  Workspace
-                           │                      │
-                           │◄──Claude tool loop────┘
-                           │
-                           ├── mvn test
-                           ├── git commit & push
-                           ├──► Bitbucket Cloud (create PR)
-                           ├──► JIRA Cloud (comment, transition, worklog)
-                           ├──► Teams (notification)
-                           └──► n8n (webhook: success/failed)
+              ┌─────────────────────────────────────────────┐
+              │              Entry Points                    │
+              │                                             │
+  n8n/JIRA ──►│  POST /run-fix      (full control)          │
+              │  POST /quick-fix    (JIRA key + repo)       │
+  Aikido ────►│  POST /aikido-fix   (JIRA key only)         │
+              └──────────────┬──────────────────────────────┘
+                             │
+                             ▼
+                    AgentRunner.execute()
+                             │
+            ┌────────────────┼────────────────────┐
+            ▼                ▼                    ▼
+      Clone repo      Resolve prompt       Load rules
+      (Bitbucket)     (request/JIRA/       (Cursor rules
+                       Aikido context)      repo + target)
+            │                │                    │
+            └────────────────┼────────────────────┘
+                             ▼
+                   Claude tool-use loop
+                   (read/write/run/list)
+                             │
+                             ▼
+                      mvn test / gradle test
+                             │
+                             ▼
+                   git commit & push branch
+                             │
+                     ┌───────┴───────┐
+                     ▼               ▼
+              Bitbucket PR     JIRA + Teams + n8n
+              (create)         (comment, transition,
+                                worklog, notify)
+                     │
+                     ▼
+              AWAITING_APPROVAL
+                     │
+            ┌────────┴────────┐
+            ▼                 ▼
+    POST /approve       POST /reject
+    (merge PR,          (decline PR,
+     JIRA → Done)        JIRA → Rejected)
 ```
-
-n8n then orchestrates the approval flow: sends Teams notification, waits for human decision, calls `POST /jobs/{jobId}/approve` or `/reject`.
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/run-fix` | Submit a new fix job (returns 202 with jobId) |
+| POST | `/run-fix` | Submit a fix job with full control over all parameters |
+| POST | `/quick-fix` | Simplified: JIRA key + repo URL, prompt from JIRA description |
+| POST | `/aikido-fix` | Aikido-driven: resolves everything from JIRA key via Aikido |
 | GET | `/status/{jobId}` | Poll job status |
 | POST | `/jobs/{jobId}/approve` | Merge the PR, transition JIRA to Done |
 | POST | `/jobs/{jobId}/reject` | Decline the PR, add JIRA comment |
 | GET | `/health` | Health check with available job slots |
 
-### POST /run-fix
+### POST /run-fix (full control)
 
 ```json
 {
@@ -45,7 +77,55 @@ n8n then orchestrates the approval flow: sends Teams notification, waits for hum
 }
 ```
 
-Required fields: `repoUrl`, `branchName`, `jiraKey`, `prompt`. All others are optional.
+Required: `repoUrl`, `branchName`, `jiraKey`. The `prompt` is optional — if omitted, it's fetched from the JIRA ticket description.
+
+### POST /quick-fix (simplified)
+
+```json
+{
+  "repoUrl": "https://bitbucket.org/csarenergy/ms-meter.git",
+  "jiraKey": "JTP-10967"
+}
+```
+
+Auto-generates branch name from JIRA summary (e.g. `agent/JTP-10967-upgrade-cxf-xjc-boolean`), uses `develop` as base branch, fetches prompt from JIRA description.
+
+### POST /aikido-fix (Aikido Security integration)
+
+```json
+{
+  "jiraKey": "JTP-10967"
+}
+```
+
+The simplest endpoint — only a JIRA key is needed. The agent:
+
+1. **Resolves the Aikido issue** using three strategies (in order):
+   - Search Aikido open issues linked to the JIRA key
+   - Parse the JIRA description for an Aikido URL (e.g. `app.aikido.dev/...?groupId=123`)
+   - Use `aikidoGroupId` if provided directly
+2. **Fetches vulnerability context** from Aikido: package name, current/fixed versions, CVE details (severity, CVSS, description), and changelog summary
+3. **Resolves the repository URL** from Aikido (or override with `repoUrl`)
+4. **Builds an enriched prompt** with full vulnerability details for Claude
+5. **Auto-generates** the branch name and uses `develop` as base branch
+
+Optional fields: `aikidoGroupId` (skip JIRA lookup), `repoUrl` (override Aikido repo).
+
+Response:
+```json
+{
+  "jobId": "550e8400-...",
+  "branch": "agent/JTP-10967-cxf-xjc-boolean-1.1.0",
+  "aikidoIssue": {
+    "groupId": 22926095,
+    "package": "cxf-xjc-boolean",
+    "currentVersion": "1.0.0",
+    "fixedVersion": "1.1.0",
+    "cve": "CVE-2024-XXXXX",
+    "severity": "critical"
+  }
+}
+```
 
 ### POST /jobs/{jobId}/reject
 
@@ -88,6 +168,12 @@ All config via environment variables (or `application.properties` for local dev)
 | `RUN_FIX_MAX_LINES_CHANGED` | Max lines the agent may change | `500` |
 | `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
+| `AIKIDO_CLIENT_ID` | Aikido OAuth2 client ID (Settings > Public API) | (optional) |
+| `AIKIDO_CLIENT_SECRET` | Aikido OAuth2 client secret | (optional) |
+| `AIKIDO_CI_API_SECRET` | Aikido CI integration token (for post-PR scan) | (optional) |
+| `AIKIDO_BASE_URL` | Aikido API base URL | `https://app.aikido.dev` |
+| `GIT_AUTHOR_NAME` | Git commit author name | `code-agent` |
+| `GIT_AUTHOR_EMAIL` | Git commit author email (required for access tokens) | (optional) |
 
 ### Finding JIRA transition IDs
 
@@ -144,6 +230,36 @@ The runner loads coding standards from two sources:
 
 Rules are prepended to the system prompt in order: shared rules, repo rules, inline `extraRules`, then mandatory guardrails. This ensures the agent follows the same conventions your team uses in Cursor IDE.
 
+## Aikido Security Integration
+
+The `/aikido-fix` endpoint provides a closed-loop vulnerability fix pipeline powered by Aikido Security.
+
+### How it works
+
+1. Aikido detects a vulnerability in your codebase and creates a JIRA ticket
+2. You (or automation) call `POST /aikido-fix` with just `{"jiraKey": "JTP-10967"}`
+3. The agent resolves the full vulnerability context from Aikido:
+   - Package name, current version, fixed version
+   - CVE details (severity, CVSS score, description)
+   - Changelog summary between versions
+4. Builds an enriched prompt with all this context for Claude
+5. Claude upgrades the dependency, makes necessary code changes, runs tests
+6. A PR is created and JIRA is updated
+
+### Issue resolution strategies
+
+The agent uses three strategies to find the Aikido issue (in order):
+
+1. **Aikido API search** — queries open issue groups for one linked to the JIRA key
+2. **JIRA description parsing** — extracts Aikido URLs from the ticket description (supports `groupId=`, `sidebarIssue=`, and `/issues/groups/` URL formats)
+3. **Direct ID** — pass `aikidoGroupId` in the request to skip lookup
+
+### Setup
+
+1. In Aikido, go to **Settings > Public API** and create an OAuth client
+2. Set `AIKIDO_CLIENT_ID` and `AIKIDO_CLIENT_SECRET` in your `.env`
+3. (Optional) For post-PR scan verification, set `AIKIDO_CI_API_SECRET` from **Settings > CI Integration**
+
 ## n8n Approval Flow
 
 1. n8n triggers `POST /run-fix` with the job payload
@@ -157,19 +273,24 @@ Rules are prepended to the system prompt in order: shared rules, repo rules, inl
 ## Project Structure
 
 ```
-src/main/java/com/code/agent/
-├── RunFixResource.java          # REST endpoints
+src/main/java/com/eneve/agent/
+├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, etc.)
 ├── agent/
 │   ├── AgentRunner.java         # Job orchestrator
-│   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop
+│   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
 │   ├── ToolDefinitions.java     # Tool schemas for Claude
 │   └── JobStore.java            # In-memory job store
+├── aikido/
+│   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
+│   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
 ├── bitbucket/
 │   └── BitbucketCloudService.java
 ├── jira/
-│   └── JiraService.java
+│   └── JiraService.java         # JIRA Cloud API (comments, transitions, issue fetch)
 ├── model/
 │   ├── RunFixRequest.java
+│   ├── QuickFixRequest.java
+│   ├── AikidoFixRequest.java
 │   ├── JobRecord.java
 │   ├── JobStatus.java
 │   ├── JobStatusResponse.java
