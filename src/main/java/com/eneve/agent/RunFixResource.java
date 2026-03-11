@@ -294,7 +294,9 @@ public class RunFixResource {
                 jiraKey,
                 prompt,
                 "develop",
-                null, null, null, null
+                null, null,
+                request.ruleNames(),
+                request.extraRules()
         );
 
         if (!semaphore.tryAcquire()) {

@@ -1,5 +1,7 @@
 package com.eneve.agent.model;
 
+import java.util.List;
+
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
 
 @Schema(description = "Request to submit an Aikido-driven fix job. Provide a JIRA key (linked to an Aikido issue) "
@@ -18,6 +20,14 @@ public record AikidoFixRequest(
 
         @Schema(description = "Override repo URL. If empty, resolved from Aikido issue metadata.",
                 example = "https://bitbucket.org/csarenergy/ms-meter.git")
-        String repoUrl
+        String repoUrl,
+
+        @Schema(description = "List of rule names to load from the shared rules repo (configured via RULES_REPO_URL)",
+                example = "[\"java-conventions\", \"maven-standards\"]")
+        List<String> ruleNames,
+
+        @Schema(description = "Inline extra rules to append to the system prompt",
+                example = "Do not modify test files")
+        String extraRules
 ) {
 }
