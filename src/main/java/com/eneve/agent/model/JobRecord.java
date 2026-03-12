@@ -8,6 +8,7 @@ public class JobRecord {
     private final RunFixRequest request;
     private final ReviewPrRequest reviewRequest;
     private final FixPrRequest fixPrRequest;
+    private final ReplyCommentRequest replyRequest;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -23,6 +24,7 @@ public class JobRecord {
         this.request = request;
         this.reviewRequest = null;
         this.fixPrRequest = null;
+        this.replyRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -33,6 +35,7 @@ public class JobRecord {
         this.request = null;
         this.reviewRequest = reviewRequest;
         this.fixPrRequest = null;
+        this.replyRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -43,7 +46,19 @@ public class JobRecord {
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = fixPrRequest;
+        this.replyRequest = null;
         this.jobType = JobType.FIX_PR;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, ReplyCommentRequest replyRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = replyRequest;
+        this.jobType = JobType.REPLY;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -52,6 +67,7 @@ public class JobRecord {
     public RunFixRequest getRequest() { return request; }
     public ReviewPrRequest getReviewRequest() { return reviewRequest; }
     public FixPrRequest getFixPrRequest() { return fixPrRequest; }
+    public ReplyCommentRequest getReplyRequest() { return replyRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 

@@ -117,8 +117,9 @@ public class BitbucketCloudService {
 
     /**
      * Add a general comment to a pull request.
+     * Returns the Bitbucket comment ID of the newly created comment.
      */
-    public void addPrComment(String workspace, String repoSlug, String prId, String commentBody) {
+    public long addPrComment(String workspace, String repoSlug, String prId, String commentBody) {
         String path = "/repositories/" + workspace + "/" + repoSlug
                 + "/pullrequests/" + prId + "/comments";
         String body = """
@@ -126,18 +127,21 @@ public class BitbucketCloudService {
                   "content": { "raw": "%s" }
                 }
                 """.formatted(escapeJson(commentBody));
-        postAndReturn(path, body, "comment on PR #" + prId);
-        LOG.infof("Added review comment to PR #%s in %s/%s", prId, workspace, repoSlug);
+        String responseBody = postAndReturn(path, body, "comment on PR #" + prId);
+        long commentId = parseCommentId(responseBody);
+        LOG.infof("Added review comment %d to PR #%s in %s/%s", commentId, prId, workspace, repoSlug);
+        return commentId;
     }
 
     /**
      * Add an inline comment on a specific file and line in a pull request.
      * Uses the Bitbucket "inline" object to anchor the comment to the new-side line.
+     * Returns the Bitbucket comment ID of the newly created comment.
      *
      * @param filePath relative path of the file in the repo
      * @param line     line number on the new (destination) side of the diff
      */
-    public void addInlinePrComment(String workspace, String repoSlug, String prId,
+    public long addInlinePrComment(String workspace, String repoSlug, String prId,
                                    String filePath, int line, String commentBody) {
         String path = "/repositories/" + workspace + "/" + repoSlug
                 + "/pullrequests/" + prId + "/comments";
@@ -150,8 +154,79 @@ public class BitbucketCloudService {
                   }
                 }
                 """.formatted(escapeJson(commentBody), line, escapeJson(filePath));
-        postAndReturn(path, body, "inline comment on PR #" + prId + " " + filePath + ":" + line);
-        LOG.infof("Added inline comment to PR #%s at %s:%d", prId, filePath, line);
+        String responseBody = postAndReturn(path, body,
+                "inline comment on PR #" + prId + " " + filePath + ":" + line);
+        long commentId = parseCommentId(responseBody);
+        LOG.infof("Added inline comment %d to PR #%s at %s:%d", commentId, prId, filePath, line);
+        return commentId;
+    }
+
+    /**
+     * Post a threaded reply to an existing comment on a pull request.
+     * The reply appears in the same thread as the parent comment.
+     * Returns the Bitbucket comment ID of the newly created reply.
+     */
+    public long replyToComment(String workspace, String repoSlug, String prId,
+                               long parentCommentId, String commentBody) {
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments";
+        String body = """
+                {
+                  "content": { "raw": "%s" },
+                  "parent": { "id": %d }
+                }
+                """.formatted(escapeJson(commentBody), parentCommentId);
+        String responseBody = postAndReturn(path, body,
+                "reply to comment #" + parentCommentId + " on PR #" + prId);
+        long commentId = parseCommentId(responseBody);
+        LOG.infof("Replied (comment %d) to comment #%d on PR #%s", commentId, parentCommentId, prId);
+        return commentId;
+    }
+
+    /**
+     * Fetch all comments in the thread rooted at the given comment ID.
+     * Returns them in chronological order (root comment first, then replies).
+     * Each entry is formatted as "author: content".
+     */
+    public List<ThreadComment> getCommentThread(String workspace, String repoSlug,
+                                                String prId, long rootCommentId) {
+        List<ThreadComment> thread = new ArrayList<>();
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments?pagelen=50";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "get thread for comment #" + rootCommentId);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode comment : values) {
+                        long id = comment.path("id").asLong(0);
+                        long parentId = comment.path("parent").path("id").asLong(0);
+
+                        if (id == rootCommentId || parentId == rootCommentId) {
+                            String author = comment.path("user").path("display_name").asText(
+                                    comment.path("user").path("username").asText("unknown"));
+                            String raw = comment.path("content").path("raw").asText("").trim();
+                            String createdOn = comment.path("created_on").asText("");
+                            boolean isAgent = comment.path("user").path("username").asText(
+                                    comment.path("user").path("nickname").asText("")).equals(bbUser);
+                            thread.add(new ThreadComment(id, parentId, author, raw, createdOn, isAgent));
+                        }
+                    }
+                }
+
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse comment thread response: %s", e.getMessage());
+                break;
+            }
+        }
+
+        thread.sort((a, b) -> a.createdOn().compareTo(b.createdOn()));
+        LOG.infof("Fetched %d comments in thread #%d on PR #%s", thread.size(), rootCommentId, prId);
+        return thread;
     }
 
     /**
@@ -338,6 +413,16 @@ public class BitbucketCloudService {
         }
         return "Basic " + Base64.getEncoder()
                 .encodeToString((bbUser + ":" + appPassword).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private long parseCommentId(String responseBody) {
+        try {
+            JsonNode node = objectMapper.readTree(responseBody);
+            return node.path("id").asLong(0);
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse comment ID from response: %s", e.getMessage());
+            return 0;
+        }
     }
 
     private static String escapeJson(String text) {

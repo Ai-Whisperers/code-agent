@@ -3,17 +3,20 @@ package com.eneve.agent.agent;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.eneve.agent.bitbucket.AgentComment;
 import com.eneve.agent.bitbucket.BitbucketCloudService;
+import com.eneve.agent.bitbucket.ThreadComment;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.ReplyCommentRequest;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
@@ -46,6 +49,7 @@ public class AgentRunner {
     @Inject BitbucketCloudService bitbucketService;
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
+    @Inject CommentStore commentStore;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -353,7 +357,7 @@ public class AgentRunner {
 
             // 8. Parse structured review and post inline + summary comments (with dedup)
             String reviewSummary = postReviewComments(reviewOutput, coords, request.prId(),
-                    existingAgentComments, headSha);
+                    existingAgentComments, headSha, job.getJobId());
 
             // 9. Update job record
             job.setStatus(JobStatus.SUCCESS);
@@ -686,6 +690,162 @@ public class AgentRunner {
         );
     }
 
+    // ─── Conversational Reply ─────────────────────────────────────────────
+
+    /**
+     * Handle a REPLY job: respond in-thread to a developer's reply on one of our review comments.
+     */
+    public void executeReply(JobRecord job) {
+        ReplyCommentRequest request = job.getReplyRequest();
+        job.setStatus(JobStatus.RUNNING);
+        job.setPrId(request.prId());
+
+        Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
+        if (ctxOpt.isEmpty()) {
+            failReply(job, "Original comment context not found for comment #" + request.parentCommentId());
+            return;
+        }
+        CommentContext ctx = ctxOpt.get();
+
+        String repoUrl = "https://bitbucket.org/" + request.workspace() + "/" + request.repoSlug() + ".git";
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(repoUrl);
+        } catch (IllegalArgumentException e) {
+            failReply(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            // 1. Resolve source branch from PR metadata
+            java.util.Map<String, String> prInfo;
+            try {
+                prInfo = bitbucketService.getPullRequestInfo(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+            } catch (Exception e) {
+                failReply(job, "Failed to fetch PR info: " + e.getMessage());
+                return;
+            }
+
+            String sourceBranch = prInfo.get("sourceBranch");
+
+            // 2. Clone the source branch for file context
+            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            LOG.infof("Reply: cloning %s/%s branch %s for comment thread on PR #%s",
+                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+            try {
+                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failReply(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            // 3. Fetch the full comment thread
+            List<ThreadComment> thread;
+            try {
+                thread = bitbucketService.getCommentThread(
+                        request.workspace(), request.repoSlug(), request.prId(),
+                        request.parentCommentId());
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch comment thread (non-fatal): %s", e.getMessage());
+                thread = Collections.emptyList();
+            }
+
+            // 4. Build conversational prompt
+            String systemPrompt = buildReplySystemPrompt(ctx, thread, request.humanMessage());
+
+            // 5. Run agentic loop with read-only tools
+            String replyText;
+            try {
+                replyText = toolUseLoop.run(systemPrompt, workspace,
+                        ToolDefinitions.readOnly(),
+                        "A developer has replied to your review comment. "
+                                + "Please read the conversation and respond helpfully.");
+            } catch (Exception e) {
+                failReply(job, "Agent reply loop error: " + e.getMessage());
+                return;
+            }
+
+            // 6. Post the reply in-thread on Bitbucket
+            try {
+                long replyCommentId = bitbucketService.replyToComment(
+                        request.workspace(), request.repoSlug(), request.prId(),
+                        request.parentCommentId(), replyText);
+
+                // Store the reply comment so nested follow-ups also work
+                if (replyCommentId > 0) {
+                    commentStore.save(replyCommentId, new CommentContext(
+                            request.prId(), request.workspace(), request.repoSlug(),
+                            ctx.filePath(), ctx.line(), ctx.category(), ctx.severity(),
+                            ctx.findingText(), ctx.reviewJobId()));
+                }
+            } catch (Exception e) {
+                failReply(job, "Failed to post reply: " + e.getMessage());
+                return;
+            }
+
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary("Replied to comment thread on PR #" + request.prId());
+            LOG.infof("Reply job %s completed for comment #%d on PR #%s",
+                    job.getJobId(), request.parentCommentId(), request.prId());
+
+        } catch (Exception e) {
+            failReply(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private String buildReplySystemPrompt(CommentContext ctx, List<ThreadComment> thread,
+                                          String latestHumanMessage) {
+        StringBuilder threadSection = new StringBuilder();
+        for (ThreadComment tc : thread) {
+            String role = tc.isAgent() ? "You (AI Reviewer)" : tc.author();
+            threadSection.append("**").append(role).append("**: ").append(tc.content()).append("\n\n");
+        }
+
+        return """
+                You are an AI code reviewer engaged in a conversation on a Bitbucket pull request.
+                A developer has replied to one of your review comments and you need to respond.
+
+                ## Original Finding
+                - **File**: %s (line %d)
+                - **Severity**: %s | **Category**: %s
+                - **Your original comment**: %s
+
+                ## Conversation Thread
+                %s
+
+                ## Latest Message from Developer
+                %s
+
+                ## Instructions
+                - Respond helpfully and concisely to the developer's message.
+                - If they ask for clarification, explain your reasoning in more detail with code references.
+                - If they disagree, consider their argument carefully. Acknowledge if they make a valid point.
+                - If they provide additional context that changes your assessment, say so explicitly.
+                - You can use `read_file` and `list_files` to examine the code for additional context.
+                - Keep your response focused and conversational — this is a thread reply, not a full review.
+                - Do NOT output JSON. Write your response in natural language (markdown is fine).
+                - Your final message will be posted directly as a Bitbucket comment, so make it clean.
+                """.formatted(
+                ctx.filePath() != null ? ctx.filePath() : "(general)",
+                ctx.line(),
+                ctx.severity() != null ? ctx.severity() : "INFO",
+                ctx.category() != null ? ctx.category() : "General",
+                ctx.findingText(),
+                threadSection.toString().isBlank() ? "(no previous thread messages)" : threadSection,
+                latestHumanMessage
+        );
+    }
+
+    private void failReply(JobRecord job, String message) {
+        LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+    }
+
+    // ─── Review Prompt ──────────────────────────────────────────────────
+
     private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
                                            String targetBranch, String diff,
                                            boolean diffTruncated,
@@ -871,7 +1031,8 @@ public class AgentRunner {
      * Returns the overall summary text for the job record.
      */
     private String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId,
-                                      List<AgentComment> existingComments, String headSha) {
+                                      List<AgentComment> existingComments, String headSha,
+                                      String reviewJobId) {
         String ws = coords.workspace();
         String slug = coords.repoSlug();
 
@@ -924,9 +1085,14 @@ public class AgentRunner {
                             continue;
                         }
                         try {
-                            bitbucketService.addInlinePrComment(ws, slug, prId,
+                            long commentId = bitbucketService.addInlinePrComment(ws, slug, prId,
                                     file, line, comment.toString());
                             inlineCount++;
+                            if (commentId > 0) {
+                                commentStore.save(commentId, new CommentContext(
+                                        prId, ws, slug, file, line,
+                                        category, severity, description, reviewJobId));
+                            }
                         } catch (Exception e) {
                             LOG.warnf("Failed to post inline comment at %s:%d, falling back to general: %s",
                                     file, line, e.getMessage());
