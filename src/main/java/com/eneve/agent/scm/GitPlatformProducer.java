@@ -1,0 +1,45 @@
+package com.eneve.agent.scm;
+
+import com.eneve.agent.scm.azuredevops.AzureDevOpsPlatformService;
+import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Produces;
+import jakarta.inject.Inject;
+
+/**
+ * CDI producer that selects the {@link GitPlatformService} implementation
+ * based on the {@code git.platform} configuration property.
+ */
+@ApplicationScoped
+public class GitPlatformProducer {
+
+    private static final Logger LOG = Logger.getLogger(GitPlatformProducer.class);
+
+    @ConfigProperty(name = "git.platform", defaultValue = "bitbucket")
+    String platform;
+
+    @Inject BitbucketPlatformService bitbucket;
+    @Inject AzureDevOpsPlatformService azureDevOps;
+
+    @Produces
+    @ApplicationScoped
+    public GitPlatformService gitPlatformService() {
+        return switch (platform.toLowerCase().trim()) {
+            case "bitbucket" -> {
+                LOG.info("Git platform: Bitbucket Cloud");
+                yield bitbucket;
+            }
+            case "azuredevops", "azure-devops", "azure" -> {
+                LOG.info("Git platform: Azure DevOps");
+                yield azureDevOps;
+            }
+            default -> throw new IllegalArgumentException(
+                    "Unknown git.platform value: '" + platform
+                            + "'. Supported values: bitbucket, azuredevops");
+        };
+    }
+}

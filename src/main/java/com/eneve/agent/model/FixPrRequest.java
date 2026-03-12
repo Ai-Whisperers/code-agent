@@ -7,11 +7,11 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
 @Schema(description = "Request to auto-fix a pull request based on its review comments")
 public record FixPrRequest(
 
-        @Schema(required = true, description = "Bitbucket Cloud repo URL (HTTPS or SSH)",
+        @Schema(required = true, description = "Repository URL (HTTPS or SSH, Bitbucket or Azure DevOps)",
                 example = "https://bitbucket.org/workspace/repo.git")
         String repoUrl,
 
-        @Schema(required = true, description = "Bitbucket PR number whose review comments should be fixed",
+        @Schema(required = true, description = "Pull request number whose review comments should be fixed",
                 example = "42")
         String prId,
 

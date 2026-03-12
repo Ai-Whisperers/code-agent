@@ -13,7 +13,7 @@ import org.jboss.logging.Logger;
 
 /**
  * PostgreSQL-backed store for agent comment context.
- * Maps Bitbucket comment IDs to the review context that produced them,
+ * Maps platform comment IDs to the review context that produced them,
  * enabling conversational replies when developers respond in-thread.
  */
 @ApplicationScoped
@@ -27,26 +27,27 @@ public class CommentStore {
     public void save(long commentId, CommentContext ctx) {
         String sql = """
                 INSERT INTO agent_comments
-                    (comment_id, pr_id, workspace, repo_slug, file_path, line_number,
+                    (comment_id, pr_id, workspace, project, repo_slug, file_path, line_number,
                      category, severity, finding_text, review_job_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (comment_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setLong(1, commentId);
             ps.setString(2, ctx.prId());
-            ps.setString(3, ctx.workspace());
-            ps.setString(4, ctx.repoSlug());
-            ps.setString(5, ctx.filePath());
-            ps.setInt(6, ctx.line());
-            ps.setString(7, ctx.category());
-            ps.setString(8, ctx.severity());
-            ps.setString(9, ctx.findingText());
-            ps.setString(10, ctx.reviewJobId());
+            ps.setString(3, ctx.organization());
+            ps.setString(4, ctx.project());
+            ps.setString(5, ctx.repository());
+            ps.setString(6, ctx.filePath());
+            ps.setInt(7, ctx.line());
+            ps.setString(8, ctx.category());
+            ps.setString(9, ctx.severity());
+            ps.setString(10, ctx.findingText());
+            ps.setString(11, ctx.reviewJobId());
             ps.executeUpdate();
             LOG.debugf("Stored agent comment %d for PR #%s (%s/%s)",
-                    commentId, ctx.prId(), ctx.workspace(), ctx.repoSlug());
+                    commentId, ctx.prId(), ctx.organization(), ctx.repository());
         } catch (SQLException e) {
             LOG.errorf("Failed to store agent comment %d: %s", commentId, e.getMessage());
         }
@@ -54,7 +55,7 @@ public class CommentStore {
 
     public Optional<CommentContext> find(long commentId) {
         String sql = """
-                SELECT pr_id, workspace, repo_slug, file_path, line_number,
+                SELECT pr_id, workspace, project, repo_slug, file_path, line_number,
                        category, severity, finding_text, review_job_id
                 FROM agent_comments WHERE comment_id = ?
                 """;
@@ -66,6 +67,7 @@ public class CommentStore {
                     return Optional.of(new CommentContext(
                             rs.getString("pr_id"),
                             rs.getString("workspace"),
+                            rs.getString("project"),
                             rs.getString("repo_slug"),
                             rs.getString("file_path"),
                             rs.getInt("line_number"),

@@ -8,8 +8,8 @@ import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.eneve.agent.bitbucket.AgentComment;
-import com.eneve.agent.bitbucket.BitbucketCloudService;
+import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.diff.DiffFormatter;
 import com.eneve.agent.model.RepoCoordinates;
 
@@ -26,7 +26,7 @@ public class ReviewCommentProcessor {
     private static final Pattern REVIEWED_UP_TO_PATTERN =
             Pattern.compile("<!-- agent-reviewed-up-to:([0-9a-f]{7,40}) -->");
 
-    @Inject BitbucketCloudService bitbucketService;
+    @Inject GitPlatformService platformService;
     @Inject CommentStore commentStore;
 
     /**
@@ -38,13 +38,14 @@ public class ReviewCommentProcessor {
                                      List<AgentComment> existingComments, String headSha,
                                      String reviewJobId,
                                      Map<String, TreeSet<Integer>> commentableLines) {
-        String ws = coords.workspace();
-        String slug = coords.repoSlug();
+        String org = coords.organization();
+        String project = coords.project();
+        String repo = coords.repository();
 
         String json = extractJsonBlock(reviewOutput);
         if (json == null) {
             LOG.warn("Review output is not structured JSON, posting as single general comment");
-            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, reviewOutput));
+            safeComment(() -> platformService.addPrComment(org, project, repo, prId, reviewOutput));
             return reviewOutput;
         }
 
@@ -108,12 +109,12 @@ public class ReviewCommentProcessor {
                             continue;
                         }
                         try {
-                            long commentId = bitbucketService.addInlinePrComment(ws, slug, prId,
+                            long commentId = platformService.addInlinePrComment(org, project, repo, prId,
                                     file, line, comment.toString());
                             inlineCount++;
                             if (commentId > 0) {
                                 commentStore.save(commentId, new CommentContext(
-                                        prId, ws, slug, file, line,
+                                        prId, org, project, repo, file, line,
                                         category, severity, description, reviewJobId));
                             }
                         } catch (Exception e) {
@@ -121,11 +122,11 @@ public class ReviewCommentProcessor {
                                     file, line, e.getMessage());
                             final String fallbackFile = file;
                             final int fallbackLine = line;
-                            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId,
+                            safeComment(() -> platformService.addPrComment(org, project, repo, prId,
                                     "**" + fallbackFile + ":" + fallbackLine + "** — " + comment));
                         }
                     } else {
-                        safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, comment.toString()));
+                        safeComment(() -> platformService.addPrComment(org, project, repo, prId, comment.toString()));
                     }
                 }
             }
@@ -152,7 +153,7 @@ public class ReviewCommentProcessor {
                 overallComment.append("\n<!-- agent-reviewed-up-to:").append(headSha).append(" -->");
             }
 
-            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, overallComment.toString()));
+            safeComment(() -> platformService.addPrComment(org, project, repo, prId, overallComment.toString()));
 
             LOG.infof("Posted %d inline comments + summary to PR #%s (%d duplicates skipped, %d lines snapped)",
                     inlineCount, prId, skippedCount, snappedCount);
@@ -160,7 +161,7 @@ public class ReviewCommentProcessor {
 
         } catch (Exception e) {
             LOG.warnf("Failed to parse review JSON, posting as general comment: %s", e.getMessage());
-            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, reviewOutput));
+            safeComment(() -> platformService.addPrComment(org, project, repo, prId, reviewOutput));
             return reviewOutput;
         }
     }
@@ -211,7 +212,7 @@ public class ReviewCommentProcessor {
         try {
             action.run();
         } catch (Exception e) {
-            LOG.warnf("Failed to post Bitbucket comment (non-fatal): %s", e.getMessage());
+            LOG.warnf("Failed to post PR comment (non-fatal): %s", e.getMessage());
         }
     }
 }

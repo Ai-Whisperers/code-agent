@@ -6,9 +6,9 @@ import java.util.Map;
 import java.util.Optional;
 import com.eneve.agent.diff.ReviewPromptResult;
 
-import com.eneve.agent.bitbucket.AgentComment;
-import com.eneve.agent.bitbucket.BitbucketCloudService;
-import com.eneve.agent.bitbucket.ThreadComment;
+import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scm.ThreadComment;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
@@ -48,18 +48,18 @@ public class AgentRunner {
     @Inject BuildValidator buildValidator;
     @Inject GuardrailConfig guardrails;
     @Inject JiraService jiraService;
-    @Inject BitbucketCloudService bitbucketService;
+    @Inject GitPlatformService platformService;
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject CommentStore commentStore;
     @Inject LinterService linterService;
     @Inject LearningExtractor learningExtractor;
 
-    @ConfigProperty(name = "bitbucket.user")
-    String bbUser;
+    @ConfigProperty(name = "git.username")
+    String gitUser;
 
-    @ConfigProperty(name = "bitbucket.app.password")
-    String bbAppPassword;
+    @ConfigProperty(name = "git.password")
+    String gitPassword;
 
     @ConfigProperty(name = "git.author.name", defaultValue = "code-agent")
     String gitAuthorName;
@@ -89,8 +89,8 @@ public class AgentRunner {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
-            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
-            LOG.infof("Cloning %s/%s (branch: %s)", coords.workspace(), coords.repoSlug(), request.branchName());
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            LOG.infof("Cloning %s/%s (branch: %s)", coords.organization(), coords.repository(), request.branchName());
             try {
                 workspace.cloneRepo(authUrl, request.branchName(), jobTimeoutMinutes);
             } catch (Exception e) {
@@ -175,8 +175,8 @@ public class AgentRunner {
                 String title = request.jiraKey() + ": Automated fix";
                 String description = "**Automated PR created by Code Agent Runner**\n\n"
                         + "JIRA: " + request.jiraKey() + "\n\n" + summary;
-                String[] prResult = bitbucketService.createPullRequest(
-                        coords.workspace(), coords.repoSlug(),
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
                         request.branchName(), request.targetBranchOrDefault(),
                         title, description);
                 prUrl = prResult[0];
@@ -224,8 +224,8 @@ public class AgentRunner {
 
             Map<String, String> prInfo;
             try {
-                prInfo = bitbucketService.getPullRequestInfo(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                prInfo = platformService.getPullRequestInfo(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
                 failReview(job, "Failed to fetch PR info: " + e.getMessage());
                 return;
@@ -237,9 +237,9 @@ public class AgentRunner {
             String prTitle = prInfo.get("title");
             job.setPrId(request.prId());
 
-            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             LOG.infof("Review: cloning %s/%s branch %s for PR #%s",
-                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+                    coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {
                 workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
             } catch (Exception e) {
@@ -249,8 +249,8 @@ public class AgentRunner {
 
             List<AgentComment> existingAgentComments;
             try {
-                existingAgentComments = bitbucketService.getAgentPrComments(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                existingAgentComments = platformService.getAgentPrComments(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
                 LOG.infof("Review: found %d existing agent comments on PR #%s",
                         existingAgentComments.size(), request.prId());
             } catch (Exception e) {
@@ -298,7 +298,7 @@ public class AgentRunner {
 
             ReviewPromptResult promptResult = promptBuilder.buildReviewPrompt(
                     request, prTitle, targetBranch, diff, existingAgentComments, workspace,
-                    coords.workspace(), coords.repoSlug());
+                    coords.organization(), coords.repository());
 
             String reviewOutput;
             try {
@@ -354,8 +354,8 @@ public class AgentRunner {
 
             Map<String, String> prInfo;
             try {
-                prInfo = bitbucketService.getPullRequestInfo(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                prInfo = platformService.getPullRequestInfo(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
                 failFixPr(job, "Failed to fetch PR info: " + e.getMessage());
                 return;
@@ -368,8 +368,8 @@ public class AgentRunner {
 
             List<String> reviewComments;
             try {
-                reviewComments = bitbucketService.getPullRequestComments(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                reviewComments = platformService.getPullRequestComments(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
                 failFixPr(job, "Failed to fetch PR comments: " + e.getMessage());
                 return;
@@ -380,9 +380,9 @@ public class AgentRunner {
                 return;
             }
 
-            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             LOG.infof("Fix-PR: cloning %s/%s branch %s for PR #%s",
-                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+                    coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {
                 workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
             } catch (Exception e) {
@@ -474,8 +474,8 @@ public class AgentRunner {
                                 .limit(20)
                                 .toList())
                         + "\n\n## Agent summary\n" + summary;
-                String[] prResult = bitbucketService.createPullRequest(
-                        coords.workspace(), coords.repoSlug(),
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
                         fixBranch, sourceBranch,
                         title, description);
                 prUrl = prResult[0];
@@ -490,8 +490,8 @@ public class AgentRunner {
             job.setPrUrl(prUrl);
             job.setPrId(newPrId);
 
-            safeComment(() -> bitbucketService.addPrComment(
-                    coords.workspace(), coords.repoSlug(), request.prId(),
+            safeComment(() -> platformService.addPrComment(
+                    coords.organization(), coords.project(), coords.repository(), request.prId(),
                     "Code Agent has created a fix PR for the review comments: " + prUrl));
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
@@ -526,7 +526,7 @@ public class AgentRunner {
 
         RepoCoordinates coords;
         try {
-            coords = RepoCoordinates.parse(buildRepoUrl(request));
+            coords = RepoCoordinates.parse(request.repoUrl());
         } catch (IllegalArgumentException e) {
             failReply(job, "Invalid repo URL: " + e.getMessage());
             return;
@@ -536,17 +536,17 @@ public class AgentRunner {
 
             Map<String, String> prInfo;
             try {
-                prInfo = bitbucketService.getPullRequestInfo(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                prInfo = platformService.getPullRequestInfo(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
                 failReply(job, "Failed to fetch PR info: " + e.getMessage());
                 return;
             }
 
             String sourceBranch = prInfo.get("sourceBranch");
-            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             LOG.infof("Reply: cloning %s/%s branch %s for comment thread on PR #%s",
-                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+                    coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {
                 workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
             } catch (Exception e) {
@@ -556,9 +556,9 @@ public class AgentRunner {
 
             List<ThreadComment> thread;
             try {
-                thread = bitbucketService.getCommentThread(
-                        request.workspace(), request.repoSlug(), request.prId(),
-                        request.parentCommentId());
+                thread = platformService.getCommentThread(
+                        coords.organization(), coords.project(), coords.repository(),
+                        request.prId(), request.parentCommentId());
             } catch (Exception e) {
                 LOG.warnf("Failed to fetch comment thread (non-fatal): %s", e.getMessage());
                 thread = Collections.emptyList();
@@ -579,13 +579,14 @@ public class AgentRunner {
             }
 
             try {
-                long replyCommentId = bitbucketService.replyToComment(
-                        request.workspace(), request.repoSlug(), request.prId(),
-                        request.parentCommentId(), replyText);
+                long replyCommentId = platformService.replyToComment(
+                        coords.organization(), coords.project(), coords.repository(),
+                        request.prId(), request.parentCommentId(), replyText);
 
                 if (replyCommentId > 0) {
                     commentStore.save(replyCommentId, new CommentContext(
-                            request.prId(), request.workspace(), request.repoSlug(),
+                            request.prId(), coords.organization(), coords.project(),
+                            coords.repository(),
                             ctx.filePath(), ctx.line(), ctx.category(), ctx.severity(),
                             ctx.findingText(), ctx.reviewJobId()));
                 }
@@ -594,7 +595,6 @@ public class AgentRunner {
                 return;
             }
 
-            // Extract any generalizable team preference from the conversation
             try {
                 String developerUsername = thread.stream()
                         .filter(tc -> !tc.isAgent())
@@ -602,7 +602,7 @@ public class AgentRunner {
                         .map(ThreadComment::author)
                         .orElse(null);
                 learningExtractor.extractAndStore(thread, ctx,
-                        request.workspace(), request.repoSlug(), developerUsername);
+                        coords.organization(), coords.repository(), developerUsername);
             } catch (Exception e) {
                 LOG.warnf("Learning extraction failed (non-fatal): %s", e.getMessage());
             }
@@ -634,7 +634,7 @@ public class AgentRunner {
 
         RepoCoordinates coords;
         try {
-            coords = RepoCoordinates.parse(buildRepoUrl(request));
+            coords = RepoCoordinates.parse(request.repoUrl());
         } catch (IllegalArgumentException e) {
             failFixComment(job, request, "Invalid repo URL: " + e.getMessage());
             return;
@@ -644,17 +644,17 @@ public class AgentRunner {
 
             Map<String, String> prInfo;
             try {
-                prInfo = bitbucketService.getPullRequestInfo(
-                        coords.workspace(), coords.repoSlug(), request.prId());
+                prInfo = platformService.getPullRequestInfo(
+                        coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
                 failFixComment(job, request, "Failed to fetch PR info: " + e.getMessage());
                 return;
             }
 
             String sourceBranch = prInfo.get("sourceBranch");
-            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             LOG.infof("FixComment: cloning %s/%s branch %s for comment fix on PR #%s",
-                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+                    coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {
                 workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
             } catch (Exception e) {
@@ -666,9 +666,9 @@ public class AgentRunner {
 
             List<ThreadComment> thread;
             try {
-                thread = bitbucketService.getCommentThread(
-                        request.workspace(), request.repoSlug(), request.prId(),
-                        request.parentCommentId());
+                thread = platformService.getCommentThread(
+                        coords.organization(), coords.project(), coords.repository(),
+                        request.prId(), request.parentCommentId());
             } catch (Exception e) {
                 LOG.warnf("Failed to fetch comment thread (non-fatal): %s", e.getMessage());
                 thread = Collections.emptyList();
@@ -743,12 +743,13 @@ public class AgentRunner {
                     + (commitSha != null ? " in commit `" + commitSha.substring(0, Math.min(8, commitSha.length())) + "`" : "")
                     + ".\n\n" + summary;
             try {
-                long replyCommentId = bitbucketService.replyToComment(
-                        request.workspace(), request.repoSlug(), request.prId(),
-                        request.parentCommentId(), replyText);
+                long replyCommentId = platformService.replyToComment(
+                        coords.organization(), coords.project(), coords.repository(),
+                        request.prId(), request.parentCommentId(), replyText);
                 if (replyCommentId > 0) {
                     commentStore.save(replyCommentId, new CommentContext(
-                            request.prId(), request.workspace(), request.repoSlug(),
+                            request.prId(), coords.organization(), coords.project(),
+                            coords.repository(),
                             ctx.filePath(), ctx.line(), ctx.category(), ctx.severity(),
                             ctx.findingText(), ctx.reviewJobId()));
                 }
@@ -774,7 +775,7 @@ public class AgentRunner {
         RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
 
         try {
-            bitbucketService.mergePullRequest(coords.workspace(), coords.repoSlug(), job.getPrId());
+            platformService.mergePullRequest(coords.organization(), coords.project(), coords.repository(), job.getPrId());
             job.setStatus(JobStatus.SUCCESS);
             if (jiraKey != null && !jiraKey.isBlank()) {
                 safeJira(() -> jiraService.commentMerged(jiraKey));
@@ -793,7 +794,7 @@ public class AgentRunner {
         RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
 
         try {
-            bitbucketService.declinePullRequest(coords.workspace(), coords.repoSlug(), job.getPrId());
+            platformService.declinePullRequest(coords.organization(), coords.project(), coords.repository(), job.getPrId());
         } catch (Exception e) {
             LOG.warnf("Failed to decline PR for job %s: %s", job.getJobId(), e.getMessage());
         }
@@ -910,10 +911,6 @@ public class AgentRunner {
         return true;
     }
 
-    private static String buildRepoUrl(ReplyCommentRequest request) {
-        return "https://bitbucket.org/" + request.workspace() + "/" + request.repoSlug() + ".git";
-    }
-
     private String resolveRepoUrl(JobRecord job) {
         if (job.getJobType() == JobType.FIX_PR) {
             return job.getFixPrRequest().repoUrl();
@@ -989,8 +986,9 @@ public class AgentRunner {
         job.setErrorMessage(message);
 
         try {
-            bitbucketService.replyToComment(
-                    request.workspace(), request.repoSlug(), request.prId(),
+            RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());
+            platformService.replyToComment(
+                    c.organization(), c.project(), c.repository(), request.prId(),
                     request.parentCommentId(),
                     "Failed to apply fix: " + message);
         } catch (Exception e) {
@@ -1042,7 +1040,7 @@ public class AgentRunner {
         try {
             action.run();
         } catch (Exception e) {
-            LOG.warnf("Failed to post Bitbucket comment (non-fatal): %s", e.getMessage());
+            LOG.warnf("Failed to post PR comment (non-fatal): %s", e.getMessage());
         }
     }
 

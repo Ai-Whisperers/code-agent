@@ -1,4 +1,4 @@
-package com.eneve.agent.bitbucket;
+package com.eneve.agent.scm.bitbucket;
 
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -13,19 +13,24 @@ import java.util.Map;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scm.ThreadComment;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Bitbucket Cloud REST API 2.0 client.
- * Handles pull request creation, merging, and declining.
+ * Bitbucket Cloud REST API 2.0 implementation of {@link GitPlatformService}.
+ * <p>
+ * The {@code org} parameter maps to the Bitbucket workspace and {@code repo}
+ * maps to the repository slug. The {@code project} parameter is ignored.
  */
 @ApplicationScoped
-public class BitbucketCloudService {
+public class BitbucketPlatformService implements GitPlatformService {
 
-    private static final Logger LOG = Logger.getLogger(BitbucketCloudService.class);
+    private static final Logger LOG = Logger.getLogger(BitbucketPlatformService.class);
 
     @ConfigProperty(name = "bitbucket.base.url", defaultValue = "https://api.bitbucket.org/2.0")
     String baseUrl;
@@ -39,10 +44,8 @@ public class BitbucketCloudService {
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    /**
-     * Create a pull request. Returns the PR URL and PR ID as a two-element array [url, id].
-     */
-    public String[] createPullRequest(String workspace, String repoSlug,
+    @Override
+    public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
         String body = """
@@ -60,7 +63,7 @@ public class BitbucketCloudService {
                 escapeJson(targetBranch)
         );
 
-        String path = "/repositories/" + workspace + "/" + repoSlug + "/pullrequests";
+        String path = "/repositories/" + org + "/" + repo + "/pullrequests";
         String responseBody = postAndReturn(path, body, "create PR");
 
         try {
@@ -75,11 +78,9 @@ public class BitbucketCloudService {
         }
     }
 
-    /**
-     * Merge a pull request.
-     */
-    public void mergePullRequest(String workspace, String repoSlug, String prId) {
-        String path = "/repositories/" + workspace + "/" + repoSlug
+    @Override
+    public void mergePullRequest(String org, String project, String repo, String prId) {
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/merge";
         String body = """
                 {
@@ -88,15 +89,20 @@ public class BitbucketCloudService {
                 }
                 """;
         postAndReturn(path, body, "merge PR #" + prId);
-        LOG.infof("Merged PR #%s in %s/%s", prId, workspace, repoSlug);
+        LOG.infof("Merged PR #%s in %s/%s", prId, org, repo);
     }
 
-    /**
-     * Fetch pull request metadata (source branch, destination branch, title).
-     * Returns a map with keys: sourceBranch, destinationBranch, title.
-     */
-    public Map<String, String> getPullRequestInfo(String workspace, String repoSlug, String prId) {
-        String path = "/repositories/" + workspace + "/" + repoSlug + "/pullrequests/" + prId;
+    @Override
+    public void declinePullRequest(String org, String project, String repo, String prId) {
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + prId + "/decline";
+        postAndReturn(path, "{}", "decline PR #" + prId);
+        LOG.infof("Declined PR #%s in %s/%s", prId, org, repo);
+    }
+
+    @Override
+    public Map<String, String> getPullRequestInfo(String org, String project, String repo, String prId) {
+        String path = "/repositories/" + org + "/" + repo + "/pullrequests/" + prId;
         String responseBody = getAndReturn(path, "get PR #" + prId);
 
         try {
@@ -115,12 +121,9 @@ public class BitbucketCloudService {
         }
     }
 
-    /**
-     * Add a general comment to a pull request.
-     * Returns the Bitbucket comment ID of the newly created comment.
-     */
-    public long addPrComment(String workspace, String repoSlug, String prId, String commentBody) {
-        String path = "/repositories/" + workspace + "/" + repoSlug
+    @Override
+    public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments";
         String body = """
                 {
@@ -129,21 +132,14 @@ public class BitbucketCloudService {
                 """.formatted(escapeJson(commentBody));
         String responseBody = postAndReturn(path, body, "comment on PR #" + prId);
         long commentId = parseCommentId(responseBody);
-        LOG.infof("Added review comment %d to PR #%s in %s/%s", commentId, prId, workspace, repoSlug);
+        LOG.infof("Added review comment %d to PR #%s in %s/%s", commentId, prId, org, repo);
         return commentId;
     }
 
-    /**
-     * Add an inline comment on a specific file and line in a pull request.
-     * Uses the Bitbucket "inline" object to anchor the comment to the new-side line.
-     * Returns the Bitbucket comment ID of the newly created comment.
-     *
-     * @param filePath relative path of the file in the repo
-     * @param line     line number on the new (destination) side of the diff
-     */
-    public long addInlinePrComment(String workspace, String repoSlug, String prId,
+    @Override
+    public long addInlinePrComment(String org, String project, String repo, String prId,
                                    String filePath, int line, String commentBody) {
-        String path = "/repositories/" + workspace + "/" + repoSlug
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments";
         String body = """
                 {
@@ -161,14 +157,10 @@ public class BitbucketCloudService {
         return commentId;
     }
 
-    /**
-     * Post a threaded reply to an existing comment on a pull request.
-     * The reply appears in the same thread as the parent comment.
-     * Returns the Bitbucket comment ID of the newly created reply.
-     */
-    public long replyToComment(String workspace, String repoSlug, String prId,
+    @Override
+    public long replyToComment(String org, String project, String repo, String prId,
                                long parentCommentId, String commentBody) {
-        String path = "/repositories/" + workspace + "/" + repoSlug
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments";
         String body = """
                 {
@@ -183,15 +175,11 @@ public class BitbucketCloudService {
         return commentId;
     }
 
-    /**
-     * Fetch all comments in the thread rooted at the given comment ID.
-     * Returns them in chronological order (root comment first, then replies).
-     * Each entry is formatted as "author: content".
-     */
-    public List<ThreadComment> getCommentThread(String workspace, String repoSlug,
+    @Override
+    public List<ThreadComment> getCommentThread(String org, String project, String repo,
                                                 String prId, long rootCommentId) {
         List<ThreadComment> thread = new ArrayList<>();
-        String path = "/repositories/" + workspace + "/" + repoSlug
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments?pagelen=50";
 
         while (path != null) {
@@ -229,15 +217,10 @@ public class BitbucketCloudService {
         return thread;
     }
 
-    /**
-     * Fetch all review comments from a pull request, with pagination.
-     * Filters out comments authored by the configured Bitbucket user (the agent)
-     * to avoid feedback loops. Each returned string includes inline file/line
-     * context when available.
-     */
-    public List<String> getPullRequestComments(String workspace, String repoSlug, String prId) {
+    @Override
+    public List<String> getPullRequestComments(String org, String project, String repo, String prId) {
         List<String> comments = new ArrayList<>();
-        String path = "/repositories/" + workspace + "/" + repoSlug
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments?pagelen=50";
 
         while (path != null) {
@@ -283,18 +266,14 @@ public class BitbucketCloudService {
             }
         }
 
-        LOG.infof("Fetched %d review comments from PR #%s in %s/%s", comments.size(), prId, workspace, repoSlug);
+        LOG.infof("Fetched %d review comments from PR #%s in %s/%s", comments.size(), prId, org, repo);
         return comments;
     }
 
-    /**
-     * Fetch all comments authored by the agent on a pull request, with pagination.
-     * This is the inverse of {@link #getPullRequestComments} — it returns only the
-     * agent's own comments, used for deduplication during incremental reviews.
-     */
-    public List<AgentComment> getAgentPrComments(String workspace, String repoSlug, String prId) {
+    @Override
+    public List<AgentComment> getAgentPrComments(String org, String project, String repo, String prId) {
         List<AgentComment> comments = new ArrayList<>();
-        String path = "/repositories/" + workspace + "/" + repoSlug
+        String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments?pagelen=50";
 
         while (path != null) {
@@ -334,19 +313,11 @@ public class BitbucketCloudService {
             }
         }
 
-        LOG.infof("Fetched %d agent comments from PR #%s in %s/%s", comments.size(), prId, workspace, repoSlug);
+        LOG.infof("Fetched %d agent comments from PR #%s in %s/%s", comments.size(), prId, org, repo);
         return comments;
     }
 
-    /**
-     * Decline (reject) a pull request.
-     */
-    public void declinePullRequest(String workspace, String repoSlug, String prId) {
-        String path = "/repositories/" + workspace + "/" + repoSlug
-                + "/pullrequests/" + prId + "/decline";
-        postAndReturn(path, "{}", "decline PR #" + prId);
-        LOG.infof("Declined PR #%s in %s/%s", prId, workspace, repoSlug);
-    }
+    // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {
         try {
@@ -404,7 +375,7 @@ public class BitbucketCloudService {
     }
 
     /**
-     * Repository/Workspace Access Tokens use Bearer auth for the REST API.
+     * Repository/Workspace Access Tokens use Bearer auth.
      * App Passwords use Basic auth with username:password.
      */
     private String authHeader() {

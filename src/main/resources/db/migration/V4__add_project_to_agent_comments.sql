@@ -1,0 +1,1 @@
+ALTER TABLE agent_comments ADD COLUMN project TEXT NOT NULL DEFAULT '';

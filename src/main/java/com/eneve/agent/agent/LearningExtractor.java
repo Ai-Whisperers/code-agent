@@ -12,7 +12,7 @@ import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.Usage;
-import com.eneve.agent.bitbucket.ThreadComment;
+import com.eneve.agent.scm.ThreadComment;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;

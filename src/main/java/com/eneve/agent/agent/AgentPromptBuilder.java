@@ -5,8 +5,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
 
-import com.eneve.agent.bitbucket.AgentComment;
-import com.eneve.agent.bitbucket.ThreadComment;
+import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.ThreadComment;
 import com.eneve.agent.diff.DiffFormatter;
 import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;

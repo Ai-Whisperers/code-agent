@@ -12,7 +12,7 @@ import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.agent.MemoryEntry;
 import com.eneve.agent.agent.MemoryStore;
-import com.eneve.agent.bitbucket.BitbucketCloudService;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
@@ -54,7 +54,7 @@ public class BitbucketCommentWebhookResource {
     @Inject CommentStore commentStore;
     @Inject IntentClassifier intentClassifier;
     @Inject MemoryStore memoryStore;
-    @Inject BitbucketCloudService bitbucketService;
+    @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -134,20 +134,18 @@ public class BitbucketCommentWebhookResource {
                 line = inline.path("to").asInt(inline.path("from").asInt(0));
             }
 
-            // Parse workspace and repo slug from full_name
-            String[] parts = repoFullName.split("/", 2);
-            if (parts.length != 2) {
-                return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
-            }
-            String workspace = parts[0];
-            String repoSlug = parts[1];
+            String repoUrl = "https://bitbucket.org/" + repoFullName + ".git";
 
-            LOG.infof("Comment webhook: developer replied (comment %d) to agent comment %d on PR #%s (%s/%s)",
-                    commentId, parentCommentId, prId, workspace, repoSlug);
+            LOG.infof("Comment webhook: developer replied (comment %d) to agent comment %d on PR #%s (%s)",
+                    commentId, parentCommentId, prId, repoFullName);
 
             // Fast path: /learn command stores a team preference directly
             if (commentText.toLowerCase(Locale.ROOT).startsWith("/learn ")) {
-                return handleLearnCommand(commentText, workspace, repoSlug, prId,
+                String[] parts = repoFullName.split("/", 2);
+                if (parts.length != 2) {
+                    return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
+                }
+                return handleLearnCommand(commentText, parts[0], parts[1], repoUrl, prId,
                         parentCommentId, commentAuthor);
             }
 
@@ -159,7 +157,7 @@ public class BitbucketCommentWebhookResource {
 
             LOG.infof("Comment webhook: classified intent as %s for comment %d", jobType, commentId);
 
-            return submitJob(workspace, repoSlug, prId, parentCommentId, commentText,
+            return submitJob(repoUrl, prId, parentCommentId, commentText,
                     filePath, line, jobType);
 
         } catch (Exception e) {
@@ -168,11 +166,11 @@ public class BitbucketCommentWebhookResource {
         }
     }
 
-    private Response submitJob(String workspace, String repoSlug, String prId,
+    private Response submitJob(String repoUrl, String prId,
                                long parentCommentId, String humanMessage,
                                String filePath, int line, JobType jobType) {
         ReplyCommentRequest request = new ReplyCommentRequest(
-                workspace, repoSlug, prId, parentCommentId, humanMessage, filePath, line);
+                repoUrl, prId, parentCommentId, humanMessage, filePath, line);
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request, jobType);
@@ -199,7 +197,8 @@ public class BitbucketCommentWebhookResource {
     }
 
     private Response handleLearnCommand(String commentText, String workspace, String repoSlug,
-                                         String prId, long parentCommentId, String author) {
+                                         String repoUrl, String prId, long parentCommentId,
+                                         String author) {
         String learning = commentText.substring("/learn ".length()).trim();
         if (learning.isBlank()) {
             return ok("ignored", "/learn command with empty text");
@@ -216,7 +215,7 @@ public class BitbucketCommentWebhookResource {
         LOG.infof("/learn command from %s on %s/%s PR #%s: %s", author, workspace, repoSlug, prId, learning);
 
         try {
-            bitbucketService.replyToComment(workspace, repoSlug, prId, parentCommentId,
+            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
                     "Noted — I'll remember this for future reviews of this repository:\n\n> " + learning);
         } catch (Exception e) {
             LOG.warnf("Failed to post /learn confirmation reply (non-fatal): %s", e.getMessage());
