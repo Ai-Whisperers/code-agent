@@ -3,10 +3,17 @@ package com.eneve.agent.agent;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+
+import com.eneve.agent.diff.DiffFormatter;
+import com.eneve.agent.diff.DiffParser;
+import com.eneve.agent.diff.ParsedDiffFile;
+import com.eneve.agent.diff.ReviewPromptResult;
 
 import com.eneve.agent.bitbucket.AgentComment;
 import com.eneve.agent.bitbucket.BitbucketCloudService;
@@ -324,28 +331,20 @@ public class AgentRunner {
                 headSha = null;
             }
 
-            // Truncate very large diffs to stay within context limits
-            int maxDiffChars = 80_000;
-            boolean diffTruncated = false;
-            if (diff.length() > maxDiffChars) {
-                diff = diff.substring(0, maxDiffChars);
-                diffTruncated = true;
-            }
-
             // 5. JIRA: comment started (if JIRA key provided)
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
                         "PR review for #" + request.prId()));
             }
 
-            // 6. Build review system prompt (includes existing comments as context)
-            String systemPrompt = buildReviewSystemPrompt(request, prTitle, targetBranch,
-                    diff, diffTruncated, existingAgentComments, workspace);
+            // 6. Build review system prompt (parse diff, annotate with line numbers, truncate at file boundaries)
+            ReviewPromptResult promptResult = buildReviewSystemPrompt(request, prTitle, targetBranch,
+                    diff, existingAgentComments, workspace);
 
             // 7. Run agentic loop (read-only tools)
             String reviewOutput;
             try {
-                reviewOutput = toolUseLoop.run(systemPrompt, workspace,
+                reviewOutput = toolUseLoop.run(promptResult.prompt(), workspace,
                         ToolDefinitions.readOnly(),
                         "Please review the pull request diff provided in the system prompt. "
                                 + "Use the read_file and list_files tools to examine surrounding context "
@@ -355,9 +354,9 @@ public class AgentRunner {
                 return;
             }
 
-            // 8. Parse structured review and post inline + summary comments (with dedup)
+            // 8. Parse structured review and post inline + summary comments (with dedup + line validation)
             String reviewSummary = postReviewComments(reviewOutput, coords, request.prId(),
-                    existingAgentComments, headSha, job.getJobId());
+                    existingAgentComments, headSha, job.getJobId(), promptResult.commentableLines());
 
             // 9. Update job record
             job.setStatus(JobStatus.SUCCESS);
@@ -1086,11 +1085,10 @@ public class AgentRunner {
 
     // ─── Review Prompt ──────────────────────────────────────────────────
 
-    private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
-                                           String targetBranch, String diff,
-                                           boolean diffTruncated,
-                                           List<AgentComment> existingComments,
-                                           WorkspaceContext workspace) {
+    private ReviewPromptResult buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
+                                                       String targetBranch, String diff,
+                                                       List<AgentComment> existingComments,
+                                                       WorkspaceContext workspace) {
         String rulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
                 ? request.rulesRepoUrl() : defaultRulesRepoUrl;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
@@ -1099,6 +1097,20 @@ public class AgentRunner {
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
         String previousCommentsSection = buildPreviousCommentsSection(existingComments);
+
+        // Parse the raw unified diff into a structured model with resolved line numbers
+        List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
+
+        // Truncate at file boundaries instead of mid-hunk
+        int maxDiffChars = 80_000;
+        List<ParsedDiffFile> displayFiles = DiffFormatter.truncateAtFileBoundary(parsedFiles, maxDiffChars);
+        boolean diffTruncated = displayFiles.size() < parsedFiles.size();
+
+        // Build annotated diff with explicit new-side line numbers on every line
+        String annotatedDiff = DiffFormatter.toAnnotated(displayFiles);
+
+        // Build commentable-lines index from the full parsed set for validation
+        Map<String, TreeSet<Integer>> commentableLines = DiffFormatter.buildCommentableLines(displayFiles);
 
         String reviewInstructions = """
                 You are performing an automated code review of a pull request.
@@ -1175,8 +1187,8 @@ public class AgentRunner {
                 ```
 
                 Field definitions:
-                - **file**: exact relative path from the repo root (must match a file in the diff)
-                - **line**: line number on the NEW side of the diff where the issue is found
+                - **file**: exact relative path from the repo root (must match a file shown in the diff header)
+                - **line**: the line number shown to the LEFT of each line in the annotated diff below. Use EXACTLY the number displayed — do not compute or guess line numbers.
                 - **severity**: one of CRITICAL, HIGH, MEDIUM, LOW, INFO
                 - **category**: one of Security, Design, Code Quality, Testing, Performance, Best Practices
                 - **description**: clear explanation of the issue
@@ -1188,14 +1200,14 @@ public class AgentRunner {
                 - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
-                - The `line` number MUST be the line number in the new version of the file (the destination/right side of the diff, where + lines appear).
+                - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
                 - If the code looks good with no issues, return an empty findings array and APPROVE verdict.
                 - Do NOT modify any files. This is a read-only review.
                 - Your final message MUST contain ONLY the JSON block — no extra text before or after.
 
                 ## Diff
                 %s
-                ```diff
+                ```
                 %s
                 ```
                 """.formatted(
@@ -1203,8 +1215,8 @@ public class AgentRunner {
                 targetBranch,
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
                 previousCommentsSection,
-                diffTruncated ? "(truncated — showing first ~80,000 characters)\n" : "",
-                diff
+                diffTruncated ? "(truncated — some files omitted)\n" : "",
+                annotatedDiff
         );
 
         String guardrailText = """
@@ -1214,8 +1226,9 @@ public class AgentRunner {
                 - Never read or write files outside the repository root.
                 """;
 
-        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+        String prompt = rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, reviewInstructions);
+        return new ReviewPromptResult(prompt, commentableLines, diffTruncated);
     }
 
     private static final Pattern REVIEWED_UP_TO_PATTERN =
@@ -1272,7 +1285,8 @@ public class AgentRunner {
      */
     private String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId,
                                       List<AgentComment> existingComments, String headSha,
-                                      String reviewJobId) {
+                                      String reviewJobId,
+                                      Map<String, TreeSet<Integer>> commentableLines) {
         String ws = coords.workspace();
         String slug = coords.repoSlug();
 
@@ -1298,6 +1312,7 @@ public class AgentRunner {
             com.fasterxml.jackson.databind.JsonNode findings = root.path("findings");
             int inlineCount = 0;
             int skippedCount = 0;
+            int snappedCount = 0;
             if (findings.isArray()) {
                 for (com.fasterxml.jackson.databind.JsonNode finding : findings) {
                     String file = finding.path("file").asText("");
@@ -1318,6 +1333,25 @@ public class AgentRunner {
                     }
 
                     if (!file.isEmpty() && line > 0) {
+                        // Validate and snap line number against the parsed diff index
+                        String normalizedFile = normalizeDiffPath(file);
+                        TreeSet<Integer> validLines = commentableLines.get(normalizedFile);
+                        if (validLines == null) {
+                            validLines = commentableLines.get(file);
+                        }
+                        if (validLines != null && !validLines.isEmpty()) {
+                            int snapped = DiffFormatter.snapToNearest(validLines, line);
+                            if (snapped != line) {
+                                LOG.infof("Snapping line %d -> %d for %s (nearest commentable line)",
+                                        line, snapped, file);
+                                line = snapped;
+                                snappedCount++;
+                            }
+                            file = normalizedFile != null
+                                    && commentableLines.containsKey(normalizedFile)
+                                    ? normalizedFile : file;
+                        }
+
                         String dedupKey = file + ":" + line;
                         if (alreadyCommented.contains(dedupKey)) {
                             LOG.infof("Skipping duplicate comment at %s (already posted)", dedupKey);
@@ -1336,8 +1370,10 @@ public class AgentRunner {
                         } catch (Exception e) {
                             LOG.warnf("Failed to post inline comment at %s:%d, falling back to general: %s",
                                     file, line, e.getMessage());
+                            final String fallbackFile = file;
+                            final int fallbackLine = line;
                             safeComment(() -> bitbucketService.addPrComment(ws, slug, prId,
-                                    "**" + file + ":" + line + "** — " + comment));
+                                    "**" + fallbackFile + ":" + fallbackLine + "** — " + comment));
                         }
                     } else {
                         safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, comment.toString()));
@@ -1369,8 +1405,8 @@ public class AgentRunner {
 
             safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, overallComment.toString()));
 
-            LOG.infof("Posted %d inline comments + summary to PR #%s (%d duplicates skipped)",
-                    inlineCount, prId, skippedCount);
+            LOG.infof("Posted %d inline comments + summary to PR #%s (%d duplicates skipped, %d lines snapped)",
+                    inlineCount, prId, skippedCount, snappedCount);
             return overallComment.toString();
 
         } catch (Exception e) {
@@ -1378,6 +1414,17 @@ public class AgentRunner {
             safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, reviewOutput));
             return reviewOutput;
         }
+    }
+
+    /**
+     * Normalize a file path that the LLM may have prefixed with "a/", "b/", or "/".
+     */
+    private static String normalizeDiffPath(String path) {
+        if (path == null) return null;
+        if (path.startsWith("b/")) return path.substring(2);
+        if (path.startsWith("a/")) return path.substring(2);
+        if (path.startsWith("/")) return path.substring(1);
+        return path;
     }
 
     /**
