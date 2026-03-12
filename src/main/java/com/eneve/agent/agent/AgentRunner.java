@@ -143,7 +143,8 @@ public class AgentRunner {
             // 4. Run agentic loop
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace);
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 fail(job, "Agent loop error: " + e.getMessage());
                 return;
@@ -348,7 +349,8 @@ public class AgentRunner {
                         ToolDefinitions.readOnly(),
                         "Please review the pull request diff provided in the system prompt. "
                                 + "Use the read_file and list_files tools to examine surrounding context "
-                                + "when needed. Provide your complete review as the specified JSON structure.");
+                                + "when needed. Provide your complete review as the specified JSON structure.",
+                        job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 failReview(job, "Agent review loop error: " + e.getMessage());
                 return;
@@ -470,7 +472,8 @@ public class AgentRunner {
             // 7. Run agentic loop with full tools (read + write)
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace);
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 failFixPr(job, "Agent loop error: " + e.getMessage());
                 return;
@@ -760,7 +763,8 @@ public class AgentRunner {
                 replyText = toolUseLoop.run(systemPrompt, workspace,
                         ToolDefinitions.readOnly(),
                         "A developer has replied to your review comment. "
-                                + "Please read the conversation and respond helpfully.");
+                                + "Please read the conversation and respond helpfully.",
+                        job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 failReply(job, "Agent reply loop error: " + e.getMessage());
                 return;
@@ -921,7 +925,8 @@ public class AgentRunner {
                 summary = toolUseLoop.run(systemPrompt, workspace,
                         ToolDefinitions.all(),
                         "A developer has requested that you implement the fix from your review comment. "
-                                + "Read the relevant code, apply the fix, and run tests.");
+                                + "Read the relevant code, apply the fix, and run tests.",
+                        job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 failFixComment(job, request, "Agent fix loop error: " + e.getMessage());
                 return;

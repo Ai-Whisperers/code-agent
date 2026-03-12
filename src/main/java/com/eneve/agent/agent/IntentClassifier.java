@@ -1,5 +1,6 @@
 package com.eneve.agent.agent;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
 
@@ -10,11 +11,13 @@ import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
+import com.anthropic.models.messages.Usage;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Classifies the intent of a developer's reply to an agent review comment.
@@ -31,6 +34,9 @@ public class IntentClassifier {
 
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
+
+    @Inject
+    AiCallStore aiCallStore;
 
     /**
      * Classify the developer's reply. Returns FIX if the developer is requesting
@@ -89,7 +95,30 @@ public class IntentClassifier {
                 ))
                 .build();
 
-        Message response = client.messages().create(params);
+        long startNs = System.nanoTime();
+        Message response;
+        try {
+            response = client.messages().create(params);
+        } catch (Exception e) {
+            long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+            aiCallStore.save(new AiCallRecord(
+                    null, null, "INTENT_CLASSIFICATION", modelName, null,
+                    0, 0, 0, 0,
+                    null, null, durationMs,
+                    true, e.getMessage(), Instant.now()));
+            throw e;
+        }
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        Usage usage = response.usage();
+        String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
+        aiCallStore.save(new AiCallRecord(
+                null, null, "INTENT_CLASSIFICATION", modelName, null,
+                usage.inputTokens(), usage.outputTokens(),
+                usage.cacheCreationInputTokens().orElse(0L),
+                usage.cacheReadInputTokens().orElse(0L),
+                stopReason, null, durationMs,
+                false, null, Instant.now()));
 
         String responseText = "";
         for (ContentBlock block : response.content()) {

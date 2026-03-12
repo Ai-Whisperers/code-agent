@@ -1,5 +1,6 @@
 package com.eneve.agent.agent;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -56,29 +57,32 @@ public class ClaudeToolUseLoop {
     @Inject
     ToolRegistry toolRegistry;
 
+    @Inject
+    AiCallStore aiCallStore;
+
     /**
      * Run the agentic tool-use loop with a custom tool set and initial user message.
      */
     public String run(String systemPrompt, WorkspaceContext workspace,
-                      List<ToolUnion> tools, String initialUserMessage) {
-        return doRun(systemPrompt, workspace, tools, initialUserMessage);
+                      List<ToolUnion> tools, String initialUserMessage,
+                      String jobId, String jobType) {
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType);
     }
 
     /**
-     * Run the agentic tool-use loop.
-     *
-     * @param systemPrompt the assembled system prompt (rules + guardrails + task)
-     * @param workspace    the isolated workspace for this job
-     * @return the final text summary from Claude
+     * Run the agentic tool-use loop with default tools.
      */
-    public String run(String systemPrompt, WorkspaceContext workspace) {
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      String jobId, String jobType) {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(),
                 "Please complete the task described in the system prompt. "
-                        + "Start by listing the repository structure, then proceed.");
+                        + "Start by listing the repository structure, then proceed.",
+                jobId, jobType);
     }
 
     private String doRun(String systemPrompt, WorkspaceContext workspace,
-                         List<ToolUnion> tools, String initialUserMessage) {
+                         List<ToolUnion> tools, String initialUserMessage,
+                         String jobId, String jobType) {
         AnthropicClient client = AnthropicOkHttpClient.builder()
                 .apiKey(apiKey)
                 .build();
@@ -101,13 +105,27 @@ public class ClaudeToolUseLoop {
                     .tools(tools)
                     .build();
 
-            Message response = callWithRetry(client, params);
+            long startNs = System.nanoTime();
+            Message response;
+            try {
+                response = callWithRetry(client, params);
+            } catch (Exception e) {
+                long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+                aiCallStore.save(new AiCallRecord(
+                        null, jobId, jobType, modelName, iteration + 1,
+                        0, 0, 0, 0,
+                        null, null, durationMs,
+                        true, e.getMessage(), Instant.now()));
+                throw e;
+            }
+            long durationMs = (System.nanoTime() - startNs) / 1_000_000;
             logUsage(response, iteration + 1);
 
             boolean hasToolUse = false;
             List<ContentBlockParam> toolResults = new ArrayList<>();
             StringBuilder textAccumulator = new StringBuilder();
             List<ContentBlockParam> assistantBlocks = new ArrayList<>();
+            List<String> toolNamesList = new ArrayList<>();
 
             for (ContentBlock block : response.content()) {
                 if (block.isText()) {
@@ -116,6 +134,7 @@ public class ClaudeToolUseLoop {
                 } else if (block.isToolUse()) {
                     hasToolUse = true;
                     ToolUseBlock toolUse = block.asToolUse();
+                    toolNamesList.add(toolUse.name());
 
                     LOG.infof("Tool call: %s (id=%s)", toolUse.name(), toolUse.id());
 
@@ -135,6 +154,19 @@ public class ClaudeToolUseLoop {
                     ));
                 }
             }
+
+            Usage usage = response.usage();
+            String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
+            String toolNamesCsv = toolNamesList.isEmpty() ? null
+                    : String.join(",", toolNamesList);
+
+            aiCallStore.save(new AiCallRecord(
+                    null, jobId, jobType, modelName, iteration + 1,
+                    usage.inputTokens(), usage.outputTokens(),
+                    usage.cacheCreationInputTokens().orElse(0L),
+                    usage.cacheReadInputTokens().orElse(0L),
+                    stopReason, toolNamesCsv, durationMs,
+                    false, null, Instant.now()));
 
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.ASSISTANT)
