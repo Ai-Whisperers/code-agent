@@ -106,7 +106,7 @@ public class JobStore {
      */
     public boolean hasActiveJobForJiraKey(String jiraKey) {
         return jobs.values().stream()
-                .anyMatch(j -> jiraKey.equals(j.getRequest().jiraKey())
+                .anyMatch(j -> jiraKey.equals(getJiraKey(j))
                         && ACTIVE_STATUSES.contains(j.getStatus()));
     }
 
@@ -118,6 +118,12 @@ public class JobStore {
     public boolean hasEverBeenProcessed(String jiraKey) {
         if (processedKeys.containsKey(jiraKey)) return true;
         return jobs.values().stream()
-                .anyMatch(j -> jiraKey.equals(j.getRequest().jiraKey()));
+                .anyMatch(j -> jiraKey.equals(getJiraKey(j)));
+    }
+
+    private static String getJiraKey(JobRecord job) {
+        if (job.getRequest() != null) return job.getRequest().jiraKey();
+        if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
+        return null;
     }
 }

@@ -6,6 +6,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
+import java.util.Map;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -89,6 +90,45 @@ public class BitbucketCloudService {
     }
 
     /**
+     * Fetch pull request metadata (source branch, destination branch, title).
+     * Returns a map with keys: sourceBranch, destinationBranch, title.
+     */
+    public Map<String, String> getPullRequestInfo(String workspace, String repoSlug, String prId) {
+        String path = "/repositories/" + workspace + "/" + repoSlug + "/pullrequests/" + prId;
+        String responseBody = getAndReturn(path, "get PR #" + prId);
+
+        try {
+            JsonNode node = objectMapper.readTree(responseBody);
+            String sourceBranch = node.path("source").path("branch").path("name").asText();
+            String destBranch = node.path("destination").path("branch").path("name").asText();
+            String title = node.path("title").asText();
+            return Map.of(
+                    "sourceBranch", sourceBranch,
+                    "destinationBranch", destBranch,
+                    "title", title
+            );
+        } catch (Exception e) {
+            LOG.errorf("Failed to parse PR info response: %s", e.getMessage());
+            throw new RuntimeException("Failed to parse PR info: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Add a general comment to a pull request.
+     */
+    public void addPrComment(String workspace, String repoSlug, String prId, String commentBody) {
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments";
+        String body = """
+                {
+                  "content": { "raw": "%s" }
+                }
+                """.formatted(escapeJson(commentBody));
+        postAndReturn(path, body, "comment on PR #" + prId);
+        LOG.infof("Added review comment to PR #%s in %s/%s", prId, workspace, repoSlug);
+    }
+
+    /**
      * Decline (reject) a pull request.
      */
     public void declinePullRequest(String workspace, String repoSlug, String prId) {
@@ -96,6 +136,32 @@ public class BitbucketCloudService {
                 + "/pullrequests/" + prId + "/decline";
         postAndReturn(path, "{}", "decline PR #" + prId);
         LOG.infof("Declined PR #%s in %s/%s", prId, workspace, repoSlug);
+    }
+
+    private String getAndReturn(String path, String operation) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + path))
+                    .header("Authorization", authHeader())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            } else {
+                LOG.errorf("Bitbucket %s failed (HTTP %d): %s", operation, response.statusCode(), response.body());
+                throw new RuntimeException("Bitbucket " + operation + " failed: HTTP "
+                        + response.statusCode() + " — " + response.body());
+            }
+        } catch (RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.errorf("Bitbucket %s error: %s", operation, e.getMessage());
+            throw new RuntimeException("Bitbucket " + operation + " error: " + e.getMessage(), e);
+        }
     }
 
     private String postAndReturn(String path, String body, String operation) {

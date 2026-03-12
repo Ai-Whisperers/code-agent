@@ -83,6 +83,22 @@ public class WorkspaceContext implements AutoCloseable {
         runGit(timeoutMinutes, "push", "origin", branchName);
     }
 
+    /**
+     * Fetch a remote branch so it is available as origin/{branch} for diff operations.
+     */
+    public void fetchBranch(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
+        runGit(timeoutMinutes, "fetch", "origin", branchName);
+        LOG.infof("Fetched origin/%s", branchName);
+    }
+
+    /**
+     * Get the full unified diff between the current HEAD and the merge base with the target branch.
+     * Equivalent to {@code git diff origin/<targetBranch>...HEAD}.
+     */
+    public String getDiff(String targetBranch) throws IOException, InterruptedException {
+        return runGitOutput(2, "diff", "origin/" + targetBranch + "...HEAD");
+    }
+
     public String diffStat() throws IOException, InterruptedException {
         return runGitOutput(2, "diff", "--stat", "HEAD~1");
     }

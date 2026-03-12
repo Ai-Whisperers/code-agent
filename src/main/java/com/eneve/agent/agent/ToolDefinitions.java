@@ -23,6 +23,14 @@ public final class ToolDefinitions {
         );
     }
 
+    public static List<ToolUnion> readOnly() {
+        return List.of(
+                ToolUnion.ofTool(readFile()),
+                ToolUnion.ofTool(runCommand()),
+                ToolUnion.ofTool(listFiles())
+        );
+    }
+
     private static Tool readFile() {
         return Tool.builder()
                 .name("read_file")

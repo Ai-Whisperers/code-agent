@@ -8,6 +8,7 @@ import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
@@ -223,6 +224,261 @@ public class AgentRunner {
         } catch (Exception e) {
             fail(job, "Unexpected error: " + e.getMessage());
         }
+    }
+
+    public void executeReview(JobRecord job) {
+        ReviewPrRequest request = job.getReviewRequest();
+        job.setStatus(JobStatus.RUNNING);
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failReview(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            // 1. Fetch PR metadata from Bitbucket to resolve branches
+            java.util.Map<String, String> prInfo;
+            try {
+                prInfo = bitbucketService.getPullRequestInfo(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+            } catch (Exception e) {
+                failReview(job, "Failed to fetch PR info: " + e.getMessage());
+                return;
+            }
+
+            String sourceBranch = prInfo.get("sourceBranch");
+            String targetBranch = request.targetBranch() != null && !request.targetBranch().isBlank()
+                    ? request.targetBranch() : prInfo.get("destinationBranch");
+            String prTitle = prInfo.get("title");
+            job.setPrId(request.prId());
+
+            // 2. Clone the source branch
+            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            LOG.infof("Review: cloning %s/%s branch %s for PR #%s",
+                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+            try {
+                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failReview(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            // 3. Fetch the target branch and compute diff
+            String diff;
+            try {
+                workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
+                diff = workspace.getDiff(targetBranch);
+            } catch (Exception e) {
+                failReview(job, "Failed to compute diff: " + e.getMessage());
+                return;
+            }
+
+            if (diff == null || diff.isBlank()) {
+                failReview(job, "PR has no diff against " + targetBranch + ". Nothing to review.");
+                return;
+            }
+
+            // Truncate very large diffs to stay within context limits
+            int maxDiffChars = 80_000;
+            boolean diffTruncated = false;
+            if (diff.length() > maxDiffChars) {
+                diff = diff.substring(0, maxDiffChars);
+                diffTruncated = true;
+            }
+
+            // 4. JIRA: comment started (if JIRA key provided)
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentStarted(request.jiraKey(),
+                        "PR review for #" + request.prId()));
+            }
+
+            // 5. Build review system prompt
+            String systemPrompt = buildReviewSystemPrompt(request, prTitle, targetBranch,
+                    diff, diffTruncated, workspace);
+
+            // 6. Run agentic loop (read-only tools)
+            String reviewSummary;
+            try {
+                reviewSummary = toolUseLoop.run(systemPrompt, workspace,
+                        ToolDefinitions.readOnly(),
+                        "Please review the pull request diff provided in the system prompt. "
+                                + "Use the read_file and list_files tools to examine surrounding context "
+                                + "when needed. Provide your complete review.");
+            } catch (Exception e) {
+                failReview(job, "Agent review loop error: " + e.getMessage());
+                return;
+            }
+
+            // 7. Post review as Bitbucket PR comment
+            try {
+                bitbucketService.addPrComment(coords.workspace(), coords.repoSlug(),
+                        request.prId(), reviewSummary);
+            } catch (Exception e) {
+                LOG.warnf("Failed to post review comment to PR #%s: %s", request.prId(), e.getMessage());
+            }
+
+            // 8. Update job record
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(reviewSummary);
+            job.setPrUrl(prInfo.getOrDefault("prUrl", ""));
+
+            // 9. JIRA comment (optional)
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentSuccess(request.jiraKey(),
+                        "PR #" + request.prId(), "Code review completed."));
+            }
+
+            // 10. Notify
+            RunResult result = buildReviewResult(job, true);
+            teamsNotifier.sendNotification(result);
+            String webhookUrl = (request.n8nWebhookUrl() != null && !request.n8nWebhookUrl().isBlank())
+                    ? request.n8nWebhookUrl() : defaultN8nWebhookUrl;
+            n8nNotifier.sendResult(webhookUrl, result);
+
+            LOG.infof("Review job %s completed for PR #%s", job.getJobId(), request.prId());
+
+        } catch (Exception e) {
+            failReview(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
+                                           String targetBranch, String diff,
+                                           boolean diffTruncated,
+                                           WorkspaceContext workspace) {
+        String rulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
+                ? request.rulesRepoUrl() : defaultRulesRepoUrl;
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String reviewInstructions = """
+                You are performing an automated code review of a pull request.
+                Your goal is to review the changes for quality, correctness, and adherence to best practices.
+
+                ## PR Information
+                - **Title**: %s
+                - **Target branch**: %s
+                %s
+
+                ## Review Categories
+                Analyze the diff and provide findings organized in these categories:
+
+                ### 1. Security
+                - SQL injection, XSS, CSRF vulnerabilities
+                - Secrets or credentials in code
+                - Authentication/authorization bypasses
+                - Insecure deserialization or input handling
+                - Dependency vulnerabilities
+
+                ### 2. Design Principles
+                - SOLID principles adherence
+                - Separation of concerns
+                - Appropriate abstractions and encapsulation
+                - Coupling and cohesion
+                - API design consistency
+
+                ### 3. Code Quality
+                - Naming conventions and clarity
+                - Cyclomatic complexity
+                - Code duplication
+                - Error handling and edge cases
+                - Readability and maintainability
+                - Magic numbers or hardcoded values
+
+                ### 4. Testing
+                - Are the changes covered by unit tests?
+                - Are edge cases and error paths tested?
+                - Are test assertions meaningful?
+                - Are there missing test scenarios?
+
+                ### 5. Performance
+                - N+1 queries or inefficient data access
+                - Unnecessary object allocations
+                - Blocking calls in async contexts
+                - Resource leaks (connections, streams)
+
+                ### 6. Best Practices
+                - Framework-specific patterns and conventions
+                - Logging (appropriate levels, no sensitive data)
+                - Input validation
+                - Documentation for public APIs
+                - Backward compatibility
+
+                ## Output Format
+                For each finding, provide:
+                - **File and line reference** (from the diff)
+                - **Severity**: CRITICAL, HIGH, MEDIUM, LOW, or INFO
+                - **Category**: which of the 6 categories above
+                - **Description**: clear explanation of the issue
+                - **Suggestion**: how to fix or improve it
+
+                At the end, provide an **Overall Assessment** with:
+                - A summary verdict: APPROVE, REQUEST_CHANGES, or COMMENT
+                - A brief overall summary of the PR quality
+
+                ## Instructions
+                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
+                - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
+                - Be constructive and specific. Provide actionable feedback.
+                - If the code looks good, say so — don't invent issues.
+                - Do NOT modify any files. This is a read-only review.
+
+                ## Diff
+                %s
+                ```diff
+                %s
+                ```
+                """.formatted(
+                prTitle != null ? prTitle : "(untitled)",
+                targetBranch,
+                diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
+                diffTruncated ? "(truncated — showing first ~80,000 characters)\n" : "",
+                diff
+        );
+
+        String guardrailText = """
+                You MUST follow these rules without exception:
+                - This is a READ-ONLY review. Do NOT create, modify, or delete any files.
+                - Only run read-only commands: git diff, git status, git log, ls, find, cat, grep
+                - Never read or write files outside the repository root.
+                """;
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, reviewInstructions);
+    }
+
+    private void failReview(JobRecord job, String message) {
+        LOG.errorf("Review job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+
+        ReviewPrRequest request = job.getReviewRequest();
+        if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+        }
+
+        RunResult result = buildReviewResult(job, false);
+        teamsNotifier.sendNotification(result);
+        String webhookUrl = (request.n8nWebhookUrl() != null && !request.n8nWebhookUrl().isBlank())
+                ? request.n8nWebhookUrl() : defaultN8nWebhookUrl;
+        n8nNotifier.sendResult(webhookUrl, result);
+    }
+
+    private RunResult buildReviewResult(JobRecord job, boolean success) {
+        ReviewPrRequest req = job.getReviewRequest();
+        return new RunResult(
+                job.getJobId(), success,
+                req.jiraKey() != null ? req.jiraKey() : "",
+                "PR-" + req.prId(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                0, 0
+        );
     }
 
     public void approve(JobRecord job) {
