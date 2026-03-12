@@ -1,4 +1,4 @@
-package com.eneve.agent.bitbucket;
+package com.eneve.agent.scm;
 
 /**
  * Represents an existing comment posted by the agent on a pull request.

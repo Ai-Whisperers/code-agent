@@ -26,6 +26,8 @@ import jakarta.ws.rs.ext.Provider;
  * Verifies HMAC-SHA256 signatures on incoming webhook requests.
  *
  * Bitbucket Cloud: sends X-Hub-Signature header as "sha256=<hex>".
+ * Azure DevOps: Service Hooks can include a shared secret in a custom header
+ *     or use Basic auth; we verify via a simple shared-secret comparison.
  * JIRA Cloud (native webhooks): sends X-Hub-Secret header with the raw secret for
  *     simple comparison, or no signature at all (depends on webhook configuration).
  *
@@ -42,6 +44,9 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     @ConfigProperty(name = "webhook.secret.bitbucket", defaultValue = "")
     String bitbucketSecret;
 
+    @ConfigProperty(name = "webhook.secret.azuredevops", defaultValue = "")
+    String azureDevOpsSecret;
+
     @ConfigProperty(name = "webhook.secret.jira", defaultValue = "")
     String jiraSecret;
 
@@ -54,6 +59,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
         if (path.contains("bitbucket/")) {
             verifyBitbucket(ctx);
+        } else if (path.contains("azuredevops/")) {
+            verifyAzureDevOps(ctx);
         } else if (path.contains("jira")) {
             verifyJira(ctx);
         }
@@ -83,6 +90,50 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             LOG.warn("Bitbucket webhook rejected — HMAC signature mismatch");
             abort(ctx);
         }
+    }
+
+    /**
+     * Azure DevOps Service Hooks can include a Basic-auth password or a shared secret
+     * in a custom HTTP header. We compare the Authorization header's password portion
+     * (Basic :secret) or fall back to an X-Azure-Signature HMAC check.
+     */
+    private void verifyAzureDevOps(ContainerRequestContext ctx) throws IOException {
+        if (isNotConfigured(azureDevOpsSecret)) return;
+
+        String authHeader = ctx.getHeaderString("Authorization");
+        if (authHeader != null && authHeader.startsWith("Basic ")) {
+            try {
+                String decoded = new String(java.util.Base64.getDecoder().decode(
+                        authHeader.substring("Basic ".length())), StandardCharsets.UTF_8);
+                String password = decoded.contains(":") ? decoded.substring(decoded.indexOf(':') + 1) : decoded;
+                if (MessageDigest.isEqual(
+                        azureDevOpsSecret.getBytes(StandardCharsets.UTF_8),
+                        password.getBytes(StandardCharsets.UTF_8))) {
+                    return;
+                }
+            } catch (Exception e) {
+                LOG.warnf("Azure DevOps webhook — failed to decode Basic auth: %s", e.getMessage());
+            }
+            LOG.warn("Azure DevOps webhook rejected — Basic auth secret mismatch");
+            abort(ctx);
+            return;
+        }
+
+        String signatureHeader = ctx.getHeaderString("X-Azure-Signature");
+        if (signatureHeader != null) {
+            byte[] body = readAndRestoreBody(ctx);
+            String computedHex = hmacSha256Hex(body, azureDevOpsSecret);
+            if (!MessageDigest.isEqual(
+                    signatureHeader.getBytes(StandardCharsets.UTF_8),
+                    computedHex.getBytes(StandardCharsets.UTF_8))) {
+                LOG.warn("Azure DevOps webhook rejected — HMAC signature mismatch");
+                abort(ctx);
+            }
+            return;
+        }
+
+        LOG.warn("Azure DevOps webhook rejected — no recognized auth header found");
+        abort(ctx);
     }
 
     /**

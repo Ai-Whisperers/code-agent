@@ -7,15 +7,15 @@ import org.eclipse.microprofile.openapi.annotations.media.Schema;
 @Schema(description = "Request to submit a pull request review job")
 public record ReviewPrRequest(
 
-        @Schema(required = true, description = "Bitbucket Cloud repo URL (HTTPS or SSH)",
+        @Schema(required = true, description = "Repository URL (HTTPS or SSH, Bitbucket or Azure DevOps)",
                 example = "https://bitbucket.org/workspace/repo.git")
         String repoUrl,
 
-        @Schema(required = true, description = "Bitbucket PR number to review",
+        @Schema(required = true, description = "Pull request number to review",
                 example = "42")
         String prId,
 
-        @Schema(description = "Target branch the PR merges into (resolved from Bitbucket if omitted)",
+        @Schema(description = "Target branch the PR merges into (resolved from platform if omitted)",
                 example = "main")
         String targetBranch,
 

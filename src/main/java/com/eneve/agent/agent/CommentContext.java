@@ -6,8 +6,9 @@ package com.eneve.agent.agent;
  */
 public record CommentContext(
         String prId,
-        String workspace,
-        String repoSlug,
+        String organization,
+        String project,
+        String repository,
         String filePath,
         int line,
         String category,
