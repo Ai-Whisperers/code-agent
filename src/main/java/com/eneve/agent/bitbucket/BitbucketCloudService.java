@@ -129,6 +129,30 @@ public class BitbucketCloudService {
     }
 
     /**
+     * Add an inline comment on a specific file and line in a pull request.
+     * Uses the Bitbucket "inline" object to anchor the comment to the new-side line.
+     *
+     * @param filePath relative path of the file in the repo
+     * @param line     line number on the new (destination) side of the diff
+     */
+    public void addInlinePrComment(String workspace, String repoSlug, String prId,
+                                   String filePath, int line, String commentBody) {
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments";
+        String body = """
+                {
+                  "content": { "raw": "%s" },
+                  "inline": {
+                    "to": %d,
+                    "path": "%s"
+                  }
+                }
+                """.formatted(escapeJson(commentBody), line, escapeJson(filePath));
+        postAndReturn(path, body, "inline comment on PR #" + prId + " " + filePath + ":" + line);
+        LOG.infof("Added inline comment to PR #%s at %s:%d", prId, filePath, line);
+    }
+
+    /**
      * Decline (reject) a pull request.
      */
     public void declinePullRequest(String workspace, String repoSlug, String prId) {

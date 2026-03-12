@@ -301,25 +301,20 @@ public class AgentRunner {
                     diff, diffTruncated, workspace);
 
             // 6. Run agentic loop (read-only tools)
-            String reviewSummary;
+            String reviewOutput;
             try {
-                reviewSummary = toolUseLoop.run(systemPrompt, workspace,
+                reviewOutput = toolUseLoop.run(systemPrompt, workspace,
                         ToolDefinitions.readOnly(),
                         "Please review the pull request diff provided in the system prompt. "
                                 + "Use the read_file and list_files tools to examine surrounding context "
-                                + "when needed. Provide your complete review.");
+                                + "when needed. Provide your complete review as the specified JSON structure.");
             } catch (Exception e) {
                 failReview(job, "Agent review loop error: " + e.getMessage());
                 return;
             }
 
-            // 7. Post review as Bitbucket PR comment
-            try {
-                bitbucketService.addPrComment(coords.workspace(), coords.repoSlug(),
-                        request.prId(), reviewSummary);
-            } catch (Exception e) {
-                LOG.warnf("Failed to post review comment to PR #%s: %s", request.prId(), e.getMessage());
-            }
+            // 7. Parse structured review and post inline + summary comments
+            String reviewSummary = postReviewComments(reviewOutput, coords, request.prId());
 
             // 8. Update job record
             job.setStatus(JobStatus.SUCCESS);
@@ -411,23 +406,44 @@ public class AgentRunner {
                 - Backward compatibility
 
                 ## Output Format
-                For each finding, provide:
-                - **File and line reference** (from the diff)
-                - **Severity**: CRITICAL, HIGH, MEDIUM, LOW, or INFO
-                - **Category**: which of the 6 categories above
-                - **Description**: clear explanation of the issue
-                - **Suggestion**: how to fix or improve it
+                You MUST output your review as a JSON object inside a ```json code fence.
+                Each finding will be posted as an inline comment on the exact file and line in Bitbucket.
 
-                At the end, provide an **Overall Assessment** with:
-                - A summary verdict: APPROVE, REQUEST_CHANGES, or COMMENT
-                - A brief overall summary of the PR quality
+                ```json
+                {
+                  "findings": [
+                    {
+                      "file": "src/main/java/com/example/Foo.java",
+                      "line": 42,
+                      "severity": "HIGH",
+                      "category": "Security",
+                      "description": "User input is concatenated directly into SQL query",
+                      "suggestion": "Use a parameterized PreparedStatement instead"
+                    }
+                  ],
+                  "verdict": "REQUEST_CHANGES",
+                  "summary": "Brief overall assessment of the PR quality."
+                }
+                ```
+
+                Field definitions:
+                - **file**: exact relative path from the repo root (must match a file in the diff)
+                - **line**: line number on the NEW side of the diff where the issue is found
+                - **severity**: one of CRITICAL, HIGH, MEDIUM, LOW, INFO
+                - **category**: one of Security, Design, Code Quality, Testing, Performance, Best Practices
+                - **description**: clear explanation of the issue
+                - **suggestion**: how to fix or improve it
+                - **verdict**: one of APPROVE, REQUEST_CHANGES, COMMENT
+                - **summary**: 2-4 sentence overall assessment
 
                 ## Instructions
                 - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
-                - If the code looks good, say so — don't invent issues.
+                - The `line` number MUST be the line number in the new version of the file (the destination/right side of the diff, where + lines appear).
+                - If the code looks good with no issues, return an empty findings array and APPROVE verdict.
                 - Do NOT modify any files. This is a read-only review.
+                - Your final message MUST contain ONLY the JSON block — no extra text before or after.
 
                 ## Diff
                 %s
@@ -451,6 +467,122 @@ public class AgentRunner {
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, reviewInstructions);
+    }
+
+    /**
+     * Parse the structured JSON review from Claude and post inline comments + overall summary.
+     * Falls back to posting the entire output as a general comment if JSON parsing fails.
+     * Returns the overall summary text for the job record.
+     */
+    private String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId) {
+        String ws = coords.workspace();
+        String slug = coords.repoSlug();
+
+        String json = extractJsonBlock(reviewOutput);
+        if (json == null) {
+            LOG.warn("Review output is not structured JSON, posting as single general comment");
+            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, reviewOutput));
+            return reviewOutput;
+        }
+
+        try {
+            com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
+
+            // Post inline comments for each finding
+            com.fasterxml.jackson.databind.JsonNode findings = root.path("findings");
+            int inlineCount = 0;
+            if (findings.isArray()) {
+                for (com.fasterxml.jackson.databind.JsonNode finding : findings) {
+                    String file = finding.path("file").asText("");
+                    int line = finding.path("line").asInt(0);
+                    String severity = finding.path("severity").asText("INFO");
+                    String category = finding.path("category").asText("");
+                    String description = finding.path("description").asText("");
+                    String suggestion = finding.path("suggestion").asText("");
+
+                    StringBuilder comment = new StringBuilder();
+                    comment.append("**[").append(severity).append("]** ");
+                    if (!category.isEmpty()) {
+                        comment.append("_").append(category).append("_ — ");
+                    }
+                    comment.append(description);
+                    if (!suggestion.isEmpty()) {
+                        comment.append("\n\n**Suggestion:** ").append(suggestion);
+                    }
+
+                    if (!file.isEmpty() && line > 0) {
+                        try {
+                            bitbucketService.addInlinePrComment(ws, slug, prId,
+                                    file, line, comment.toString());
+                            inlineCount++;
+                        } catch (Exception e) {
+                            LOG.warnf("Failed to post inline comment at %s:%d, falling back to general: %s",
+                                    file, line, e.getMessage());
+                            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId,
+                                    "**" + file + ":" + line + "** — " + comment));
+                        }
+                    } else {
+                        safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, comment.toString()));
+                    }
+                }
+            }
+
+            // Post overall summary as a general comment
+            String verdict = root.path("verdict").asText("");
+            String summary = root.path("summary").asText("");
+            StringBuilder overallComment = new StringBuilder();
+            overallComment.append("## Code Review Summary\n\n");
+            if (!verdict.isEmpty()) {
+                overallComment.append("**Verdict: ").append(verdict).append("**\n\n");
+            }
+            if (!summary.isEmpty()) {
+                overallComment.append(summary);
+            }
+            overallComment.append("\n\n---\n_").append(inlineCount)
+                    .append(" inline comment(s) posted on specific lines._");
+
+            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, overallComment.toString()));
+
+            LOG.infof("Posted %d inline comments + summary to PR #%s", inlineCount, prId);
+            return overallComment.toString();
+
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse review JSON, posting as general comment: %s", e.getMessage());
+            safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, reviewOutput));
+            return reviewOutput;
+        }
+    }
+
+    /**
+     * Extract a JSON block from Claude's output.
+     * Looks for ```json ... ``` fences first, then tries the raw string.
+     */
+    private static String extractJsonBlock(String text) {
+        if (text == null || text.isBlank()) return null;
+
+        int jsonStart = text.indexOf("```json");
+        if (jsonStart >= 0) {
+            int contentStart = text.indexOf('\n', jsonStart);
+            int jsonEnd = text.indexOf("```", contentStart + 1);
+            if (contentStart >= 0 && jsonEnd > contentStart) {
+                return text.substring(contentStart + 1, jsonEnd).trim();
+            }
+        }
+
+        String trimmed = text.trim();
+        if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+            return trimmed;
+        }
+        return null;
+    }
+
+    private void safeComment(Runnable action) {
+        try {
+            action.run();
+        } catch (Exception e) {
+            LOG.warnf("Failed to post Bitbucket comment (non-fatal): %s", e.getMessage());
+        }
     }
 
     private void failReview(JobRecord job, String message) {
