@@ -77,8 +77,15 @@ public class JobQueue {
         if (!pendingQueue.offer(job)) {
             return false;
         }
-        LOG.infof("Job %s queued for %s (queue depth: %d)", job.getJobId(),
-                job.getRequest().jiraKey(), pendingQueue.size());
+        String label = switch (job.getJobType()) {
+            case REVIEW -> "PR-review";
+            case FIX_PR -> "fix-PR-" + job.getFixPrRequest().prId();
+            case REPLY -> "reply-comment-" + job.getReplyRequest().parentCommentId();
+            case FIX_COMMENT -> "fix-comment-" + job.getReplyRequest().parentCommentId();
+            default -> job.getRequest() != null ? job.getRequest().jiraKey() : "unknown";
+        };
+        LOG.infof("Job %s (%s) queued for %s (queue depth: %d)", job.getJobId(),
+                job.getJobType(), label, pendingQueue.size());
         return true;
     }
 
@@ -121,7 +128,13 @@ public class JobQueue {
                 semaphore.acquire();
                 executor.submit(() -> {
                     try {
-                        agentRunner.execute(job);
+                        switch (job.getJobType()) {
+                            case REVIEW -> agentRunner.executeReview(job);
+                            case FIX_PR -> agentRunner.executeFixPr(job);
+                            case REPLY -> agentRunner.executeReply(job);
+                            case FIX_COMMENT -> agentRunner.executeFixComment(job);
+                            default -> agentRunner.execute(job);
+                        }
                     } catch (Exception e) {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());
                         job.setStatus(JobStatus.FAILED);

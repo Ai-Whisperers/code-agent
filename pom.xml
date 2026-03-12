@@ -84,6 +84,20 @@
             <artifactId>quarkus-swagger-ui</artifactId>
         </dependency>
 
+        <!-- PostgreSQL JDBC + Connection Pool + Flyway -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-agroal</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway</artifactId>
+        </dependency>
+
         <!-- SnakeYAML for .mdc frontmatter parsing -->
         <dependency>
             <groupId>org.yaml</groupId>

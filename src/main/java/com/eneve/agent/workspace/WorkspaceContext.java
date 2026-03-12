@@ -79,8 +79,56 @@ public class WorkspaceContext implements AutoCloseable {
         return true;
     }
 
+    public void createBranch(String branchName) throws IOException, InterruptedException {
+        runGit(1, "checkout", "-b", branchName);
+        LOG.infof("Created and checked out branch %s", branchName);
+    }
+
     public void push(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
         runGit(timeoutMinutes, "push", "origin", branchName);
+    }
+
+    /**
+     * Fetch a remote branch so it is available as origin/{branch} for diff operations.
+     */
+    public void fetchBranch(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
+        runGit(timeoutMinutes, "fetch", "origin", branchName);
+        LOG.infof("Fetched origin/%s", branchName);
+    }
+
+    /**
+     * Get the full unified diff between the current HEAD and the merge base with the target branch.
+     * Equivalent to {@code git diff origin/<targetBranch>...HEAD}.
+     */
+    public String getDiff(String targetBranch) throws IOException, InterruptedException {
+        return runGitOutput(2, "diff", "origin/" + targetBranch + "...HEAD");
+    }
+
+    /**
+     * Get the unified diff between a specific commit and the current HEAD.
+     * Used for incremental reviews where we only want changes since the last reviewed commit.
+     */
+    public String getDiffFromCommit(String commitSha) throws IOException, InterruptedException {
+        return runGitOutput(2, "diff", commitSha + "...HEAD");
+    }
+
+    /**
+     * Get the full SHA of the current HEAD commit.
+     */
+    public String getHeadSha() throws IOException, InterruptedException {
+        return runGitOutput(1, "rev-parse", "HEAD").trim();
+    }
+
+    /**
+     * Check whether a given object (commit SHA) exists in the repository.
+     */
+    public boolean objectExists(String sha) {
+        try {
+            runGit(1, "cat-file", "-t", sha);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public String diffStat() throws IOException, InterruptedException {

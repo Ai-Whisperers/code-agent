@@ -19,6 +19,7 @@ import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
+import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
@@ -56,6 +57,14 @@ public class ClaudeToolUseLoop {
     ToolRegistry toolRegistry;
 
     /**
+     * Run the agentic tool-use loop with a custom tool set and initial user message.
+     */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      List<ToolUnion> tools, String initialUserMessage) {
+        return doRun(systemPrompt, workspace, tools, initialUserMessage);
+    }
+
+    /**
      * Run the agentic tool-use loop.
      *
      * @param systemPrompt the assembled system prompt (rules + guardrails + task)
@@ -63,6 +72,13 @@ public class ClaudeToolUseLoop {
      * @return the final text summary from Claude
      */
     public String run(String systemPrompt, WorkspaceContext workspace) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(),
+                "Please complete the task described in the system prompt. "
+                        + "Start by listing the repository structure, then proceed.");
+    }
+
+    private String doRun(String systemPrompt, WorkspaceContext workspace,
+                         List<ToolUnion> tools, String initialUserMessage) {
         AnthropicClient client = AnthropicOkHttpClient.builder()
                 .apiKey(apiKey)
                 .build();
@@ -70,8 +86,7 @@ public class ClaudeToolUseLoop {
         List<MessageParam> messages = new ArrayList<>();
         messages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)
-                .content("Please complete the task described in the system prompt. "
-                        + "Start by listing the repository structure, then proceed.")
+                .content(initialUserMessage)
                 .build());
 
         for (int iteration = 0; iteration < maxIterations; iteration++) {
@@ -83,7 +98,7 @@ public class ClaudeToolUseLoop {
                     .cacheControl(CacheControlEphemeral.builder().build())
                     .system(systemPrompt)
                     .messages(messages)
-                    .tools(ToolDefinitions.all())
+                    .tools(tools)
                     .build();
 
             Message response = callWithRetry(client, params);

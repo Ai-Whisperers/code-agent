@@ -6,6 +6,10 @@ public class JobRecord {
 
     private final String jobId;
     private final RunFixRequest request;
+    private final ReviewPrRequest reviewRequest;
+    private final FixPrRequest fixPrRequest;
+    private final ReplyCommentRequest replyRequest;
+    private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
     private volatile String summary;
@@ -18,12 +22,57 @@ public class JobRecord {
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
         this.request = request;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.jobType = JobType.FIX;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, ReviewPrRequest reviewRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = reviewRequest;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.jobType = JobType.REVIEW;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, FixPrRequest fixPrRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = fixPrRequest;
+        this.replyRequest = null;
+        this.jobType = JobType.FIX_PR;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, ReplyCommentRequest replyRequest) {
+        this(jobId, replyRequest, JobType.REPLY);
+    }
+
+    public JobRecord(String jobId, ReplyCommentRequest replyRequest, JobType jobType) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = replyRequest;
+        this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
 
     public String getJobId() { return jobId; }
     public RunFixRequest getRequest() { return request; }
+    public ReviewPrRequest getReviewRequest() { return reviewRequest; }
+    public FixPrRequest getFixPrRequest() { return fixPrRequest; }
+    public ReplyCommentRequest getReplyRequest() { return replyRequest; }
+    public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 
     public JobStatus getStatus() { return status; }
