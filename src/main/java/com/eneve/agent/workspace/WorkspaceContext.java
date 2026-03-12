@@ -104,6 +104,33 @@ public class WorkspaceContext implements AutoCloseable {
         return runGitOutput(2, "diff", "origin/" + targetBranch + "...HEAD");
     }
 
+    /**
+     * Get the unified diff between a specific commit and the current HEAD.
+     * Used for incremental reviews where we only want changes since the last reviewed commit.
+     */
+    public String getDiffFromCommit(String commitSha) throws IOException, InterruptedException {
+        return runGitOutput(2, "diff", commitSha + "...HEAD");
+    }
+
+    /**
+     * Get the full SHA of the current HEAD commit.
+     */
+    public String getHeadSha() throws IOException, InterruptedException {
+        return runGitOutput(1, "rev-parse", "HEAD").trim();
+    }
+
+    /**
+     * Check whether a given object (commit SHA) exists in the repository.
+     */
+    public boolean objectExists(String sha) {
+        try {
+            runGit(1, "cat-file", "-t", sha);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public String diffStat() throws IOException, InterruptedException {
         return runGitOutput(2, "diff", "--stat", "HEAD~1");
     }

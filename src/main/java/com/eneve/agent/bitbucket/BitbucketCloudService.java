@@ -213,6 +213,57 @@ public class BitbucketCloudService {
     }
 
     /**
+     * Fetch all comments authored by the agent on a pull request, with pagination.
+     * This is the inverse of {@link #getPullRequestComments} — it returns only the
+     * agent's own comments, used for deduplication during incremental reviews.
+     */
+    public List<AgentComment> getAgentPrComments(String workspace, String repoSlug, String prId) {
+        List<AgentComment> comments = new ArrayList<>();
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments?pagelen=50";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "get agent comments for PR #" + prId);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode comment : values) {
+                        String author = comment.path("user").path("username").asText(
+                                comment.path("user").path("nickname").asText(""));
+                        if (!author.equals(bbUser)) {
+                            continue;
+                        }
+
+                        String raw = comment.path("content").path("raw").asText("").trim();
+                        if (raw.isEmpty()) {
+                            continue;
+                        }
+
+                        JsonNode inline = comment.path("inline");
+                        if (!inline.isMissingNode() && inline.has("path")) {
+                            String file = inline.path("path").asText("");
+                            int line = inline.path("to").asInt(inline.path("from").asInt(0));
+                            comments.add(new AgentComment(file, line, raw));
+                        } else {
+                            comments.add(new AgentComment("", 0, raw));
+                        }
+                    }
+                }
+
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse agent PR comments response: %s", e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Fetched %d agent comments from PR #%s in %s/%s", comments.size(), prId, workspace, repoSlug);
+        return comments;
+    }
+
+    /**
      * Decline (reject) a pull request.
      */
     public void declinePullRequest(String workspace, String repoSlug, String prId) {

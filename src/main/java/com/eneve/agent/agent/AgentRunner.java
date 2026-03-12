@@ -1,8 +1,13 @@
 package com.eneve.agent.agent;
 
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+import com.eneve.agent.bitbucket.AgentComment;
 import com.eneve.agent.bitbucket.BitbucketCloudService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.FixPrRequest;
@@ -269,11 +274,34 @@ public class AgentRunner {
                 return;
             }
 
-            // 3. Fetch the target branch and compute diff
+            // 3. Fetch existing agent comments for incremental review
+            List<AgentComment> existingAgentComments;
+            try {
+                existingAgentComments = bitbucketService.getAgentPrComments(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+                LOG.infof("Review: found %d existing agent comments on PR #%s",
+                        existingAgentComments.size(), request.prId());
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch existing agent comments (non-fatal): %s", e.getMessage());
+                existingAgentComments = Collections.emptyList();
+            }
+
+            // 4. Fetch the target branch and compute diff (incremental if possible)
             String diff;
             try {
                 workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
-                diff = workspace.getDiff(targetBranch);
+
+                String lastReviewedSha = extractLastReviewedSha(existingAgentComments);
+                if (lastReviewedSha != null && workspace.objectExists(lastReviewedSha)) {
+                    LOG.infof("Review: incremental diff from previously reviewed commit %s", lastReviewedSha);
+                    diff = workspace.getDiffFromCommit(lastReviewedSha);
+                    if (diff == null || diff.isBlank()) {
+                        LOG.info("Review: incremental diff is empty, falling back to full diff");
+                        diff = workspace.getDiff(targetBranch);
+                    }
+                } else {
+                    diff = workspace.getDiff(targetBranch);
+                }
             } catch (Exception e) {
                 failReview(job, "Failed to compute diff: " + e.getMessage());
                 return;
@@ -284,6 +312,14 @@ public class AgentRunner {
                 return;
             }
 
+            String headSha;
+            try {
+                headSha = workspace.getHeadSha();
+            } catch (Exception e) {
+                LOG.warnf("Failed to get HEAD SHA (non-fatal): %s", e.getMessage());
+                headSha = null;
+            }
+
             // Truncate very large diffs to stay within context limits
             int maxDiffChars = 80_000;
             boolean diffTruncated = false;
@@ -292,17 +328,17 @@ public class AgentRunner {
                 diffTruncated = true;
             }
 
-            // 4. JIRA: comment started (if JIRA key provided)
+            // 5. JIRA: comment started (if JIRA key provided)
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
                         "PR review for #" + request.prId()));
             }
 
-            // 5. Build review system prompt
+            // 6. Build review system prompt (includes existing comments as context)
             String systemPrompt = buildReviewSystemPrompt(request, prTitle, targetBranch,
-                    diff, diffTruncated, workspace);
+                    diff, diffTruncated, existingAgentComments, workspace);
 
-            // 6. Run agentic loop (read-only tools)
+            // 7. Run agentic loop (read-only tools)
             String reviewOutput;
             try {
                 reviewOutput = toolUseLoop.run(systemPrompt, workspace,
@@ -315,21 +351,22 @@ public class AgentRunner {
                 return;
             }
 
-            // 7. Parse structured review and post inline + summary comments
-            String reviewSummary = postReviewComments(reviewOutput, coords, request.prId());
+            // 8. Parse structured review and post inline + summary comments (with dedup)
+            String reviewSummary = postReviewComments(reviewOutput, coords, request.prId(),
+                    existingAgentComments, headSha);
 
-            // 8. Update job record
+            // 9. Update job record
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(reviewSummary);
             job.setPrUrl(prInfo.getOrDefault("prUrl", ""));
 
-            // 9. JIRA comment (optional)
+            // 10. JIRA comment (optional)
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentSuccess(request.jiraKey(),
                         "PR #" + request.prId(), "Code review completed."));
             }
 
-            // 10. Notify
+            // 11. Notify
             RunResult result = buildReviewResult(job, true);
             teamsNotifier.sendNotification(result);
             String webhookUrl = (request.n8nWebhookUrl() != null && !request.n8nWebhookUrl().isBlank())
@@ -652,6 +689,7 @@ public class AgentRunner {
     private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
                                            String targetBranch, String diff,
                                            boolean diffTruncated,
+                                           List<AgentComment> existingComments,
                                            WorkspaceContext workspace) {
         String rulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
                 ? request.rulesRepoUrl() : defaultRulesRepoUrl;
@@ -659,6 +697,8 @@ public class AgentRunner {
 
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String previousCommentsSection = buildPreviousCommentsSection(existingComments);
 
         String reviewInstructions = """
                 You are performing an automated code review of a pull request.
@@ -743,7 +783,7 @@ public class AgentRunner {
                 - **suggestion**: how to fix or improve it
                 - **verdict**: one of APPROVE, REQUEST_CHANGES, COMMENT
                 - **summary**: 2-4 sentence overall assessment
-
+                %s
                 ## Instructions
                 - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
@@ -762,6 +802,7 @@ public class AgentRunner {
                 prTitle != null ? prTitle : "(untitled)",
                 targetBranch,
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
+                previousCommentsSection,
                 diffTruncated ? "(truncated — showing first ~80,000 characters)\n" : "",
                 diff
         );
@@ -777,12 +818,60 @@ public class AgentRunner {
                 request.extraRules(), guardrailText, reviewInstructions);
     }
 
+    private static final Pattern REVIEWED_UP_TO_PATTERN =
+            Pattern.compile("<!-- agent-reviewed-up-to:([0-9a-f]{7,40}) -->");
+
+    /**
+     * Scan existing agent comments for the last-reviewed commit SHA marker.
+     * Returns the SHA if found, or null.
+     */
+    private static String extractLastReviewedSha(List<AgentComment> existingComments) {
+        for (AgentComment comment : existingComments) {
+            if (comment.filePath().isEmpty() && comment.line() == 0) {
+                Matcher m = REVIEWED_UP_TO_PATTERN.matcher(comment.content());
+                if (m.find()) {
+                    return m.group(1);
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Build a prompt section listing inline comments the agent already posted,
+     * so the LLM can avoid repeating them.
+     */
+    private static String buildPreviousCommentsSection(List<AgentComment> existingComments) {
+        List<AgentComment> inlineComments = existingComments.stream()
+                .filter(c -> !c.filePath().isEmpty() && c.line() > 0)
+                .toList();
+
+        if (inlineComments.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("\n## Previous Review Comments (already posted)\n");
+        sb.append("Do NOT repeat these findings. Only report NEW issues in the new changes.\n\n");
+        for (AgentComment c : inlineComments) {
+            String summary = c.content().length() > 150
+                    ? c.content().substring(0, 150) + "..."
+                    : c.content();
+            summary = summary.replace("\n", " ");
+            sb.append("- [%s:%d] %s\n".formatted(c.filePath(), c.line(), summary));
+        }
+        sb.append("\n");
+        return sb.toString();
+    }
+
     /**
      * Parse the structured JSON review from Claude and post inline comments + overall summary.
+     * Deduplicates against existing agent comments and embeds a reviewed-up-to SHA marker.
      * Falls back to posting the entire output as a general comment if JSON parsing fails.
      * Returns the overall summary text for the job record.
      */
-    private String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId) {
+    private String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId,
+                                      List<AgentComment> existingComments, String headSha) {
         String ws = coords.workspace();
         String slug = coords.repoSlug();
 
@@ -793,13 +882,21 @@ public class AgentRunner {
             return reviewOutput;
         }
 
+        // Build dedup set from existing inline comments: "file:line"
+        Set<String> alreadyCommented = new HashSet<>();
+        for (AgentComment existing : existingComments) {
+            if (!existing.filePath().isEmpty() && existing.line() > 0) {
+                alreadyCommented.add(existing.filePath() + ":" + existing.line());
+            }
+        }
+
         try {
             com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(json);
 
-            // Post inline comments for each finding
             com.fasterxml.jackson.databind.JsonNode findings = root.path("findings");
             int inlineCount = 0;
+            int skippedCount = 0;
             if (findings.isArray()) {
                 for (com.fasterxml.jackson.databind.JsonNode finding : findings) {
                     String file = finding.path("file").asText("");
@@ -820,6 +917,12 @@ public class AgentRunner {
                     }
 
                     if (!file.isEmpty() && line > 0) {
+                        String dedupKey = file + ":" + line;
+                        if (alreadyCommented.contains(dedupKey)) {
+                            LOG.infof("Skipping duplicate comment at %s (already posted)", dedupKey);
+                            skippedCount++;
+                            continue;
+                        }
                         try {
                             bitbucketService.addInlinePrComment(ws, slug, prId,
                                     file, line, comment.toString());
@@ -836,7 +939,6 @@ public class AgentRunner {
                 }
             }
 
-            // Post overall summary as a general comment
             String verdict = root.path("verdict").asText("");
             String summary = root.path("summary").asText("");
             StringBuilder overallComment = new StringBuilder();
@@ -848,11 +950,21 @@ public class AgentRunner {
                 overallComment.append(summary);
             }
             overallComment.append("\n\n---\n_").append(inlineCount)
-                    .append(" inline comment(s) posted on specific lines._");
+                    .append(" inline comment(s) posted on specific lines.");
+            if (skippedCount > 0) {
+                overallComment.append(" ").append(skippedCount)
+                        .append(" duplicate(s) skipped from previous review.");
+            }
+            overallComment.append("_");
+
+            if (headSha != null && !headSha.isBlank()) {
+                overallComment.append("\n<!-- agent-reviewed-up-to:").append(headSha).append(" -->");
+            }
 
             safeComment(() -> bitbucketService.addPrComment(ws, slug, prId, overallComment.toString()));
 
-            LOG.infof("Posted %d inline comments + summary to PR #%s", inlineCount, prId);
+            LOG.infof("Posted %d inline comments + summary to PR #%s (%d duplicates skipped)",
+                    inlineCount, prId, skippedCount);
             return overallComment.toString();
 
         } catch (Exception e) {
