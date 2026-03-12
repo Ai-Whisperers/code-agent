@@ -5,7 +5,9 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -150,6 +152,64 @@ public class BitbucketCloudService {
                 """.formatted(escapeJson(commentBody), line, escapeJson(filePath));
         postAndReturn(path, body, "inline comment on PR #" + prId + " " + filePath + ":" + line);
         LOG.infof("Added inline comment to PR #%s at %s:%d", prId, filePath, line);
+    }
+
+    /**
+     * Fetch all review comments from a pull request, with pagination.
+     * Filters out comments authored by the configured Bitbucket user (the agent)
+     * to avoid feedback loops. Each returned string includes inline file/line
+     * context when available.
+     */
+    public List<String> getPullRequestComments(String workspace, String repoSlug, String prId) {
+        List<String> comments = new ArrayList<>();
+        String path = "/repositories/" + workspace + "/" + repoSlug
+                + "/pullrequests/" + prId + "/comments?pagelen=50";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "get comments for PR #" + prId);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode comment : values) {
+                        String author = comment.path("user").path("username").asText(
+                                comment.path("user").path("nickname").asText(""));
+                        if (author.equals(bbUser)) {
+                            continue;
+                        }
+
+                        String raw = comment.path("content").path("raw").asText("").trim();
+                        if (raw.isEmpty()) {
+                            continue;
+                        }
+
+                        JsonNode inline = comment.path("inline");
+                        if (!inline.isMissingNode() && inline.has("path")) {
+                            String file = inline.path("path").asText("");
+                            int line = inline.path("to").asInt(inline.path("from").asInt(0));
+                            if (!file.isEmpty() && line > 0) {
+                                comments.add("[%s:%d] %s".formatted(file, line, raw));
+                            } else if (!file.isEmpty()) {
+                                comments.add("[%s] %s".formatted(file, raw));
+                            } else {
+                                comments.add(raw);
+                            }
+                        } else {
+                            comments.add(raw);
+                        }
+                    }
+                }
+
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse PR comments response: %s", e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Fetched %d review comments from PR #%s in %s/%s", comments.size(), prId, workspace, repoSlug);
+        return comments;
     }
 
     /**

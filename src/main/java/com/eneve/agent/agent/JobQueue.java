@@ -9,7 +9,6 @@ import java.util.concurrent.TimeUnit;
 
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -78,9 +77,11 @@ public class JobQueue {
         if (!pendingQueue.offer(job)) {
             return false;
         }
-        String label = job.getJobType() == JobType.REVIEW
-                ? "PR-review"
-                : (job.getRequest() != null ? job.getRequest().jiraKey() : "unknown");
+        String label = switch (job.getJobType()) {
+            case REVIEW -> "PR-review";
+            case FIX_PR -> "fix-PR-" + job.getFixPrRequest().prId();
+            default -> job.getRequest() != null ? job.getRequest().jiraKey() : "unknown";
+        };
         LOG.infof("Job %s (%s) queued for %s (queue depth: %d)", job.getJobId(),
                 job.getJobType(), label, pendingQueue.size());
         return true;
@@ -125,10 +126,10 @@ public class JobQueue {
                 semaphore.acquire();
                 executor.submit(() -> {
                     try {
-                        if (job.getJobType() == JobType.REVIEW) {
-                            agentRunner.executeReview(job);
-                        } else {
-                            agentRunner.execute(job);
+                        switch (job.getJobType()) {
+                            case REVIEW -> agentRunner.executeReview(job);
+                            case FIX_PR -> agentRunner.executeFixPr(job);
+                            default -> agentRunner.execute(job);
                         }
                     } catch (Exception e) {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());

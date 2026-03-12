@@ -5,8 +5,10 @@ import java.util.List;
 
 import com.eneve.agent.bitbucket.BitbucketCloudService;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
@@ -341,6 +343,312 @@ public class AgentRunner {
         }
     }
 
+    public void executeFixPr(JobRecord job) {
+        FixPrRequest request = job.getFixPrRequest();
+        job.setStatus(JobStatus.RUNNING);
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failFixPr(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            // 1. Fetch PR metadata from Bitbucket
+            java.util.Map<String, String> prInfo;
+            try {
+                prInfo = bitbucketService.getPullRequestInfo(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+            } catch (Exception e) {
+                failFixPr(job, "Failed to fetch PR info: " + e.getMessage());
+                return;
+            }
+
+            String sourceBranch = prInfo.get("sourceBranch");
+            String targetBranch = prInfo.get("destinationBranch");
+            String prTitle = prInfo.get("title");
+            job.setPrId(request.prId());
+
+            // 2. Fetch review comments from the PR
+            List<String> reviewComments;
+            try {
+                reviewComments = bitbucketService.getPullRequestComments(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+            } catch (Exception e) {
+                failFixPr(job, "Failed to fetch PR comments: " + e.getMessage());
+                return;
+            }
+
+            if (reviewComments.isEmpty()) {
+                failFixPr(job, "No review comments found on PR #" + request.prId() + ". Nothing to fix.");
+                return;
+            }
+
+            // 3. Clone the source branch
+            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            LOG.infof("Fix-PR: cloning %s/%s branch %s for PR #%s",
+                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+            try {
+                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failFixPr(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            // 3b. Configure git author
+            if (!gitAuthorEmail.isBlank()) {
+                workspace.configureAuthor(gitAuthorName, gitAuthorEmail);
+            }
+
+            // 4. Fetch target branch and compute diff for context
+            String diff = "";
+            try {
+                workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
+                diff = workspace.getDiff(targetBranch);
+            } catch (Exception e) {
+                LOG.warnf("Failed to compute diff for context (non-fatal): %s", e.getMessage());
+            }
+
+            int maxDiffChars = 40_000;
+            if (diff.length() > maxDiffChars) {
+                diff = diff.substring(0, maxDiffChars);
+            }
+
+            // 5. JIRA: comment started (if key provided)
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentStarted(request.jiraKey(),
+                        "Auto-fixing review comments on PR #" + request.prId()));
+            }
+
+            // 6. Build system prompt from review comments + diff
+            String systemPrompt = buildFixPrSystemPrompt(request, prTitle, sourceBranch,
+                    targetBranch, diff, reviewComments, workspace);
+
+            // 7. Run agentic loop with full tools (read + write)
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace);
+            } catch (Exception e) {
+                failFixPr(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            // 8. Run build validation
+            try {
+                runBuildValidation(workspace);
+            } catch (Exception e) {
+                failFixPr(job, "Build validation failed: " + e.getMessage());
+                return;
+            }
+
+            // 9. Create new branch, commit, and push
+            String fixBranch = "agent/fix-pr-" + request.prId() + "-"
+                    + slugify(prTitle != null ? prTitle : "review-fixes");
+            boolean hasChanges;
+            try {
+                workspace.createBranch(fixBranch);
+                hasChanges = workspace.commitAll(
+                        "fix(PR-" + request.prId() + "): address review comments\n\n" + summary);
+            } catch (Exception e) {
+                failFixPr(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                failFixPr(job, "Agent completed but made no file changes. Claude summary: " + summary);
+                return;
+            }
+
+            try {
+                workspace.push(fixBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failFixPr(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            // 10. Enforce diff guardrails
+            int filesChanged;
+            int linesChanged;
+            try {
+                filesChanged = workspace.countFilesChanged();
+                linesChanged = workspace.countLinesChanged();
+            } catch (Exception e) {
+                filesChanged = 0;
+                linesChanged = 0;
+            }
+
+            if (filesChanged > guardrails.getMaxFilesChanged()) {
+                failFixPr(job, "Too many files changed: " + filesChanged
+                        + " (max: " + guardrails.getMaxFilesChanged() + ")");
+                return;
+            }
+            if (linesChanged > guardrails.getMaxLinesChanged()) {
+                failFixPr(job, "Too many lines changed: " + linesChanged
+                        + " (max: " + guardrails.getMaxLinesChanged() + ")");
+                return;
+            }
+
+            job.setFilesChanged(filesChanged);
+            job.setLinesChanged(linesChanged);
+
+            // 11. Create a new PR targeting the original PR's source branch
+            String prUrl;
+            String newPrId;
+            try {
+                String title = "Fix review comments on PR #" + request.prId();
+                String description = "**Automated fix for review comments on PR #" + request.prId() + "**\n\n"
+                        + "Original PR: *" + (prTitle != null ? prTitle : "") + "*\n\n"
+                        + "## Review comments addressed\n"
+                        + String.join("\n", reviewComments.stream()
+                                .map(c -> "- " + c)
+                                .limit(20)
+                                .toList())
+                        + "\n\n## Agent summary\n" + summary;
+                String[] prResult = bitbucketService.createPullRequest(
+                        coords.workspace(), coords.repoSlug(),
+                        fixBranch, sourceBranch,
+                        title, description
+                );
+                prUrl = prResult[0];
+                newPrId = prResult[1];
+            } catch (Exception e) {
+                failFixPr(job, "Create PR failed: " + e.getMessage());
+                return;
+            }
+
+            // 12. Update job record
+            job.setStatus(JobStatus.AWAITING_APPROVAL);
+            job.setSummary(summary);
+            job.setPrUrl(prUrl);
+            job.setPrId(newPrId);
+
+            // 13. Comment on the original PR linking to the fix PR
+            safeComment(() -> bitbucketService.addPrComment(
+                    coords.workspace(), coords.repoSlug(), request.prId(),
+                    "Code Agent has created a fix PR for the review comments: " + prUrl));
+
+            // 14. JIRA (optional)
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
+                safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
+            }
+
+            // 15. Notify
+            RunResult result = buildFixPrResult(job, true);
+            teamsNotifier.sendNotification(result);
+            String webhookUrl = (request.n8nWebhookUrl() != null && !request.n8nWebhookUrl().isBlank())
+                    ? request.n8nWebhookUrl() : defaultN8nWebhookUrl;
+            n8nNotifier.sendResult(webhookUrl, result);
+
+            LOG.infof("Fix-PR job %s completed. Fix PR: %s", job.getJobId(), prUrl);
+
+        } catch (Exception e) {
+            failFixPr(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private String buildFixPrSystemPrompt(FixPrRequest request, String prTitle,
+                                          String sourceBranch, String targetBranch,
+                                          String diff, List<String> reviewComments,
+                                          WorkspaceContext workspace) {
+        String rulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
+                ? request.rulesRepoUrl() : defaultRulesRepoUrl;
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        StringBuilder commentsSection = new StringBuilder();
+        for (int i = 0; i < reviewComments.size(); i++) {
+            commentsSection.append(i + 1).append(". ").append(reviewComments.get(i)).append("\n");
+        }
+
+        String fixInstructions = """
+                You are fixing review comments on a pull request.
+                Your goal is to address each review comment by making the appropriate code changes.
+
+                ## PR Information
+                - **Title**: %s
+                - **Source branch**: %s
+                - **Target branch**: %s
+
+                ## Review Comments to Address
+                %s
+
+                ## Current PR Diff (for context)
+                ```diff
+                %s
+                ```
+
+                ## Instructions
+                - Read and understand each review comment carefully.
+                - Comments prefixed with [file:line] indicate the exact location of the issue.
+                - Use `read_file` to examine the current code around each comment.
+                - Use `write_file` to make the necessary fixes.
+                - Address ALL review comments, not just some of them.
+                - Only change code that is relevant to the review comments. Do not refactor unrelated code.
+                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - If tests fail, fix the test failures before completing.
+                - Provide a summary of all changes you made.
+                """.formatted(
+                prTitle != null ? prTitle : "(untitled)",
+                sourceBranch,
+                targetBranch,
+                commentsSection.toString(),
+                diff.isEmpty() ? "(diff not available)" : diff
+        );
+
+        String guardrailText = """
+                You MUST follow these rules without exception:
+                - Do NOT modify files under these paths: %s
+                - Only run allowed commands: %s
+                - Do NOT modify more than %d files or %d lines
+                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - If tests fail, report the failure and do NOT proceed
+                - Stop as soon as all review comments are addressed. Do not refactor unrelated code.
+                - Never read or write files outside the repository root.
+                """.formatted(
+                String.join(", ", guardrails.getBlockedPaths()),
+                String.join(", ", guardrails.getAllowedCommands()),
+                guardrails.getMaxFilesChanged(),
+                guardrails.getMaxLinesChanged()
+        );
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, fixInstructions);
+    }
+
+    private void failFixPr(JobRecord job, String message) {
+        LOG.errorf("Fix-PR job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+
+        FixPrRequest request = job.getFixPrRequest();
+        if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+        }
+
+        RunResult result = buildFixPrResult(job, false);
+        teamsNotifier.sendNotification(result);
+        String webhookUrl = (request.n8nWebhookUrl() != null && !request.n8nWebhookUrl().isBlank())
+                ? request.n8nWebhookUrl() : defaultN8nWebhookUrl;
+        n8nNotifier.sendResult(webhookUrl, result);
+    }
+
+    private RunResult buildFixPrResult(JobRecord job, boolean success) {
+        FixPrRequest req = job.getFixPrRequest();
+        return new RunResult(
+                job.getJobId(), success,
+                req.jiraKey() != null ? req.jiraKey() : "",
+                "fix-pr-" + req.prId(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged()
+        );
+    }
+
     private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
                                            String targetBranch, String diff,
                                            boolean diffTruncated,
@@ -614,14 +922,17 @@ public class AgentRunner {
     }
 
     public void approve(JobRecord job) {
-        RunFixRequest request = job.getRequest();
-        RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
+        String repoUrl = resolveRepoUrl(job);
+        String jiraKey = resolveJiraKey(job);
+        RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
 
         try {
             bitbucketService.mergePullRequest(coords.workspace(), coords.repoSlug(), job.getPrId());
             job.setStatus(JobStatus.SUCCESS);
-            safeJira(() -> jiraService.commentMerged(request.jiraKey()));
-            safeJira(() -> jiraService.transitionToDone(request.jiraKey()));
+            if (jiraKey != null && !jiraKey.isBlank()) {
+                safeJira(() -> jiraService.commentMerged(jiraKey));
+                safeJira(() -> jiraService.transitionToDone(jiraKey));
+            }
             LOG.infof("Job %s approved and merged", job.getJobId());
         } catch (Exception e) {
             LOG.errorf("Failed to merge PR for job %s: %s", job.getJobId(), e.getMessage());
@@ -630,8 +941,9 @@ public class AgentRunner {
     }
 
     public void reject(JobRecord job, String reason) {
-        RunFixRequest request = job.getRequest();
-        RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
+        String repoUrl = resolveRepoUrl(job);
+        String jiraKey = resolveJiraKey(job);
+        RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
 
         try {
             bitbucketService.declinePullRequest(coords.workspace(), coords.repoSlug(), job.getPrId());
@@ -641,9 +953,25 @@ public class AgentRunner {
 
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage("Rejected: " + (reason != null ? reason : "No reason provided"));
-        safeJira(() -> jiraService.commentRejected(request.jiraKey(), reason));
-        safeJira(() -> jiraService.transitionToRejected(request.jiraKey()));
+        if (jiraKey != null && !jiraKey.isBlank()) {
+            safeJira(() -> jiraService.commentRejected(jiraKey, reason));
+            safeJira(() -> jiraService.transitionToRejected(jiraKey));
+        }
         LOG.infof("Job %s rejected", job.getJobId());
+    }
+
+    private String resolveRepoUrl(JobRecord job) {
+        if (job.getJobType() == JobType.FIX_PR) {
+            return job.getFixPrRequest().repoUrl();
+        }
+        return job.getRequest().repoUrl();
+    }
+
+    private String resolveJiraKey(JobRecord job) {
+        if (job.getJobType() == JobType.FIX_PR) {
+            return job.getFixPrRequest().jiraKey();
+        }
+        return job.getRequest().jiraKey();
     }
 
     private String buildSystemPrompt(RunFixRequest request, String effectivePrompt,
@@ -733,5 +1061,16 @@ public class AgentRunner {
         } catch (Exception e) {
             LOG.warnf("JIRA operation failed (non-fatal): %s", e.getMessage());
         }
+    }
+
+    private static String slugify(String text) {
+        if (text == null || text.isBlank()) return "fix";
+        String slug = text.toLowerCase()
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-|-$", "");
+        if (slug.length() > 60) {
+            slug = slug.substring(0, 60).replaceAll("-$", "");
+        }
+        return slug;
     }
 }

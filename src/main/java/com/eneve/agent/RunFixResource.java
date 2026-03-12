@@ -12,6 +12,7 @@ import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.AikidoFixRequest;
+import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
@@ -357,6 +358,52 @@ public class RunFixResource {
         }
 
         LOG.infof("Review job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
+        return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
+    }
+
+    @POST
+    @Path("/fix-pr")
+    @Tag(name = "Code Review")
+    @Operation(
+            operationId = "fixPr",
+            summary = "Auto-fix PR review comments",
+            description = "Queues a job that fetches review comments from a Bitbucket pull request, "
+                    + "runs the AI agent to address each comment, and creates a new PR targeting the "
+                    + "original PR's source branch. The fix PR goes through the standard approval flow. "
+                    + "Returns immediately with a jobId for polling."
+    )
+    @RequestBody(
+            required = true,
+            description = "PR fix specification with repo URL and PR ID",
+            content = @Content(schema = @Schema(implementation = FixPrRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Fix-PR job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\", \"prId\": \"42\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"repoUrl is required\"}"))),
+            @APIResponse(responseCode = "429", description = "Job queue is full",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"Job queue is full\"}")))
+    })
+    public Response fixPr(FixPrRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+        if (request.prId() == null || request.prId().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "prId is required")).build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        LOG.infof("Fix-PR job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
         return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
     }
 

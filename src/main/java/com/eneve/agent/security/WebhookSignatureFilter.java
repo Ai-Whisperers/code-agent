@@ -64,7 +64,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * in the X-Hub-Signature header as "sha256=<hex-encoded-digest>".
      */
     private void verifyBitbucket(ContainerRequestContext ctx) throws IOException {
-        if (bitbucketSecret.isBlank()) return;
+        if (isNotConfigured(bitbucketSecret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature");
         if (signatureHeader == null || !signatureHeader.startsWith("sha256=")) {
@@ -92,7 +92,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * We support both: direct secret comparison and HMAC signature.
      */
     private void verifyJira(ContainerRequestContext ctx) throws IOException {
-        if (jiraSecret.isBlank()) return;
+        if (isNotConfigured(jiraSecret)) return;
 
         // Strategy 1: JIRA sends the secret directly in X-Hub-Secret
         String hubSecret = ctx.getHeaderString("X-Hub-Secret");
@@ -143,6 +143,10 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
         } catch (NoSuchAlgorithmException | InvalidKeyException e) {
             throw new RuntimeException("HMAC-SHA256 computation failed", e);
         }
+    }
+
+    private static boolean isNotConfigured(String value) {
+        return value == null || value.isBlank() || "-".equals(value.trim());
     }
 
     private static void abort(ContainerRequestContext ctx) {

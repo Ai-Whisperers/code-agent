@@ -35,7 +35,7 @@ public class ApiKeyFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) {
-        if (apiKey.isBlank()) {
+        if (isNotConfigured(apiKey)) {
             return;
         }
 
@@ -57,5 +57,9 @@ public class ApiKeyFilter implements ContainerRequestFilter {
         ctx.abortWith(Response.status(Response.Status.UNAUTHORIZED)
                 .entity(Map.of("error", "Invalid or missing API key"))
                 .build());
+    }
+
+    private static boolean isNotConfigured(String value) {
+        return value == null || value.isBlank() || "-".equals(value.trim());
     }
 }

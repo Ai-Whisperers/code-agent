@@ -79,6 +79,11 @@ public class WorkspaceContext implements AutoCloseable {
         return true;
     }
 
+    public void createBranch(String branchName) throws IOException, InterruptedException {
+        runGit(1, "checkout", "-b", branchName);
+        LOG.infof("Created and checked out branch %s", branchName);
+    }
+
     public void push(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
         runGit(timeoutMinutes, "push", "origin", branchName);
     }
