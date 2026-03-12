@@ -17,6 +17,9 @@ import com.eneve.agent.diff.ReviewPromptResult;
 
 import com.eneve.agent.bitbucket.AgentComment;
 import com.eneve.agent.bitbucket.BitbucketCloudService;
+import com.eneve.agent.linter.LinterFinding;
+import com.eneve.agent.linter.LinterResult;
+import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.bitbucket.ThreadComment;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.FixPrRequest;
@@ -57,6 +60,7 @@ public class AgentRunner {
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject CommentStore commentStore;
+    @Inject LinterService linterService;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -117,7 +121,17 @@ public class AgentRunner {
                 workspace.configureAuthor(gitAuthorName, gitAuthorEmail);
             }
 
-            // 2. Resolve prompt — use JIRA description if prompt is empty
+            // 2. Run baseline linter scan (before any changes)
+            List<LinterResult> linterBaseline = Collections.emptyList();
+            String baselineSummary = "";
+            if (linterService.getConfig().isEnabled()) {
+                LOG.info("Running baseline linter scan...");
+                linterBaseline = linterService.runAll(workspace.getRoot());
+                baselineSummary = linterService.formatSummary(linterBaseline);
+                LOG.infof("Baseline linter scan complete: %s", baselineSummary);
+            }
+
+            // 3. Resolve prompt — use JIRA description if prompt is empty
             String effectivePrompt = request.prompt();
             if (effectivePrompt == null || effectivePrompt.isBlank()) {
                 LOG.infof("No prompt provided, fetching JIRA issue %s for task description", request.jiraKey());
@@ -134,13 +148,13 @@ public class AgentRunner {
                         effectivePrompt.length() > 200 ? effectivePrompt.substring(0, 200) + "..." : effectivePrompt);
             }
 
-            // 3. JIRA: comment started
+            // 4. JIRA: comment started
             safeJira(() -> jiraService.commentStarted(request.jiraKey(), request.branchName()));
 
-            // 4. Load Cursor rules and build system prompt
-            String systemPrompt = buildSystemPrompt(request, effectivePrompt, workspace);
+            // 5. Load Cursor rules and build system prompt
+            String systemPrompt = buildSystemPrompt(request, effectivePrompt, workspace, baselineSummary);
 
-            // 4. Run agentic loop
+            // 6. Run agentic loop
             String summary;
             try {
                 summary = toolUseLoop.run(systemPrompt, workspace,
@@ -150,7 +164,44 @@ public class AgentRunner {
                 return;
             }
 
-            // 5. Run mvn test
+            // 7. Run post-change linter scan and fix loop
+            if (linterService.getConfig().isEnabled()) {
+                int maxLintFixes = linterService.getConfig().getMaxFixIterations();
+                for (int lintIter = 0; lintIter < maxLintFixes; lintIter++) {
+                    LOG.infof("Linter delta scan iteration %d/%d", lintIter + 1, maxLintFixes);
+                    List<LinterResult> current = linterService.runAll(workspace.getRoot());
+                    List<LinterFinding> newIssues = linterService.findNewIssues(linterBaseline, current);
+
+                    if (newIssues.isEmpty()) {
+                        LOG.info("No new linter issues introduced — linter gate passed");
+                        break;
+                    }
+
+                    LOG.infof("Found %d new linter issues, asking Claude to fix (iteration %d/%d)",
+                            newIssues.size(), lintIter + 1, maxLintFixes);
+
+                    if (lintIter < maxLintFixes - 1) {
+                        String fixPrompt = linterService.buildFixPrompt(newIssues);
+                        try {
+                            toolUseLoop.run(fixPrompt, workspace,
+                                    job.getJobId(), job.getJobType().name());
+                        } catch (Exception e) {
+                            LOG.warnf("Linter fix loop error (non-fatal): %s", e.getMessage());
+                            break;
+                        }
+                    } else {
+                        String issueList = linterService.buildFixPrompt(newIssues);
+                        LOG.warnf("Linter fix iterations exhausted with %d remaining issues", newIssues.size());
+                        if (linterService.getConfig().isFailOnNewIssues()) {
+                            fail(job, "New linter/SAST issues introduced and could not be auto-fixed:\n" + issueList);
+                            return;
+                        }
+                        LOG.warn("fail-on-new-issues is false — continuing despite new linter issues");
+                    }
+                }
+            }
+
+            // 8. Run mvn test
             try {
                 runBuildValidation(workspace);
             } catch (Exception e) {
@@ -1545,7 +1596,7 @@ public class AgentRunner {
     }
 
     private String buildSystemPrompt(RunFixRequest request, String effectivePrompt,
-                                     WorkspaceContext workspace) {
+                                     WorkspaceContext workspace, String baselineLinterSummary) {
         String rulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
                 ? request.rulesRepoUrl() : defaultRulesRepoUrl;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
@@ -1568,6 +1619,15 @@ public class AgentRunner {
                 guardrails.getMaxFilesChanged(),
                 guardrails.getMaxLinesChanged()
         );
+
+        if (baselineLinterSummary != null && !baselineLinterSummary.isBlank()) {
+            guardrailText += """
+
+                    === EXISTING STATIC ANALYSIS ISSUES (do NOT make these worse) ===
+                    %s
+                    Do not introduce new linter/SAST violations. A post-change scan will verify this.
+                    """.formatted(baselineLinterSummary);
+        }
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, effectivePrompt);

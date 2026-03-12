@@ -1,0 +1,114 @@
+package com.eneve.agent.linter;
+
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+
+import org.jboss.logging.Logger;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.NodeList;
+
+import jakarta.enterprise.context.ApplicationScoped;
+
+@ApplicationScoped
+public class PmdLinter implements LinterRunner {
+
+    private static final Logger LOG = Logger.getLogger(PmdLinter.class);
+
+    private static final String MAVEN_COMMAND =
+            "mvn org.apache.maven.plugins:maven-pmd-plugin:3.26.0:pmd -Dformat=xml -q";
+
+    private static final String REPORT_PATH = "target/pmd.xml";
+
+    @Override
+    public String name() {
+        return "pmd";
+    }
+
+    @Override
+    public boolean isApplicable(Path workspaceRoot) {
+        return Files.exists(workspaceRoot.resolve("pom.xml"));
+    }
+
+    @Override
+    public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
+        LOG.info("Running PMD analysis...");
+        try {
+            ProcessBuilder pb = new ProcessBuilder("sh", "-c", MAVEN_COMMAND)
+                    .directory(workspaceRoot.toFile())
+                    .redirectErrorStream(true);
+
+            Process proc = pb.start();
+            String output = new String(proc.getInputStream().readAllBytes());
+            boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+
+            if (!finished) {
+                proc.destroyForcibly();
+                LOG.warn("PMD timed out");
+                return new LinterResult(name(), Collections.emptyList(), false,
+                        "Timed out after " + timeoutMinutes + " minutes");
+            }
+
+            Path reportFile = workspaceRoot.resolve(REPORT_PATH);
+            if (!Files.exists(reportFile)) {
+                LOG.warnf("PMD report not found at %s (exit %d)", reportFile, proc.exitValue());
+                return new LinterResult(name(), Collections.emptyList(), false,
+                        "Report file not generated. Output:\n" + CheckstyleLinter.truncate(output));
+            }
+
+            List<LinterFinding> findings = parseReport(reportFile, workspaceRoot);
+            LOG.infof("PMD found %d issues", findings.size());
+            return new LinterResult(name(), findings, true, CheckstyleLinter.truncate(output));
+
+        } catch (IOException | InterruptedException e) {
+            LOG.warnf("PMD execution failed: %s", e.getMessage());
+            return new LinterResult(name(), Collections.emptyList(), false, e.getMessage());
+        }
+    }
+
+    private List<LinterFinding> parseReport(Path reportFile, Path workspaceRoot) {
+        List<LinterFinding> findings = new ArrayList<>();
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(reportFile.toFile());
+
+            NodeList fileNodes = doc.getElementsByTagName("file");
+            for (int i = 0; i < fileNodes.getLength(); i++) {
+                Element fileEl = (Element) fileNodes.item(i);
+                String absolutePath = fileEl.getAttribute("name");
+                String relativePath = CheckstyleLinter.toRelativePath(absolutePath, workspaceRoot);
+
+                NodeList violations = fileEl.getElementsByTagName("violation");
+                for (int j = 0; j < violations.getLength(); j++) {
+                    Element v = (Element) violations.item(j);
+                    int line = CheckstyleLinter.parseIntSafe(v.getAttribute("beginline"));
+                    String rule = v.getAttribute("rule");
+                    String message = v.getTextContent().trim();
+                    String severity = mapPriority(v.getAttribute("priority"));
+
+                    findings.add(new LinterFinding(name(), relativePath, line, severity, rule, message));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse PMD report: %s", e.getMessage());
+        }
+        return findings;
+    }
+
+    private static String mapPriority(String priority) {
+        int p = CheckstyleLinter.parseIntSafe(priority);
+        if (p <= 2) return LinterFinding.SEVERITY_ERROR;
+        if (p <= 3) return LinterFinding.SEVERITY_WARNING;
+        return LinterFinding.SEVERITY_INFO;
+    }
+}
