@@ -1,0 +1,179 @@
+package com.eneve.agent.agent;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
+
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.Model;
+import com.anthropic.models.messages.Usage;
+import com.eneve.agent.bitbucket.ThreadComment;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+/**
+ * Examines a review conversation thread and extracts any generalizable team
+ * preference or coding convention that should be remembered for future reviews.
+ * <p>
+ * Uses a lightweight Claude call (similar to {@link IntentClassifier}) and
+ * persists the extracted learning via {@link MemoryStore}.
+ */
+@ApplicationScoped
+public class LearningExtractor {
+
+    private static final Logger LOG = Logger.getLogger(LearningExtractor.class);
+
+    @ConfigProperty(name = "anthropic.api.key")
+    String apiKey;
+
+    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
+    String modelName;
+
+    @Inject AiCallStore aiCallStore;
+    @Inject MemoryStore memoryStore;
+
+    /**
+     * Analyse the conversation thread and, if it contains a generalizable
+     * team preference, store it as a memory entry for the repository.
+     *
+     * @return the extracted preference text, or empty if nothing worth remembering
+     */
+    public Optional<String> extractAndStore(List<ThreadComment> thread,
+                                            CommentContext ctx,
+                                            String workspace,
+                                            String repoSlug,
+                                            String developerUsername) {
+        if (thread == null || thread.isEmpty()) {
+            return Optional.empty();
+        }
+
+        Optional<String> learning = extractLearning(thread, ctx);
+        if (learning.isEmpty()) {
+            return Optional.empty();
+        }
+
+        String memoryText = learning.get();
+
+        if (memoryStore.exists(workspace, repoSlug, memoryText)) {
+            LOG.debugf("Duplicate learning skipped for %s/%s: %s", workspace, repoSlug, memoryText);
+            return Optional.of(memoryText);
+        }
+
+        Long sourceCommentId = thread.stream()
+                .filter(tc -> !tc.isAgent())
+                .map(ThreadComment::id)
+                .findFirst()
+                .orElse(null);
+
+        MemoryEntry entry = MemoryEntry.extracted(
+                workspace, repoSlug, memoryText,
+                ctx.category(), sourceCommentId, ctx.prId(), developerUsername);
+        memoryStore.save(entry);
+
+        LOG.infof("Extracted learning for %s/%s: %s", workspace, repoSlug, memoryText);
+        return Optional.of(memoryText);
+    }
+
+    private Optional<String> extractLearning(List<ThreadComment> thread, CommentContext ctx) {
+        StringBuilder conversationText = new StringBuilder();
+        for (ThreadComment tc : thread) {
+            String role = tc.isAgent() ? "AI Reviewer" : "Developer (" + tc.author() + ")";
+            conversationText.append(role).append(": ").append(tc.content()).append("\n\n");
+        }
+
+        String prompt = """
+                Given a code review conversation between an AI reviewer and a developer, \
+                determine if the developer expressed a team preference, coding convention, \
+                or pattern that should be remembered for future reviews of this repository.
+
+                ## Original Finding
+                - File: %s (line %d)
+                - Category: %s
+                - Finding: %s
+
+                ## Conversation
+                %s
+
+                ## Instructions
+                If the developer expressed a generalizable preference (e.g., "we prefer constructor \
+                injection", "we use Testcontainers for integration tests", "don't flag unused imports \
+                in test files"), respond with ONLY the preference as a single concise statement.
+
+                If the conversation is just a normal Q&A, clarification, acknowledgment, or the \
+                developer is simply agreeing/disagreeing with a specific finding without expressing \
+                a broader team convention, respond with exactly: NONE
+                """.formatted(
+                ctx.filePath() != null ? ctx.filePath() : "(general)",
+                ctx.line(),
+                ctx.category() != null ? ctx.category() : "General",
+                ctx.findingText() != null ? ctx.findingText() : "(unknown)",
+                conversationText
+        );
+
+        AnthropicClient client = AnthropicOkHttpClient.builder()
+                .apiKey(apiKey)
+                .build();
+
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(modelName))
+                .maxTokens(200)
+                .messages(List.of(
+                        MessageParam.builder()
+                                .role(MessageParam.Role.USER)
+                                .content(prompt)
+                                .build()
+                ))
+                .build();
+
+        long startNs = System.nanoTime();
+        Message response;
+        try {
+            response = client.messages().create(params);
+        } catch (Exception e) {
+            long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+            aiCallStore.save(new AiCallRecord(
+                    null, null, "LEARNING_EXTRACTION", modelName, null,
+                    0, 0, 0, 0,
+                    null, null, durationMs,
+                    true, e.getMessage(), Instant.now()));
+            LOG.warnf("Learning extraction failed: %s", e.getMessage());
+            return Optional.empty();
+        }
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        Usage usage = response.usage();
+        String stopReason = response.stopReason().map(Object::toString).orElse(null);
+        aiCallStore.save(new AiCallRecord(
+                null, null, "LEARNING_EXTRACTION", modelName, null,
+                usage.inputTokens(), usage.outputTokens(),
+                usage.cacheCreationInputTokens().orElse(0L),
+                usage.cacheReadInputTokens().orElse(0L),
+                stopReason, null, durationMs,
+                false, null, Instant.now()));
+
+        String responseText = "";
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                responseText = block.asText().text().trim();
+                break;
+            }
+        }
+
+        LOG.debugf("Learning extraction response: '%s'", responseText);
+
+        if (responseText.equalsIgnoreCase("NONE") || responseText.isBlank()) {
+            return Optional.empty();
+        }
+
+        return Optional.of(responseText);
+    }
+}

@@ -19,6 +19,7 @@ import com.eneve.agent.tools.GuardrailConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -26,8 +27,12 @@ import jakarta.inject.Inject;
 @ApplicationScoped
 public class AgentPromptBuilder {
 
+    private static final Logger LOG = Logger.getLogger(AgentPromptBuilder.class);
+    private static final int MAX_MEMORY_CHARS = 2000;
+
     @Inject CursorRulesLoader rulesLoader;
     @Inject GuardrailConfig guardrails;
+    @Inject MemoryStore memoryStore;
 
     @ConfigProperty(name = "rules.repo.url", defaultValue = "")
     String defaultRulesRepoUrl;
@@ -59,7 +64,8 @@ public class AgentPromptBuilder {
     public ReviewPromptResult buildReviewPrompt(ReviewPrRequest request, String prTitle,
                                                 String targetBranch, String diff,
                                                 List<AgentComment> existingComments,
-                                                WorkspaceContext workspace) {
+                                                WorkspaceContext workspace,
+                                                String bbWorkspace, String repoSlug) {
         String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
 
@@ -67,6 +73,7 @@ public class AgentPromptBuilder {
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
         String previousCommentsSection = buildPreviousCommentsSection(existingComments);
+        String memorySection = buildMemorySection(bbWorkspace, repoSlug);
 
         List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
 
@@ -85,7 +92,7 @@ public class AgentPromptBuilder {
                 - **Title**: %s
                 - **Target branch**: %s
                 %s
-
+                %s
                 ## Review Categories
                 Analyze the diff and provide findings organized in these categories:
 
@@ -179,6 +186,7 @@ public class AgentPromptBuilder {
                 prTitle != null ? prTitle : "(untitled)",
                 targetBranch,
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
+                memorySection,
                 previousCommentsSection,
                 diffTruncated ? "(truncated — some files omitted)\n" : "",
                 annotatedDiff
@@ -384,6 +392,51 @@ public class AgentPromptBuilder {
             sb.append("- [%s:%d] %s\n".formatted(c.filePath(), c.line(), summary));
         }
         sb.append("\n");
+        return sb.toString();
+    }
+
+    /**
+     * Builds a prompt section with team preferences learned from past review
+     * interactions. Returns an empty string if no memories exist for the repo.
+     * Truncates at {@link #MAX_MEMORY_CHARS} to stay within token budget.
+     */
+    private String buildMemorySection(String workspace, String repoSlug) {
+        List<MemoryEntry> memories;
+        try {
+            memories = memoryStore.findForRepo(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Failed to load review memories for %s/%s (non-fatal): %s",
+                    workspace, repoSlug, e.getMessage());
+            return "";
+        }
+
+        if (memories.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Team Preferences (learned from past reviews)\n");
+        sb.append("The following preferences were learned from previous code review interactions ");
+        sb.append("with this team. Respect these unless the code explicitly violates best practices:\n\n");
+
+        int headerLen = sb.length();
+        for (MemoryEntry m : memories) {
+            String bullet = "- " + m.memoryText() + "\n";
+            if (sb.length() + bullet.length() > MAX_MEMORY_CHARS) {
+                int remaining = memories.size() - memories.indexOf(m);
+                sb.append("- ... and ").append(remaining).append(" more preferences (truncated)\n");
+                break;
+            }
+            sb.append(bullet);
+        }
+        sb.append("\n");
+
+        if (sb.length() <= headerLen + 1) {
+            return "";
+        }
+
+        LOG.debugf("Injected %d memories (%d chars) into review prompt for %s/%s",
+                memories.size(), sb.length(), workspace, repoSlug);
         return sb.toString();
     }
 }

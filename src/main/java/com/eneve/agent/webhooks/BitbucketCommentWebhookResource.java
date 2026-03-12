@@ -1,5 +1,6 @@
 package com.eneve.agent.webhooks;
 
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
@@ -9,6 +10,9 @@ import com.eneve.agent.agent.CommentStore;
 import com.eneve.agent.agent.IntentClassifier;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.MemoryEntry;
+import com.eneve.agent.agent.MemoryStore;
+import com.eneve.agent.bitbucket.BitbucketCloudService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
@@ -49,6 +53,8 @@ public class BitbucketCommentWebhookResource {
     @Inject JobStore jobStore;
     @Inject CommentStore commentStore;
     @Inject IntentClassifier intentClassifier;
+    @Inject MemoryStore memoryStore;
+    @Inject BitbucketCloudService bitbucketService;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -139,6 +145,12 @@ public class BitbucketCommentWebhookResource {
             LOG.infof("Comment webhook: developer replied (comment %d) to agent comment %d on PR #%s (%s/%s)",
                     commentId, parentCommentId, prId, workspace, repoSlug);
 
+            // Fast path: /learn command stores a team preference directly
+            if (commentText.toLowerCase(Locale.ROOT).startsWith("/learn ")) {
+                return handleLearnCommand(commentText, workspace, repoSlug, prId,
+                        parentCommentId, commentAuthor);
+            }
+
             // Classify intent: is this a fix request or a discussion?
             String originalFinding = commentStore.find(parentCommentId)
                     .map(CommentContext::findingText).orElse(null);
@@ -183,6 +195,38 @@ public class BitbucketCommentWebhookResource {
                 "jobType", jobType.name(),
                 "parentCommentId", parentCommentId,
                 "prId", prId
+        )).build();
+    }
+
+    private Response handleLearnCommand(String commentText, String workspace, String repoSlug,
+                                         String prId, long parentCommentId, String author) {
+        String learning = commentText.substring("/learn ".length()).trim();
+        if (learning.isBlank()) {
+            return ok("ignored", "/learn command with empty text");
+        }
+
+        if (memoryStore.exists(workspace, repoSlug, learning)) {
+            LOG.debugf("Duplicate /learn ignored for %s/%s: %s", workspace, repoSlug, learning);
+            return ok("duplicate", "This preference is already stored");
+        }
+
+        MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, learning, author);
+        memoryStore.save(entry);
+
+        LOG.infof("/learn command from %s on %s/%s PR #%s: %s", author, workspace, repoSlug, prId, learning);
+
+        try {
+            bitbucketService.replyToComment(workspace, repoSlug, prId, parentCommentId,
+                    "Noted — I'll remember this for future reviews of this repository:\n\n> " + learning);
+        } catch (Exception e) {
+            LOG.warnf("Failed to post /learn confirmation reply (non-fatal): %s", e.getMessage());
+        }
+
+        return Response.ok(Map.of(
+                "action", "learning_stored",
+                "memory", learning,
+                "workspace", workspace,
+                "repoSlug", repoSlug
         )).build();
     }
 

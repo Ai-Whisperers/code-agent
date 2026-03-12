@@ -53,6 +53,7 @@ public class AgentRunner {
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject CommentStore commentStore;
     @Inject LinterService linterService;
+    @Inject LearningExtractor learningExtractor;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -296,7 +297,8 @@ public class AgentRunner {
             }
 
             ReviewPromptResult promptResult = promptBuilder.buildReviewPrompt(
-                    request, prTitle, targetBranch, diff, existingAgentComments, workspace);
+                    request, prTitle, targetBranch, diff, existingAgentComments, workspace,
+                    coords.workspace(), coords.repoSlug());
 
             String reviewOutput;
             try {
@@ -590,6 +592,19 @@ public class AgentRunner {
             } catch (Exception e) {
                 failReply(job, "Failed to post reply: " + e.getMessage());
                 return;
+            }
+
+            // Extract any generalizable team preference from the conversation
+            try {
+                String developerUsername = thread.stream()
+                        .filter(tc -> !tc.isAgent())
+                        .reduce((first, second) -> second)
+                        .map(ThreadComment::author)
+                        .orElse(null);
+                learningExtractor.extractAndStore(thread, ctx,
+                        request.workspace(), request.repoSlug(), developerUsername);
+            } catch (Exception e) {
+                LOG.warnf("Learning extraction failed (non-fatal): %s", e.getMessage());
             }
 
             job.setStatus(JobStatus.SUCCESS);
