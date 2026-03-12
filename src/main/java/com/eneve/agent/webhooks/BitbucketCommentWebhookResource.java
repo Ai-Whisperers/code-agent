@@ -3,11 +3,15 @@ package com.eneve.agent.webhooks;
 import java.util.Map;
 import java.util.UUID;
 
+import com.eneve.agent.agent.CommentContext;
+import com.eneve.agent.agent.CommentIntent;
 import com.eneve.agent.agent.CommentStore;
+import com.eneve.agent.agent.IntentClassifier;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ReplyCommentRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,6 +48,7 @@ public class BitbucketCommentWebhookResource {
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject CommentStore commentStore;
+    @Inject IntentClassifier intentClassifier;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -134,7 +139,16 @@ public class BitbucketCommentWebhookResource {
             LOG.infof("Comment webhook: developer replied (comment %d) to agent comment %d on PR #%s (%s/%s)",
                     commentId, parentCommentId, prId, workspace, repoSlug);
 
-            return submitReplyJob(workspace, repoSlug, prId, parentCommentId, commentText, filePath, line);
+            // Classify intent: is this a fix request or a discussion?
+            String originalFinding = commentStore.find(parentCommentId)
+                    .map(CommentContext::findingText).orElse(null);
+            CommentIntent intent = intentClassifier.classify(commentText, originalFinding);
+            JobType jobType = (intent == CommentIntent.FIX) ? JobType.FIX_COMMENT : JobType.REPLY;
+
+            LOG.infof("Comment webhook: classified intent as %s for comment %d", jobType, commentId);
+
+            return submitJob(workspace, repoSlug, prId, parentCommentId, commentText,
+                    filePath, line, jobType);
 
         } catch (Exception e) {
             LOG.errorf("Bitbucket comment webhook processing error: %s", e.getMessage());
@@ -142,14 +156,14 @@ public class BitbucketCommentWebhookResource {
         }
     }
 
-    private Response submitReplyJob(String workspace, String repoSlug, String prId,
-                                    long parentCommentId, String humanMessage,
-                                    String filePath, int line) {
+    private Response submitJob(String workspace, String repoSlug, String prId,
+                               long parentCommentId, String humanMessage,
+                               String filePath, int line, JobType jobType) {
         ReplyCommentRequest request = new ReplyCommentRequest(
                 workspace, repoSlug, prId, parentCommentId, humanMessage, filePath, line);
 
         String jobId = UUID.randomUUID().toString();
-        JobRecord job = new JobRecord(jobId, request);
+        JobRecord job = new JobRecord(jobId, request, jobType);
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
@@ -160,11 +174,13 @@ public class BitbucketCommentWebhookResource {
                     .build();
         }
 
-        LOG.infof("Comment webhook triggered reply job %s for comment %d on PR #%s",
-                jobId, parentCommentId, prId);
+        String action = (jobType == JobType.FIX_COMMENT) ? "fix_triggered" : "reply_triggered";
+        LOG.infof("Comment webhook triggered %s job %s for comment %d on PR #%s",
+                jobType, jobId, parentCommentId, prId);
         return Response.ok(Map.of(
-                "action", "reply_triggered",
+                "action", action,
                 "jobId", jobId,
+                "jobType", jobType.name(),
                 "parentCommentId", parentCommentId,
                 "prId", prId
         )).build();

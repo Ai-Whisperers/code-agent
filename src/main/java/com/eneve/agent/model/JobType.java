@@ -4,5 +4,6 @@ public enum JobType {
     FIX,
     REVIEW,
     FIX_PR,
-    REPLY
+    REPLY,
+    FIX_COMMENT
 }

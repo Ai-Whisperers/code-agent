@@ -53,12 +53,16 @@ public class JobRecord {
     }
 
     public JobRecord(String jobId, ReplyCommentRequest replyRequest) {
+        this(jobId, replyRequest, JobType.REPLY);
+    }
+
+    public JobRecord(String jobId, ReplyCommentRequest replyRequest, JobType jobType) {
         this.jobId = jobId;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
         this.replyRequest = replyRequest;
-        this.jobType = JobType.REPLY;
+        this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }

@@ -844,6 +844,246 @@ public class AgentRunner {
         job.setErrorMessage(message);
     }
 
+    // ─── Fix from Comment ───────────────────────────────────────────────
+
+    /**
+     * Handle a FIX_COMMENT job: implement the suggested fix from a review comment,
+     * commit directly to the PR's source branch, and reply in-thread with the commit SHA.
+     */
+    public void executeFixComment(JobRecord job) {
+        ReplyCommentRequest request = job.getReplyRequest();
+        job.setStatus(JobStatus.RUNNING);
+        job.setPrId(request.prId());
+
+        Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
+        if (ctxOpt.isEmpty()) {
+            failFixComment(job, request, "Original comment context not found for comment #"
+                    + request.parentCommentId());
+            return;
+        }
+        CommentContext ctx = ctxOpt.get();
+
+        String repoUrl = "https://bitbucket.org/" + request.workspace() + "/" + request.repoSlug() + ".git";
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(repoUrl);
+        } catch (IllegalArgumentException e) {
+            failFixComment(job, request, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            // 1. Fetch PR metadata
+            java.util.Map<String, String> prInfo;
+            try {
+                prInfo = bitbucketService.getPullRequestInfo(
+                        coords.workspace(), coords.repoSlug(), request.prId());
+            } catch (Exception e) {
+                failFixComment(job, request, "Failed to fetch PR info: " + e.getMessage());
+                return;
+            }
+
+            String sourceBranch = prInfo.get("sourceBranch");
+
+            // 2. Clone the source branch
+            String authUrl = coords.httpsCloneUrl(bbUser, bbAppPassword);
+            LOG.infof("FixComment: cloning %s/%s branch %s for comment fix on PR #%s",
+                    coords.workspace(), coords.repoSlug(), sourceBranch, request.prId());
+            try {
+                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failFixComment(job, request, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            // 2b. Configure git author
+            if (!gitAuthorEmail.isBlank()) {
+                workspace.configureAuthor(gitAuthorName, gitAuthorEmail);
+            }
+
+            // 3. Fetch the comment thread for context
+            List<ThreadComment> thread;
+            try {
+                thread = bitbucketService.getCommentThread(
+                        request.workspace(), request.repoSlug(), request.prId(),
+                        request.parentCommentId());
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch comment thread (non-fatal): %s", e.getMessage());
+                thread = Collections.emptyList();
+            }
+
+            // 4. Build fix prompt
+            String systemPrompt = buildFixCommentSystemPrompt(ctx, thread, request.humanMessage());
+
+            // 5. Run agentic loop with full tools (read + write)
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        ToolDefinitions.all(),
+                        "A developer has requested that you implement the fix from your review comment. "
+                                + "Read the relevant code, apply the fix, and run tests.");
+            } catch (Exception e) {
+                failFixComment(job, request, "Agent fix loop error: " + e.getMessage());
+                return;
+            }
+
+            // 6. Run build validation
+            try {
+                runBuildValidation(workspace);
+            } catch (Exception e) {
+                failFixComment(job, request, "Build validation failed: " + e.getMessage());
+                return;
+            }
+
+            // 7. Commit and push to source branch
+            boolean hasChanges;
+            try {
+                String findingSummary = ctx.findingText();
+                if (findingSummary != null && findingSummary.length() > 60) {
+                    findingSummary = findingSummary.substring(0, 57) + "...";
+                }
+                String commitMsg = "fix: " + (ctx.filePath() != null ? ctx.filePath() : "review")
+                        + (ctx.line() > 0 ? ":" + ctx.line() : "")
+                        + " — " + (findingSummary != null ? findingSummary : "review comment fix");
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                failFixComment(job, request, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                failFixComment(job, request,
+                        "Agent completed but made no file changes. Claude summary: " + summary);
+                return;
+            }
+
+            // 8. Enforce guardrails
+            int filesChanged;
+            int linesChanged;
+            try {
+                filesChanged = workspace.countFilesChanged();
+                linesChanged = workspace.countLinesChanged();
+            } catch (Exception e) {
+                filesChanged = 0;
+                linesChanged = 0;
+            }
+
+            if (filesChanged > guardrails.getMaxFilesChanged()) {
+                failFixComment(job, request, "Too many files changed: " + filesChanged
+                        + " (max: " + guardrails.getMaxFilesChanged() + ")");
+                return;
+            }
+            if (linesChanged > guardrails.getMaxLinesChanged()) {
+                failFixComment(job, request, "Too many lines changed: " + linesChanged
+                        + " (max: " + guardrails.getMaxLinesChanged() + ")");
+                return;
+            }
+
+            job.setFilesChanged(filesChanged);
+            job.setLinesChanged(linesChanged);
+
+            try {
+                workspace.push(sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failFixComment(job, request, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            // 9. Reply in-thread confirming the fix
+            String commitSha = null;
+            try {
+                commitSha = workspace.getHeadSha();
+            } catch (Exception e) {
+                LOG.warnf("Failed to get HEAD SHA (non-fatal): %s", e.getMessage());
+            }
+
+            String replyText = "Applied fix"
+                    + (commitSha != null ? " in commit `" + commitSha.substring(0, Math.min(8, commitSha.length())) + "`" : "")
+                    + ".\n\n" + summary;
+            try {
+                long replyCommentId = bitbucketService.replyToComment(
+                        request.workspace(), request.repoSlug(), request.prId(),
+                        request.parentCommentId(), replyText);
+                if (replyCommentId > 0) {
+                    commentStore.save(replyCommentId, new CommentContext(
+                            request.prId(), request.workspace(), request.repoSlug(),
+                            ctx.filePath(), ctx.line(), ctx.category(), ctx.severity(),
+                            ctx.findingText(), ctx.reviewJobId()));
+                }
+            } catch (Exception e) {
+                LOG.warnf("Failed to post fix confirmation reply (non-fatal): %s", e.getMessage());
+            }
+
+            // 10. Update job record
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(summary);
+            LOG.infof("FixComment job %s completed for comment #%d on PR #%s",
+                    job.getJobId(), request.parentCommentId(), request.prId());
+
+        } catch (Exception e) {
+            failFixComment(job, request, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    private String buildFixCommentSystemPrompt(CommentContext ctx, List<ThreadComment> thread,
+                                               String humanMessage) {
+        StringBuilder threadSection = new StringBuilder();
+        for (ThreadComment tc : thread) {
+            String role = tc.isAgent() ? "You (AI Reviewer)" : tc.author();
+            threadSection.append("**").append(role).append("**: ").append(tc.content()).append("\n\n");
+        }
+
+        return """
+                You are an AI code reviewer implementing a fix for a specific finding on a pull request.
+                A developer has asked you to apply the suggested change.
+
+                ## Finding to Fix
+                - **File**: %s (line %d)
+                - **Severity**: %s | **Category**: %s
+                - **Your original review comment**: %s
+
+                ## Developer's Request
+                %s
+
+                ## Conversation Thread
+                %s
+
+                ## Instructions
+                - Fix ONLY the issue described in the finding above.
+                - Use `read_file` to examine the current code around the issue.
+                - Use `write_file` to apply the fix.
+                - Do NOT change unrelated code. Keep the fix as minimal and targeted as possible.
+                - After fixing, run: mvn test (or gradle test if build.gradle is present)
+                - If tests fail, fix the test failures before completing.
+                - Provide a brief summary of what you changed.
+                """.formatted(
+                ctx.filePath() != null ? ctx.filePath() : "(general)",
+                ctx.line(),
+                ctx.severity() != null ? ctx.severity() : "INFO",
+                ctx.category() != null ? ctx.category() : "General",
+                ctx.findingText(),
+                humanMessage != null ? humanMessage : "(no additional instructions)",
+                threadSection.toString().isBlank() ? "(no previous thread)" : threadSection
+        );
+    }
+
+    private void failFixComment(JobRecord job, ReplyCommentRequest request, String message) {
+        LOG.errorf("FixComment job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+
+        // Reply in-thread to inform the developer the fix failed
+        try {
+            bitbucketService.replyToComment(
+                    request.workspace(), request.repoSlug(), request.prId(),
+                    request.parentCommentId(),
+                    "Failed to apply fix: " + message);
+        } catch (Exception e) {
+            LOG.warnf("Failed to post fix failure reply (non-fatal): %s", e.getMessage());
+        }
+    }
+
     // ─── Review Prompt ──────────────────────────────────────────────────
 
     private String buildReviewSystemPrompt(ReviewPrRequest request, String prTitle,
