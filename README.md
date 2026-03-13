@@ -95,6 +95,17 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | POST | `/memory` | Manually add a review memory |
 | DELETE | `/memory/{id}` | Deactivate a review memory |
 
+### Repo Settings
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/settings/repos` | List all configured repositories and their settings |
+| GET | `/settings/repos/{workspace}/{repoSlug}` | Get settings for a specific repository |
+| PUT | `/settings/repos/{workspace}/{repoSlug}` | Create or update repository settings |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/enable` | Enable automated review for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
+| DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
+
 ### AI Statistics
 
 | Method | Path | Description |
@@ -512,6 +523,36 @@ When a developer replies to an agent review comment:
 2. For fix requests, the agent modifies the code and pushes the change
 3. For discussions, the agent replies conversationally in the same thread
 
+### Repo settings
+
+Each repository can be individually configured to control review behavior. Settings are stored in PostgreSQL and managed via the `/settings/repos` REST endpoints.
+
+**Enable/disable review:** Turn automated PR review on or off per repo. Disabled repos silently skip incoming webhooks.
+
+```bash
+# Disable review for a repo
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/disable
+
+# Re-enable
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
+```
+
+**Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
+
+**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+
+```bash
+curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "reviewEnabled": true,
+    "ruleNames": ["java-conventions", "security-standards"],
+    "reviewPrompt": "You are reviewing a pull request for {{PR_TITLE}}.\n\n{{MEMORY_SECTION}}\n\nFocus only on security and performance issues.\n\n## Diff\n```\n{{DIFF}}\n```"
+  }'
+```
+
+**Startup sync:** On application startup, the agent fetches all repositories from the configured Bitbucket workspace and ensures each has a settings row in the database. New repos default to review enabled (opt-out model). Existing settings are left untouched.
+
 ### Linter integration
 
 During reviews, the agent can run Checkstyle, PMD, and SpotBugs to surface static analysis findings alongside AI-powered observations. Each linter can be individually enabled/disabled.
@@ -630,6 +671,7 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 | `agent_comments` | Maps comment IDs to agent findings for reply tracking |
 | `ai_calls` | AI call metrics (tokens, cost, duration) per job |
 | `review_memory` | Team preferences learned during PR reviews |
+| `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
 
 ## Project Structure
 
@@ -637,6 +679,7 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 src/main/java/com/eneve/agent/
 ├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr)
 ├── MemoryResource.java          # REST endpoints (/memory)
+├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
 ├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
 ├── agent/
 │   ├── AgentRunner.java         # Job orchestrator (fix + review)
@@ -651,7 +694,10 @@ src/main/java/com/eneve/agent/
 │   ├── JobStore.java            # In-memory job store
 │   ├── CommentStore.java        # Tracks agent comments for reply detection
 │   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)
-│   └── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
+│   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
+│   ├── RepoSettings.java        # Per-repo settings record
+│   ├── RepoSettingsStore.java   # Repo settings persistence (PostgreSQL)
+│   └── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
 ├── aikido/
 │   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
 │   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO

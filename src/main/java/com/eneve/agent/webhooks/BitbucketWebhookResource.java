@@ -7,6 +7,7 @@ import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.RepoSettingsStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.ReviewPrRequest;
@@ -44,6 +45,7 @@ public class BitbucketWebhookResource {
 
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
+    @Inject RepoSettingsStore repoSettingsStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -95,6 +97,13 @@ public class BitbucketWebhookResource {
 
             if (prId.isBlank() || repoFullName.isBlank()) {
                 return ok("ignored", "Missing PR ID or repository in payload");
+            }
+
+            String[] repoParts = repoFullName.split("/", 2);
+            if (repoParts.length == 2
+                    && !repoSettingsStore.isReviewEnabled(repoParts[0], repoParts[1])) {
+                LOG.infof("Bitbucket webhook: skipping PR #%s — review disabled for %s", prId, repoFullName);
+                return ok("skipped", "Review disabled for " + repoFullName);
             }
 
             // Skip PRs authored by the agent itself

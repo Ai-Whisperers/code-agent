@@ -33,6 +33,7 @@ public class AgentPromptBuilder {
     @Inject CursorRulesLoader rulesLoader;
     @Inject GuardrailConfig guardrails;
     @Inject MemoryStore memoryStore;
+    @Inject RepoSettingsStore repoSettingsStore;
 
     @ConfigProperty(name = "rules.repo.url", defaultValue = "")
     String defaultRulesRepoUrl;
@@ -66,8 +67,11 @@ public class AgentPromptBuilder {
                                                 List<AgentComment> existingComments,
                                                 WorkspaceContext workspace,
                                                 String bbWorkspace, String repoSlug) {
+
+        RepoSettings settings = loadRepoSettings(bbWorkspace, repoSlug);
+
         String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
-        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+        List<String> ruleNames = resolveRuleNames(request.ruleNames(), settings);
 
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
@@ -84,113 +88,17 @@ public class AgentPromptBuilder {
         String annotatedDiff = DiffFormatter.toAnnotated(displayFiles);
         Map<String, TreeSet<Integer>> commentableLines = DiffFormatter.buildCommentableLines(displayFiles);
 
-        String reviewInstructions = """
-                You are performing an automated code review of a pull request.
-                Your goal is to review the changes for quality, correctness, and adherence to best practices.
-
-                ## PR Information
-                - **Title**: %s
-                - **Target branch**: %s
-                %s
-                %s
-                ## Review Categories
-                Analyze the diff and provide findings organized in these categories:
-
-                ### 1. Security
-                - SQL injection, XSS, CSRF vulnerabilities
-                - Secrets or credentials in code
-                - Authentication/authorization bypasses
-                - Insecure deserialization or input handling
-                - Dependency vulnerabilities
-
-                ### 2. Design Principles
-                - SOLID principles adherence
-                - Separation of concerns
-                - Appropriate abstractions and encapsulation
-                - Coupling and cohesion
-                - API design consistency
-
-                ### 3. Code Quality
-                - Naming conventions and clarity
-                - Cyclomatic complexity
-                - Code duplication
-                - Error handling and edge cases
-                - Readability and maintainability
-                - Magic numbers or hardcoded values
-
-                ### 4. Testing
-                - Are the changes covered by unit tests?
-                - Are edge cases and error paths tested?
-                - Are test assertions meaningful?
-                - Are there missing test scenarios?
-
-                ### 5. Performance
-                - N+1 queries or inefficient data access
-                - Unnecessary object allocations
-                - Blocking calls in async contexts
-                - Resource leaks (connections, streams)
-
-                ### 6. Best Practices
-                - Framework-specific patterns and conventions
-                - Logging (appropriate levels, no sensitive data)
-                - Input validation
-                - Documentation for public APIs
-                - Backward compatibility
-
-                ## Output Format
-                You MUST output your review as a JSON object inside a ```json code fence.
-                Each finding will be posted as an inline comment on the exact file and line in Bitbucket.
-
-                ```json
-                {
-                  "findings": [
-                    {
-                      "file": "src/main/java/com/example/Foo.java",
-                      "line": 42,
-                      "severity": "HIGH",
-                      "category": "Security",
-                      "description": "User input is concatenated directly into SQL query",
-                      "suggestion": "Use a parameterized PreparedStatement instead"
-                    }
-                  ],
-                  "verdict": "REQUEST_CHANGES",
-                  "summary": "Brief overall assessment of the PR quality."
-                }
-                ```
-
-                Field definitions:
-                - **file**: exact relative path from the repo root (must match a file shown in the diff header)
-                - **line**: the line number shown to the LEFT of each line in the annotated diff below. Use EXACTLY the number displayed — do not compute or guess line numbers.
-                - **severity**: one of CRITICAL, HIGH, MEDIUM, LOW, INFO
-                - **category**: one of Security, Design, Code Quality, Testing, Performance, Best Practices
-                - **description**: clear explanation of the issue
-                - **suggestion**: how to fix or improve it
-                - **verdict**: one of APPROVE, REQUEST_CHANGES, COMMENT
-                - **summary**: 2-4 sentence overall assessment
-                %s
-                ## Instructions
-                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
-                - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
-                - Be constructive and specific. Provide actionable feedback.
-                - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
-                - If the code looks good with no issues, return an empty findings array and APPROVE verdict.
-                - Do NOT modify any files. This is a read-only review.
-                - Your final message MUST contain ONLY the JSON block — no extra text before or after.
-
-                ## Diff
-                %s
-                ```
-                %s
-                ```
-                """.formatted(
-                prTitle != null ? prTitle : "(untitled)",
-                targetBranch,
-                diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
-                memorySection,
-                previousCommentsSection,
-                diffTruncated ? "(truncated — some files omitted)\n" : "",
-                annotatedDiff
-        );
+        String reviewInstructions;
+        if (settings != null && settings.reviewPrompt() != null && !settings.reviewPrompt().isBlank()) {
+            LOG.infof("Using custom review prompt for %s/%s", bbWorkspace, repoSlug);
+            reviewInstructions = applyPlaceholders(settings.reviewPrompt(),
+                    prTitle, targetBranch, previousCommentsSection, memorySection,
+                    diffTruncated, annotatedDiff);
+        } else {
+            reviewInstructions = buildDefaultReviewInstructions(
+                    prTitle, targetBranch, previousCommentsSection, memorySection,
+                    diffTruncated, annotatedDiff);
+        }
 
         String guardrailText = """
                 You MUST follow these rules without exception:
@@ -339,6 +247,159 @@ public class AgentPromptBuilder {
     }
 
     // ─── Private helpers ────────────────────────────────────────────────
+
+    private RepoSettings loadRepoSettings(String workspace, String repoSlug) {
+        try {
+            return repoSettingsStore.find(workspace, repoSlug).orElse(null);
+        } catch (Exception e) {
+            LOG.warnf("Failed to load repo settings for %s/%s (non-fatal): %s",
+                    workspace, repoSlug, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * If the request specifies rule names, use those. Otherwise fall back
+     * to per-repo settings, then to an empty list.
+     */
+    private List<String> resolveRuleNames(List<String> requestRuleNames, RepoSettings settings) {
+        if (requestRuleNames != null && !requestRuleNames.isEmpty()) {
+            return requestRuleNames;
+        }
+        if (settings != null && settings.ruleNames() != null && !settings.ruleNames().isEmpty()) {
+            return settings.ruleNames();
+        }
+        return Collections.emptyList();
+    }
+
+    private String applyPlaceholders(String template, String prTitle, String targetBranch,
+                                     String previousComments, String memorySection,
+                                     boolean diffTruncated, String annotatedDiff) {
+        String diffNote = diffTruncated
+                ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n"
+                : "";
+        return template
+                .replace("{{PR_TITLE}}", prTitle != null ? prTitle : "(untitled)")
+                .replace("{{TARGET_BRANCH}}", targetBranch != null ? targetBranch : "")
+                .replace("{{PREVIOUS_COMMENTS}}", previousComments != null ? previousComments : "")
+                .replace("{{MEMORY_SECTION}}", memorySection != null ? memorySection : "")
+                .replace("{{DIFF_NOTE}}", diffNote)
+                .replace("{{DIFF}}", annotatedDiff != null ? annotatedDiff : "");
+    }
+
+    private String buildDefaultReviewInstructions(String prTitle, String targetBranch,
+                                                  String previousCommentsSection,
+                                                  String memorySection,
+                                                  boolean diffTruncated,
+                                                  String annotatedDiff) {
+        return """
+                You are performing an automated code review of a pull request.
+                Your goal is to review the changes for quality, correctness, and adherence to best practices.
+
+                ## PR Information
+                - **Title**: %s
+                - **Target branch**: %s
+                %s
+                %s
+                ## Review Categories
+                Analyze the diff and provide findings organized in these categories:
+
+                ### 1. Security
+                - SQL injection, XSS, CSRF vulnerabilities
+                - Secrets or credentials in code
+                - Authentication/authorization bypasses
+                - Insecure deserialization or input handling
+                - Dependency vulnerabilities
+
+                ### 2. Design Principles
+                - SOLID principles adherence
+                - Separation of concerns
+                - Appropriate abstractions and encapsulation
+                - Coupling and cohesion
+                - API design consistency
+
+                ### 3. Code Quality
+                - Naming conventions and clarity
+                - Cyclomatic complexity
+                - Code duplication
+                - Error handling and edge cases
+                - Readability and maintainability
+                - Magic numbers or hardcoded values
+
+                ### 4. Testing
+                - Are the changes covered by unit tests?
+                - Are edge cases and error paths tested?
+                - Are test assertions meaningful?
+                - Are there missing test scenarios?
+
+                ### 5. Performance
+                - N+1 queries or inefficient data access
+                - Unnecessary object allocations
+                - Blocking calls in async contexts
+                - Resource leaks (connections, streams)
+
+                ### 6. Best Practices
+                - Framework-specific patterns and conventions
+                - Logging (appropriate levels, no sensitive data)
+                - Input validation
+                - Documentation for public APIs
+                - Backward compatibility
+
+                ## Output Format
+                You MUST output your review as a JSON object inside a ```json code fence.
+                Each finding will be posted as an inline comment on the exact file and line in Bitbucket.
+
+                ```json
+                {
+                  "findings": [
+                    {
+                      "file": "src/main/java/com/example/Foo.java",
+                      "line": 42,
+                      "severity": "HIGH",
+                      "category": "Security",
+                      "description": "User input is concatenated directly into SQL query",
+                      "suggestion": "Use a parameterized PreparedStatement instead"
+                    }
+                  ],
+                  "verdict": "REQUEST_CHANGES",
+                  "summary": "Brief overall assessment of the PR quality."
+                }
+                ```
+
+                Field definitions:
+                - **file**: exact relative path from the repo root (must match a file shown in the diff header)
+                - **line**: the line number shown to the LEFT of each line in the annotated diff below. Use EXACTLY the number displayed — do not compute or guess line numbers.
+                - **severity**: one of CRITICAL, HIGH, MEDIUM, LOW, INFO
+                - **category**: one of Security, Design, Code Quality, Testing, Performance, Best Practices
+                - **description**: clear explanation of the issue
+                - **suggestion**: how to fix or improve it
+                - **verdict**: one of APPROVE, REQUEST_CHANGES, COMMENT
+                - **summary**: 2-4 sentence overall assessment
+                %s
+                ## Instructions
+                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
+                - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
+                - Be constructive and specific. Provide actionable feedback.
+                - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
+                - If the code looks good with no issues, return an empty findings array and APPROVE verdict.
+                - Do NOT modify any files. This is a read-only review.
+                - Your final message MUST contain ONLY the JSON block — no extra text before or after.
+
+                ## Diff
+                %s
+                ```
+                %s
+                ```
+                """.formatted(
+                prTitle != null ? prTitle : "(untitled)",
+                targetBranch,
+                diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
+                memorySection,
+                previousCommentsSection,
+                diffTruncated ? "(truncated — some files omitted)\n" : "",
+                annotatedDiff
+        );
+    }
 
     private String resolveRulesRepoUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;

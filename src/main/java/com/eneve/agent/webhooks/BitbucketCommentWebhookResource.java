@@ -12,6 +12,7 @@ import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.agent.MemoryEntry;
 import com.eneve.agent.agent.MemoryStore;
+import com.eneve.agent.agent.RepoSettingsStore;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
@@ -54,6 +55,7 @@ public class BitbucketCommentWebhookResource {
     @Inject CommentStore commentStore;
     @Inject IntentClassifier intentClassifier;
     @Inject MemoryStore memoryStore;
+    @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "bitbucket.user")
@@ -101,6 +103,13 @@ public class BitbucketCommentWebhookResource {
 
             if (commentId == 0 || prId.equals("0") || repoFullName.isBlank()) {
                 return ok("ignored", "Missing comment ID, PR ID, or repository in payload");
+            }
+
+            String[] repoParts = repoFullName.split("/", 2);
+            if (repoParts.length == 2
+                    && !repoSettingsStore.isReviewEnabled(repoParts[0], repoParts[1])) {
+                LOG.infof("Comment webhook: skipping — review disabled for %s", repoFullName);
+                return ok("skipped", "Review disabled for " + repoFullName);
             }
 
             // Guard: ignore comments from the agent itself (prevent infinite loops)
