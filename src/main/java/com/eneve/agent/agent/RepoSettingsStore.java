@@ -35,7 +35,7 @@ public class RepoSettingsStore {
     public Optional<RepoSettings> find(String workspace, String repoSlug) {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, rule_names,
-                       review_prompt, created_at, updated_at
+                       review_prompt, disabled_hooks, created_at, updated_at
                 FROM repo_settings
                 WHERE workspace = ? AND repo_slug = ?
                 """;
@@ -57,7 +57,7 @@ public class RepoSettingsStore {
     public List<RepoSettings> listAll() {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, rule_names,
-                       review_prompt, created_at, updated_at
+                       review_prompt, disabled_hooks, created_at, updated_at
                 FROM repo_settings
                 ORDER BY workspace, repo_slug
                 """;
@@ -75,15 +75,17 @@ public class RepoSettingsStore {
     }
 
     public void upsert(String workspace, String repoSlug, boolean reviewEnabled,
-                       List<String> ruleNames, String reviewPrompt) {
+                       List<String> ruleNames, String reviewPrompt, List<String> disabledHooks) {
         String sql = """
                 INSERT INTO repo_settings
-                    (workspace, repo_slug, review_enabled, rule_names, review_prompt, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, now(), now())
+                    (workspace, repo_slug, review_enabled, rule_names, review_prompt,
+                     disabled_hooks, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (workspace, repo_slug)
                 DO UPDATE SET review_enabled = EXCLUDED.review_enabled,
                               rule_names    = EXCLUDED.rule_names,
                               review_prompt = EXCLUDED.review_prompt,
+                              disabled_hooks = EXCLUDED.disabled_hooks,
                               updated_at    = now()
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -93,6 +95,7 @@ public class RepoSettingsStore {
             ps.setBoolean(3, reviewEnabled);
             setNullableString(ps, 4, toJson(ruleNames));
             setNullableString(ps, 5, reviewPrompt);
+            setNullableString(ps, 6, toJson(disabledHooks));
             ps.executeUpdate();
             LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s)", workspace, repoSlug, reviewEnabled);
         } catch (SQLException e) {
@@ -160,6 +163,28 @@ public class RepoSettingsStore {
         return true;
     }
 
+    /**
+     * Returns {@code true} if the given hook is explicitly disabled for this repo.
+     * When no settings row exists the hook is considered enabled.
+     */
+    public boolean isHookDisabled(String workspace, String repoSlug, String hookName) {
+        String sql = "SELECT disabled_hooks FROM repo_settings WHERE workspace = ? AND repo_slug = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    List<String> disabled = fromJson(rs.getString("disabled_hooks"));
+                    return disabled.contains(hookName);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to check disabled hooks for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+        return false;
+    }
+
     public void setReviewEnabled(String workspace, String repoSlug, boolean enabled) {
         String sql = """
                 UPDATE repo_settings SET review_enabled = ?, updated_at = now()
@@ -188,6 +213,7 @@ public class RepoSettingsStore {
                 rs.getBoolean("review_enabled"),
                 fromJson(rs.getString("rule_names")),
                 rs.getString("review_prompt"),
+                fromJson(rs.getString("disabled_hooks")),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );

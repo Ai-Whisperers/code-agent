@@ -14,6 +14,7 @@ import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
@@ -927,6 +928,118 @@ public class AgentRunner {
 
     private String resolveWebhookUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultN8nWebhookUrl;
+    }
+
+    // ─── Execute Hook ────────────────────────────────────────────────────
+
+    public void executeHook(JobRecord job) {
+        HookJobRequest request = job.getHookRequest();
+        job.setStatus(JobStatus.RUNNING);
+
+        LOG.infof("Hook job %s starting: hook='%s' repo=%s/%s target=%s commitDirect=%s",
+                job.getJobId(), request.hookName(), request.workspace(), request.repoSlug(),
+                request.targetBranch(), request.commitDirect());
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            fail(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+
+            if (request.commitDirect()) {
+                try {
+                    workspace.cloneRepo(authUrl, request.targetBranch(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone failed: " + e.getMessage());
+                    return;
+                }
+            } else {
+                try {
+                    workspace.cloneAndCreateBranch(authUrl, request.targetBranch(),
+                            request.branchName(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone/branch failed: " + e.getMessage());
+                    return;
+                }
+            }
+
+            configureGitIfNeeded(workspace);
+
+            RunFixRequest fixRequest = new RunFixRequest(
+                    request.repoUrl(), request.branchName(), null,
+                    request.prompt(), request.targetBranch(), null, null,
+                    request.ruleNames(), request.extraRules());
+
+            String systemPrompt = promptBuilder.buildRunFixPrompt(fixRequest, request.prompt(), workspace, "");
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                fail(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            String pushBranch = request.commitDirect() ? request.targetBranch() : request.branchName();
+            String commitMsg = "chore(hook-" + request.hookName() + "): " + summary;
+            if (commitMsg.length() > 200) {
+                commitMsg = commitMsg.substring(0, 197) + "...";
+            }
+
+            boolean hasChanges;
+            try {
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                fail(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("Hook '" + request.hookName() + "' completed with no changes needed.");
+                LOG.infof("Hook job %s completed: no changes made", job.getJobId());
+                return;
+            }
+
+            try {
+                workspace.push(pushBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                fail(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            if (request.commitDirect()) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary(summary);
+                LOG.infof("Hook job %s completed: committed directly to %s", job.getJobId(), pushBranch);
+            } else {
+                try {
+                    String title = "chore: " + request.hookName();
+                    String description = "**Automated PR created by hook: " + request.hookName() + "**\n\n" + summary;
+                    String[] prResult = platformService.createPullRequest(
+                            coords.organization(), coords.project(), coords.repository(),
+                            request.branchName(), request.targetBranch(),
+                            title, description);
+                    job.setStatus(JobStatus.AWAITING_APPROVAL);
+                    job.setSummary(summary);
+                    job.setPrUrl(prResult[0]);
+                    job.setPrId(prResult[1]);
+                    LOG.infof("Hook job %s completed: PR %s created", job.getJobId(), prResult[0]);
+                } catch (Exception e) {
+                    fail(job, "Create PR failed: " + e.getMessage());
+                }
+            }
+
+        } catch (Exception e) {
+            fail(job, "Unexpected error in hook execution: " + e.getMessage());
+        }
     }
 
     // ─── Failure handlers ───────────────────────────────────────────────

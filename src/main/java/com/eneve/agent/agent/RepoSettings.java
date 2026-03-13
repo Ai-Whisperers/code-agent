@@ -15,12 +15,13 @@ public record RepoSettings(
         boolean reviewEnabled,
         List<String> ruleNames,
         String reviewPrompt,
+        List<String> disabledHooks,
         Instant createdAt,
         Instant updatedAt
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
         return new RepoSettings(null, workspace, repoSlug, true,
-                List.of(), null, Instant.now(), Instant.now());
+                List.of(), null, List.of(), Instant.now(), Instant.now());
     }
 }
