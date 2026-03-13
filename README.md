@@ -489,6 +489,239 @@ docker run -p 8080:8080 \
   code-agent-runner
 ```
 
+## AWS Deployment (ECS Fargate)
+
+This section covers deploying Code Agent Runner on AWS ECS Fargate with proper security practices.
+
+### Prerequisites
+
+- An AWS account with ECS, ECR, Secrets Manager, and RDS access
+- A VPC with private subnets and a NAT gateway (the agent needs outbound internet for Bitbucket, JIRA, Anthropic, and Aikido APIs)
+- A PostgreSQL database (RDS recommended) accessible from the ECS tasks
+- The Docker image pushed to ECR
+
+### 1. Push the Docker image
+
+Build and push to your ECR registry:
+
+```bash
+aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com
+
+docker buildx build --platform=linux/amd64 -t <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com/julesenergy/code-agent-runner:1.0.0-SNAPSHOT .
+
+docker push <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com/julesenergy/code-agent-runner:1.0.0-SNAPSHOT
+```
+
+**Cross-account ECR pull:** If the image lives in a different account, add a resource policy on the source ECR repository:
+
+```bash
+aws ecr set-repository-policy \
+  --repository-name julesenergy/code-agent-runner \
+  --region eu-central-1 \
+  --policy-text '{
+    "Version": "2012-10-17",
+    "Statement": [{
+      "Sid": "AllowCrossAccountPull",
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::<TARGET_ACCOUNT_ID>:root" },
+      "Action": [
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage",
+        "ecr:BatchCheckLayerAvailability"
+      ]
+    }]
+  }'
+```
+
+### 2. Store secrets in AWS Secrets Manager
+
+Never put credentials in the task definition as plaintext environment variables. Store them in Secrets Manager:
+
+```bash
+aws secretsmanager create-secret \
+  --name code-agent-runner/secrets \
+  --region eu-central-1 \
+  --secret-string '{
+    "ANTHROPIC_API_KEY": "sk-ant-...",
+    "JIRA_API_TOKEN": "ATATT3x...",
+    "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
+    "DATABASE_PASSWORD": "...",
+    "TEAMS_WEBHOOK_URL": "https://...",
+    "AIKIDO_CLIENT_SECRET": "AIK_SECRET_...",
+    "NEXUS_PASSWORD": "..."
+  }'
+```
+
+### 3. Create IAM roles
+
+**Execution role** — used by ECS to pull images and inject secrets:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ecr:GetAuthorizationToken",
+        "ecr:BatchCheckLayerAvailability",
+        "ecr:GetDownloadUrlForLayer",
+        "ecr:BatchGetImage"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": "secretsmanager:GetSecretValue",
+      "Resource": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+The role's trust policy must allow `ecs-tasks.amazonaws.com` to assume it.
+
+**Task role** — only needed if the application calls AWS services at runtime. A minimal empty role is sufficient for most setups.
+
+### 4. Register the task definition
+
+Key settings for the task definition:
+
+| Setting | Recommended value | Notes |
+|---------|-------------------|-------|
+| CPU | 2048 (2 vCPU) | Increase to 4096 if running 3+ concurrent jobs on large repos |
+| Memory | 4096 (4 GB) | Increase to 8192 for heavy workloads |
+| Platform | `LINUX/X86_64` | The Docker image is built for `linux/amd64` |
+| Ephemeral storage | 30–50 GB | Default is 20 GB; increase if cloning many large repos concurrently |
+
+Secrets should reference Secrets Manager using `valueFrom` with the secret ARN and JSON key:
+
+```json
+"secrets": [
+  {
+    "name": "ANTHROPIC_API_KEY",
+    "valueFrom": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/secrets:ANTHROPIC_API_KEY::"
+  },
+  {
+    "name": "JIRA_API_TOKEN",
+    "valueFrom": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/secrets:JIRA_API_TOKEN::"
+  }
+]
+```
+
+Non-sensitive configuration (model names, JIRA base URL, guardrail settings, etc.) can be set as plain `environment` entries.
+
+### 5. Health checks
+
+The application includes the `quarkus-smallrye-health` extension. Configure the ECS health check:
+
+```json
+"healthCheck": {
+  "command": ["CMD-SHELL", "curl -f http://localhost:8080/q/health/ready || exit 1"],
+  "interval": 30,
+  "timeout": 5,
+  "retries": 3,
+  "startPeriod": 60
+}
+```
+
+If using an ALB, point the target group health check at `/q/health/ready`.
+
+### 6. Networking
+
+- Place ECS tasks in **private subnets** with a NAT gateway for outbound access.
+- The agent needs outbound HTTPS (443) to: Bitbucket API, JIRA Cloud, Anthropic API, Aikido API, and optionally Teams/n8n webhooks.
+- Use a **security group** that allows inbound on port 8080 only from your ALB or VPN.
+- The database security group should allow inbound PostgreSQL (5432) only from the ECS task security group.
+
+### 7. Nexus / private Maven mirror
+
+If the repositories the agent builds depend on private artifacts from a Nexus server, the Docker image includes a `settings.xml` that reads Nexus credentials from environment variables at runtime:
+
+| Variable | Description |
+|----------|-------------|
+| `NEXUS_URL` | Full URL to the Nexus repository (e.g. `https://nexus.company.com/repository/maven-public/`) |
+| `NEXUS_USERNAME` | Nexus username |
+| `NEXUS_PASSWORD` | Nexus password (store in Secrets Manager) |
+
+The `settings.xml` configures Nexus as a mirror for all Maven repositories (`<mirrorOf>*</mirrorOf>`), so any `mvn` command the agent runs against target repos will resolve artifacts through your Nexus.
+
+### 8. Service setup
+
+Create an ECS service with:
+
+- **Desired count:** 1 (the agent handles concurrency internally via its job queue)
+- **Deployment:** rolling update (minimum healthy 100%, maximum 200%)
+- **Load balancer:** Application Load Balancer with HTTPS listener if you need to receive webhooks from the public internet
+- **Auto-scaling:** Generally not needed — scale the internal job queue settings instead (`RUN_FIX_MAX_CONCURRENT_JOBS`)
+
+## Bitbucket Configuration
+
+### App Password
+
+The agent uses a Bitbucket App Password for Git operations and the Bitbucket API.
+
+1. Go to **Personal settings > App passwords** (or use a team service account)
+2. Click **Create app password** with these permissions:
+   - **Repositories:** Read, Write
+   - **Pull requests:** Read, Write
+3. Set the credentials in your environment:
+
+| Variable | Value |
+|----------|-------|
+| `BITBUCKET_USER` | `x-token-auth` (for App Passwords) or your Bitbucket username |
+| `BITBUCKET_APP_PASSWORD` | The generated app password |
+| `BITBUCKET_WORKSPACE` | Your Bitbucket workspace slug |
+| `GIT_USERNAME` | `x-token-auth` |
+| `GIT_PASSWORD` | Same as `BITBUCKET_APP_PASSWORD` |
+
+### Webhooks
+
+#### PR auto-review webhook
+
+1. Go to **Repository Settings > Webhooks** (per repo) or configure at workspace level
+2. Click **Add webhook**:
+   - **Title:** `Code Agent PR Review`
+   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request`
+   - **Secret:** A random string (set the same value as `WEBHOOK_SECRET_BITBUCKET`)
+   - **Events:** select `Pull Request: Created` and `Pull Request: Updated`
+3. The agent automatically skips PRs authored by itself (configurable via `REVIEW_WEBHOOK_SKIP_AUTHORS`)
+
+#### PR comment interaction webhook
+
+1. Add another webhook:
+   - **Title:** `Code Agent Comment Reply`
+   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request-comment`
+   - **Secret:** Same as above
+   - **Events:** select `Pull Request: Comment Created`
+2. This enables developers to reply to agent review comments and have the agent respond or fix code
+
+#### JIRA auto-trigger webhook
+
+See [JIRA Webhook (auto-trigger on assignment)](#jira-webhook-auto-trigger-on-assignment) for setup instructions. When the agent creates PRs from JIRA-triggered jobs, it uses the Bitbucket credentials above.
+
+### Security best practices
+
+- **Webhook signature verification:** Always set `WEBHOOK_SECRET_BITBUCKET` in production. The agent verifies incoming webhooks via HMAC-SHA256 using the `X-Hub-Signature` header. Without this, anyone who discovers the webhook URL can trigger jobs.
+- **API key protection:** Set `API_KEY` to require an `X-API-Key` header on all REST endpoints. Health checks and Swagger UI are excluded. Webhook endpoints use their own signature verification instead.
+- **Least-privilege App Password:** Only grant the Bitbucket App Password the minimum permissions needed (repo read/write, PR read/write). Do not grant admin or webhook management scopes.
+- **Secrets management:** Never store API tokens, passwords, or webhook secrets as plaintext environment variables in ECS task definitions. Use AWS Secrets Manager with `valueFrom` references. Rotate credentials periodically.
+- **Network isolation:** Run ECS tasks in private subnets. Expose the agent only through an ALB with HTTPS. Restrict the ALB security group to known IP ranges (Bitbucket webhook IPs, your office VPN, JIRA Cloud IPs).
+- **Blocked paths:** The agent respects `RUN_FIX_BLOCKED_PATHS` to prevent modifications to sensitive directories (security modules, billing code, CI config, `.env` files). Review and adjust this list for your codebase.
+- **Command allowlist:** Only commands matching `RUN_FIX_ALLOWED_COMMANDS` prefixes can be executed by the agent. This prevents arbitrary command execution.
+- **Change limits:** `RUN_FIX_MAX_FILES_CHANGED` and `RUN_FIX_MAX_LINES_CHANGED` cap the blast radius of any single job. The agent aborts if it exceeds these limits.
+- **Job timeout:** `RUN_FIX_JOB_TIMEOUT_MINUTES` (default 30) prevents runaway jobs from consuming resources indefinitely.
+- **Bitbucket IP allowlisting:** If your ALB is public, restrict inbound to [Bitbucket Cloud's IP ranges](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/) for the webhook paths and your own network for the API paths.
+
 ## Cursor Rules Integration
 
 The runner loads coding standards from two sources:
