@@ -35,6 +35,8 @@ RUN apt-get update && \
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
 
+COPY settings.xml /root/.m2/settings.xml
+
 WORKDIR /app
 
 COPY --from=build /build/target/quarkus-app/lib/ lib/
