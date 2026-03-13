@@ -22,7 +22,7 @@
         <surefire-plugin.version>3.5.2</surefire-plugin.version>
 
         <docker.exposePort>8183:8183</docker.exposePort>
-        <docker.file>src/main/docker/Dockerfile.jvm</docker.file>
+        <docker.file>Dockerfile</docker.file>
         <docker.image.name>julesenergy/code-agent-runner</docker.image.name>
         <docker.image.prefix>450019303360.dkr.ecr.eu-central-1.amazonaws.com</docker.image.prefix>
         <docker.image.tag>${project.version}</docker.image.tag>
