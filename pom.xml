@@ -91,6 +91,12 @@
             <artifactId>quarkus-swagger-ui</artifactId>
         </dependency>
 
+        <!-- Health checks -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+
         <!-- PostgreSQL JDBC + Connection Pool + Flyway -->
         <dependency>
             <groupId>io.quarkus</groupId>
