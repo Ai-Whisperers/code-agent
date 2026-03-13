@@ -20,6 +20,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Typed;
 
 /**
  * Azure DevOps REST API 7.1 implementation of {@link GitPlatformService}.
@@ -29,8 +30,13 @@ import jakarta.enterprise.context.ApplicationScoped;
  * <p>
  * Parameter mapping: org = Azure DevOps organization, project = project name,
  * repo = repository name.
+ * <p>
+ * Typed to its concrete class so CDI does not expose it as a {@link GitPlatformService}
+ * bean — the {@link com.eneve.agent.scm.GitPlatformProducer} is the single source
+ * for the interface.
  */
 @ApplicationScoped
+@Typed(AzureDevOpsPlatformService.class)
 public class AzureDevOpsPlatformService implements GitPlatformService {
 
     private static final Logger LOG = Logger.getLogger(AzureDevOpsPlatformService.class);

@@ -8,6 +8,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Optional;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
@@ -41,14 +42,14 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     private static final Logger LOG = Logger.getLogger(WebhookSignatureFilter.class);
     private static final String HMAC_SHA256 = "HmacSHA256";
 
-    @ConfigProperty(name = "webhook.secret.bitbucket", defaultValue = "")
-    String bitbucketSecret;
+    @ConfigProperty(name = "webhook.secret.bitbucket")
+    Optional<String> bitbucketSecret;
 
-    @ConfigProperty(name = "webhook.secret.azuredevops", defaultValue = "")
-    String azureDevOpsSecret;
+    @ConfigProperty(name = "webhook.secret.azuredevops")
+    Optional<String> azureDevOpsSecret;
 
-    @ConfigProperty(name = "webhook.secret.jira", defaultValue = "")
-    String jiraSecret;
+    @ConfigProperty(name = "webhook.secret.jira")
+    Optional<String> jiraSecret;
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
@@ -71,7 +72,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * in the X-Hub-Signature header as "sha256=<hex-encoded-digest>".
      */
     private void verifyBitbucket(ContainerRequestContext ctx) throws IOException {
-        if (isNotConfigured(bitbucketSecret)) return;
+        String secret = bitbucketSecret.orElse("");
+        if (isNotConfigured(secret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature");
         if (signatureHeader == null || !signatureHeader.startsWith("sha256=")) {
@@ -82,7 +84,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
         byte[] body = readAndRestoreBody(ctx);
         String expectedHex = signatureHeader.substring("sha256=".length());
-        String computedHex = hmacSha256Hex(body, bitbucketSecret);
+        String computedHex = hmacSha256Hex(body, secret);
 
         if (!MessageDigest.isEqual(
                 expectedHex.getBytes(StandardCharsets.UTF_8),
@@ -98,7 +100,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * (Basic :secret) or fall back to an X-Azure-Signature HMAC check.
      */
     private void verifyAzureDevOps(ContainerRequestContext ctx) throws IOException {
-        if (isNotConfigured(azureDevOpsSecret)) return;
+        String secret = azureDevOpsSecret.orElse("");
+        if (isNotConfigured(secret)) return;
 
         String authHeader = ctx.getHeaderString("Authorization");
         if (authHeader != null && authHeader.startsWith("Basic ")) {
@@ -107,7 +110,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
                         authHeader.substring("Basic ".length())), StandardCharsets.UTF_8);
                 String password = decoded.contains(":") ? decoded.substring(decoded.indexOf(':') + 1) : decoded;
                 if (MessageDigest.isEqual(
-                        azureDevOpsSecret.getBytes(StandardCharsets.UTF_8),
+                        secret.getBytes(StandardCharsets.UTF_8),
                         password.getBytes(StandardCharsets.UTF_8))) {
                     return;
                 }
@@ -122,7 +125,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
         String signatureHeader = ctx.getHeaderString("X-Azure-Signature");
         if (signatureHeader != null) {
             byte[] body = readAndRestoreBody(ctx);
-            String computedHex = hmacSha256Hex(body, azureDevOpsSecret);
+            String computedHex = hmacSha256Hex(body, secret);
             if (!MessageDigest.isEqual(
                     signatureHeader.getBytes(StandardCharsets.UTF_8),
                     computedHex.getBytes(StandardCharsets.UTF_8))) {
@@ -143,13 +146,13 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * We support both: direct secret comparison and HMAC signature.
      */
     private void verifyJira(ContainerRequestContext ctx) throws IOException {
-        if (isNotConfigured(jiraSecret)) return;
+        String secret = jiraSecret.orElse("");
+        if (isNotConfigured(secret)) return;
 
-        // Strategy 1: JIRA sends the secret directly in X-Hub-Secret
         String hubSecret = ctx.getHeaderString("X-Hub-Secret");
         if (hubSecret != null) {
             if (MessageDigest.isEqual(
-                    jiraSecret.getBytes(StandardCharsets.UTF_8),
+                    secret.getBytes(StandardCharsets.UTF_8),
                     hubSecret.getBytes(StandardCharsets.UTF_8))) {
                 return;
             }
@@ -158,12 +161,11 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             return;
         }
 
-        // Strategy 2: HMAC signature in X-Hub-Signature (same format as Bitbucket)
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature");
         if (signatureHeader != null && signatureHeader.startsWith("sha256=")) {
             byte[] body = readAndRestoreBody(ctx);
             String expectedHex = signatureHeader.substring("sha256=".length());
-            String computedHex = hmacSha256Hex(body, jiraSecret);
+            String computedHex = hmacSha256Hex(body, secret);
 
             if (!MessageDigest.isEqual(
                     expectedHex.getBytes(StandardCharsets.UTF_8),
