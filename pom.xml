@@ -20,6 +20,13 @@
         <quarkus.platform.version>3.17.8</quarkus.platform.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.5.2</surefire-plugin.version>
+
+        <docker.exposePort>8183:8183</docker.exposePort>
+        <docker.file>src/main/docker/Dockerfile.jvm</docker.file>
+        <docker.image.name>julesenergy/code-agent-runner</docker.image.name>
+        <docker.image.prefix>450019303360.dkr.ecr.eu-central-1.amazonaws.com</docker.image.prefix>
+        <docker.image.tag>${project.version}</docker.image.tag>
+
     </properties>
 
     <dependencyManagement>
@@ -151,6 +158,71 @@
                     </systemPropertyVariables>
                 </configuration>
             </plugin>
+            <plugin>
+                <artifactId>maven-deploy-plugin</artifactId>
+                <configuration>
+                    <skip>true</skip>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.0.0</version>
+                <executions>
+                    <execution>
+                        <id>docker-login</id>
+                        <phase>deploy</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>sh</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments>
+                                <argument>-c</argument>
+                                <argument>aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin ${docker.image.prefix}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>docker-build</id>
+                        <phase>deploy</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>docker</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments>
+                                <argument>buildx</argument>
+                                <argument>build</argument>
+                                <argument>--platform=linux/amd64</argument>
+                                <argument>-f</argument>
+                                <argument>${docker.file}</argument>
+                                <argument>-t</argument>
+                                <argument>${docker.image.prefix}/${docker.image.name}:${docker.image.tag}</argument>
+                                <argument>.</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>docker-deploy</id>
+                        <phase>deploy</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <executable>docker</executable>
+                            <workingDirectory>${project.basedir}</workingDirectory>
+                            <arguments>
+                                <argument>push</argument>
+                                <argument>${docker.image.prefix}/${docker.image.name}:${docker.image.tag}</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
         </plugins>
     </build>
 </project>

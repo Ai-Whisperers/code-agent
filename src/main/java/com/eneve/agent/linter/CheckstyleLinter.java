@@ -62,12 +62,12 @@ public class CheckstyleLinter implements LinterRunner {
             if (!Files.exists(reportFile)) {
                 LOG.warnf("Checkstyle report not found at %s (exit %d)", reportFile, proc.exitValue());
                 return new LinterResult(name(), Collections.emptyList(), false,
-                        "Report file not generated. Output:\n" + truncate(output));
+                        "Report file not generated. Output:\n" + LinterUtils.truncate(output));
             }
 
             List<LinterFinding> findings = parseReport(reportFile, workspaceRoot);
             LOG.infof("Checkstyle found %d issues", findings.size());
-            return new LinterResult(name(), findings, true, truncate(output));
+            return new LinterResult(name(), findings, true, LinterUtils.truncate(output));
 
         } catch (IOException | InterruptedException e) {
             LOG.warnf("Checkstyle execution failed: %s", e.getMessage());
@@ -87,12 +87,12 @@ public class CheckstyleLinter implements LinterRunner {
             for (int i = 0; i < fileNodes.getLength(); i++) {
                 Element fileEl = (Element) fileNodes.item(i);
                 String absolutePath = fileEl.getAttribute("name");
-                String relativePath = toRelativePath(absolutePath, workspaceRoot);
+                String relativePath = LinterUtils.toRelativePath(absolutePath, workspaceRoot);
 
                 NodeList errors = fileEl.getElementsByTagName("error");
                 for (int j = 0; j < errors.getLength(); j++) {
                     Element err = (Element) errors.item(j);
-                    int line = parseIntSafe(err.getAttribute("line"));
+                    int line = LinterUtils.parseIntSafe(err.getAttribute("line"));
                     String severity = mapSeverity(err.getAttribute("severity"));
                     String source = err.getAttribute("source");
                     String rule = source.contains(".") ? source.substring(source.lastIndexOf('.') + 1) : source;
@@ -116,26 +116,4 @@ public class CheckstyleLinter implements LinterRunner {
         };
     }
 
-    static String toRelativePath(String absolutePath, Path workspaceRoot) {
-        try {
-            Path abs = Path.of(absolutePath);
-            if (abs.startsWith(workspaceRoot)) {
-                return workspaceRoot.relativize(abs).toString();
-            }
-        } catch (Exception ignored) { }
-        return absolutePath;
-    }
-
-    static int parseIntSafe(String value) {
-        try {
-            return Integer.parseInt(value);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-
-    static String truncate(String text) {
-        if (text == null) return "";
-        return text.length() > 2000 ? text.substring(0, 2000) + "..." : text;
-    }
 }
