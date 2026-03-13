@@ -9,12 +9,33 @@ RUN mvn -B dependency:go-offline -q
 COPY src src
 RUN mvn -B package -DskipTests -q
 
-# Stage 2: Runtime image with JRE + Git + Maven (needed at runtime for cloning and mvn test)
+# Stage 2: Runtime image with JRE + Git + Maven + Node.js + .NET SDK
 FROM eclipse-temurin:21-jre
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git maven && \
+    apt-get install -y --no-install-recommends git maven curl ca-certificates gnupg && \
+    # Node.js 20.x (for ESLint)
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+        > /etc/apt/sources.list.d/nodesource.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends nodejs && \
+    # .NET SDK 8.0 (for dotnet format)
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
+    chmod +x /tmp/dotnet-install.sh && \
+    /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/share/dotnet && \
+    ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet && \
+    rm /tmp/dotnet-install.sh && \
+    # Cleanup
+    apt-get purge -y gnupg && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
+
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
+ENV DOTNET_NOLOGO=1
+
+COPY settings.xml /root/.m2/settings.xml
 
 WORKDIR /app
 

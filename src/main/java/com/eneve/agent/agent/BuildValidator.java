@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
@@ -20,9 +22,13 @@ public class BuildValidator {
     long timeoutMinutes;
 
     public void validate(WorkspaceContext workspace) throws Exception {
-        Path gradleFile = workspace.getRoot().resolve("build.gradle");
-        String command = Files.exists(gradleFile) ? "gradle test" : "mvn test";
+        String command = detectTestCommand(workspace.getRoot());
+        if (command == null) {
+            LOG.info("No recognized test command found, skipping build validation");
+            return;
+        }
 
+        LOG.infof("Build validation using: %s", command);
         ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);
@@ -39,5 +45,39 @@ public class BuildValidator {
             throw new RuntimeException("Build validation failed (exit " + proc.exitValue() + "):\n" + tail);
         }
         LOG.info("Build validation passed");
+    }
+
+    private String detectTestCommand(Path root) {
+        if (Files.exists(root.resolve("pom.xml"))) {
+            return "mvn test";
+        }
+        if (Files.exists(root.resolve("build.gradle")) || Files.exists(root.resolve("build.gradle.kts"))) {
+            return "gradle test";
+        }
+        if (hasDotnetProject(root)) {
+            return "dotnet test";
+        }
+        if (Files.exists(root.resolve("package.json")) && hasNpmTestScript(root)) {
+            return "npm test";
+        }
+        return null;
+    }
+
+    private static boolean hasDotnetProject(Path root) {
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(root, "*.{sln,csproj}")) {
+            return stream.iterator().hasNext();
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean hasNpmTestScript(Path root) {
+        try {
+            String content = Files.readString(root.resolve("package.json"));
+            if (!content.contains("\"test\"")) return false;
+            return !content.contains("\"test\": \"echo \\\"Error: no test specified\\\"");
+        } catch (IOException e) {
+            return false;
+        }
     }
 }

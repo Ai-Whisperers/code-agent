@@ -19,6 +19,12 @@ public class LinterConfig {
     @ConfigProperty(name = "linter.spotbugs.enabled", defaultValue = "true")
     boolean spotbugsEnabled;
 
+    @ConfigProperty(name = "linter.eslint.enabled", defaultValue = "true")
+    boolean eslintEnabled;
+
+    @ConfigProperty(name = "linter.dotnet-format.enabled", defaultValue = "true")
+    boolean dotnetFormatEnabled;
+
     @ConfigProperty(name = "linter.max-fix-iterations", defaultValue = "2")
     int maxFixIterations;
 
@@ -32,6 +38,8 @@ public class LinterConfig {
     public boolean isCheckstyleEnabled() { return checkstyleEnabled; }
     public boolean isPmdEnabled() { return pmdEnabled; }
     public boolean isSpotbugsEnabled() { return spotbugsEnabled; }
+    public boolean isEslintEnabled() { return eslintEnabled; }
+    public boolean isDotnetFormatEnabled() { return dotnetFormatEnabled; }
     public int getMaxFixIterations() { return maxFixIterations; }
     public boolean isFailOnNewIssues() { return failOnNewIssues; }
     public long getTimeoutMinutes() { return timeoutMinutes; }
@@ -41,6 +49,8 @@ public class LinterConfig {
             case "checkstyle" -> checkstyleEnabled;
             case "pmd" -> pmdEnabled;
             case "spotbugs" -> spotbugsEnabled;
+            case "eslint" -> eslintEnabled;
+            case "dotnet-format" -> dotnetFormatEnabled;
             default -> false;
         };
     }

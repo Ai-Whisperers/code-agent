@@ -20,14 +20,20 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Typed;
 
 /**
  * Bitbucket Cloud REST API 2.0 implementation of {@link GitPlatformService}.
  * <p>
  * The {@code org} parameter maps to the Bitbucket workspace and {@code repo}
  * maps to the repository slug. The {@code project} parameter is ignored.
+ * <p>
+ * Typed to its concrete class so CDI does not expose it as a {@link GitPlatformService}
+ * bean — the {@link com.eneve.agent.scm.GitPlatformProducer} is the single source
+ * for the interface.
  */
 @ApplicationScoped
+@Typed(BitbucketPlatformService.class)
 public class BitbucketPlatformService implements GitPlatformService {
 
     private static final Logger LOG = Logger.getLogger(BitbucketPlatformService.class);

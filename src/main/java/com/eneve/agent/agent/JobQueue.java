@@ -82,6 +82,7 @@ public class JobQueue {
             case FIX_PR -> "fix-PR-" + job.getFixPrRequest().prId();
             case REPLY -> "reply-comment-" + job.getReplyRequest().parentCommentId();
             case FIX_COMMENT -> "fix-comment-" + job.getReplyRequest().parentCommentId();
+            case HOOK -> "hook-" + (job.getHookRequest() != null ? job.getHookRequest().hookName() : "unknown");
             default -> job.getRequest() != null ? job.getRequest().jiraKey() : "unknown";
         };
         LOG.infof("Job %s (%s) queued for %s (queue depth: %d)", job.getJobId(),
@@ -133,6 +134,7 @@ public class JobQueue {
                             case FIX_PR -> agentRunner.executeFixPr(job);
                             case REPLY -> agentRunner.executeReply(job);
                             case FIX_COMMENT -> agentRunner.executeFixComment(job);
+                            case HOOK -> agentRunner.executeHook(job);
                             default -> agentRunner.execute(job);
                         }
                     } catch (Exception e) {

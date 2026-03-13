@@ -5,6 +5,7 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.agent.RepoSettingsStore;
@@ -46,6 +47,7 @@ public class BitbucketWebhookResource {
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject RepoSettingsStore repoSettingsStore;
+    @Inject HookEvaluator hookEvaluator;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -81,7 +83,10 @@ public class BitbucketWebhookResource {
             String event = eventKey != null ? eventKey : "";
             LOG.infof("Bitbucket webhook received: %s", event);
 
-            if (!event.equals("pullrequest:created") && !event.equals("pullrequest:updated")) {
+            boolean isCreateOrUpdate = event.equals("pullrequest:created") || event.equals("pullrequest:updated");
+            boolean isFulfilled = event.equals("pullrequest:fulfilled");
+
+            if (!isCreateOrUpdate && !isFulfilled) {
                 return ok("ignored", "Unsupported event: " + event);
             }
 
@@ -100,19 +105,34 @@ public class BitbucketWebhookResource {
             }
 
             String[] repoParts = repoFullName.split("/", 2);
+            String repoUrl = "https://bitbucket.org/" + repoFullName + ".git";
+
+            if (isFulfilled) {
+                LOG.infof("Bitbucket webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
+                        prId, sourceBranch, destBranch, repoFullName);
+                if (repoParts.length == 2) {
+                    var jobIds = hookEvaluator.evaluate(
+                            repoParts[0], repoParts[1], repoUrl, event, destBranch);
+                    return Response.ok(Map.of(
+                            "action", "hooks_evaluated",
+                            "hooksTriggered", jobIds.size(),
+                            "jobIds", jobIds
+                    )).build();
+                }
+                return ok("ignored", "Could not parse workspace/repo from " + repoFullName);
+            }
+
             if (repoParts.length == 2
                     && !repoSettingsStore.isReviewEnabled(repoParts[0], repoParts[1])) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s — review disabled for %s", prId, repoFullName);
                 return ok("skipped", "Review disabled for " + repoFullName);
             }
 
-            // Skip PRs authored by the agent itself
             if (shouldSkipAuthor(prAuthor)) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s by '%s' (matches skip-authors)", prId, prAuthor);
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
             }
 
-            // Optional title keyword filter
             if (!requireTitleKeyword.isBlank()
                     && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s — title does not contain '%s'",
@@ -120,9 +140,6 @@ public class BitbucketWebhookResource {
                 return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
             }
 
-            String repoUrl = "https://bitbucket.org/" + repoFullName + ".git";
-
-            // Try to extract a JIRA key from the PR title
             String jiraKey = extractJiraKey(prTitle);
 
             LOG.infof("Bitbucket webhook: triggering review for PR #%s (%s -> %s) on %s",

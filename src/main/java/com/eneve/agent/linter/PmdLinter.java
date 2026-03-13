@@ -61,12 +61,12 @@ public class PmdLinter implements LinterRunner {
             if (!Files.exists(reportFile)) {
                 LOG.warnf("PMD report not found at %s (exit %d)", reportFile, proc.exitValue());
                 return new LinterResult(name(), Collections.emptyList(), false,
-                        "Report file not generated. Output:\n" + CheckstyleLinter.truncate(output));
+                        "Report file not generated. Output:\n" + LinterUtils.truncate(output));
             }
 
             List<LinterFinding> findings = parseReport(reportFile, workspaceRoot);
             LOG.infof("PMD found %d issues", findings.size());
-            return new LinterResult(name(), findings, true, CheckstyleLinter.truncate(output));
+            return new LinterResult(name(), findings, true, LinterUtils.truncate(output));
 
         } catch (IOException | InterruptedException e) {
             LOG.warnf("PMD execution failed: %s", e.getMessage());
@@ -86,12 +86,12 @@ public class PmdLinter implements LinterRunner {
             for (int i = 0; i < fileNodes.getLength(); i++) {
                 Element fileEl = (Element) fileNodes.item(i);
                 String absolutePath = fileEl.getAttribute("name");
-                String relativePath = CheckstyleLinter.toRelativePath(absolutePath, workspaceRoot);
+                String relativePath = LinterUtils.toRelativePath(absolutePath, workspaceRoot);
 
                 NodeList violations = fileEl.getElementsByTagName("violation");
                 for (int j = 0; j < violations.getLength(); j++) {
                     Element v = (Element) violations.item(j);
-                    int line = CheckstyleLinter.parseIntSafe(v.getAttribute("beginline"));
+                    int line = LinterUtils.parseIntSafe(v.getAttribute("beginline"));
                     String rule = v.getAttribute("rule");
                     String message = v.getTextContent().trim();
                     String severity = mapPriority(v.getAttribute("priority"));
@@ -106,7 +106,7 @@ public class PmdLinter implements LinterRunner {
     }
 
     private static String mapPriority(String priority) {
-        int p = CheckstyleLinter.parseIntSafe(priority);
+        int p = LinterUtils.parseIntSafe(priority);
         if (p <= 2) return LinterFinding.SEVERITY_ERROR;
         if (p <= 3) return LinterFinding.SEVERITY_WARNING;
         return LinterFinding.SEVERITY_INFO;

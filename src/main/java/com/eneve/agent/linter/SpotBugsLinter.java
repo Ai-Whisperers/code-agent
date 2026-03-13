@@ -76,12 +76,12 @@ public class SpotBugsLinter implements LinterRunner {
             if (!Files.exists(reportFile)) {
                 LOG.warnf("SpotBugs report not found at %s (exit %d)", reportFile, proc.exitValue());
                 return new LinterResult(name(), Collections.emptyList(), false,
-                        "Report file not generated. Output:\n" + CheckstyleLinter.truncate(output));
+                        "Report file not generated. Output:\n" + LinterUtils.truncate(output));
             }
 
             List<LinterFinding> findings = parseReport(reportFile, workspaceRoot);
             LOG.infof("SpotBugs found %d issues", findings.size());
-            return new LinterResult(name(), findings, true, CheckstyleLinter.truncate(output));
+            return new LinterResult(name(), findings, true, LinterUtils.truncate(output));
 
         } catch (IOException | InterruptedException e) {
             LOG.warnf("SpotBugs execution failed: %s", e.getMessage());
@@ -142,7 +142,7 @@ public class SpotBugsLinter implements LinterRunner {
                     String sourcePath = sl.getAttribute("sourcepath");
                     if (sourcePath != null && !sourcePath.isEmpty()) {
                         file = "src/main/java/" + sourcePath;
-                        line = CheckstyleLinter.parseIntSafe(sl.getAttribute("start"));
+                        line = LinterUtils.parseIntSafe(sl.getAttribute("start"));
                         break;
                     }
                 }
@@ -157,7 +157,7 @@ public class SpotBugsLinter implements LinterRunner {
     }
 
     private static String mapPriority(String priority) {
-        int p = CheckstyleLinter.parseIntSafe(priority);
+        int p = LinterUtils.parseIntSafe(priority);
         if (p <= 1) return LinterFinding.SEVERITY_ERROR;
         if (p <= 2) return LinterFinding.SEVERITY_WARNING;
         return LinterFinding.SEVERITY_INFO;

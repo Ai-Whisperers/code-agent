@@ -9,6 +9,7 @@ public class JobRecord {
     private final ReviewPrRequest reviewRequest;
     private final FixPrRequest fixPrRequest;
     private final ReplyCommentRequest replyRequest;
+    private final HookJobRequest hookRequest;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -25,6 +26,7 @@ public class JobRecord {
         this.reviewRequest = null;
         this.fixPrRequest = null;
         this.replyRequest = null;
+        this.hookRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -36,6 +38,7 @@ public class JobRecord {
         this.reviewRequest = reviewRequest;
         this.fixPrRequest = null;
         this.replyRequest = null;
+        this.hookRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -47,6 +50,7 @@ public class JobRecord {
         this.reviewRequest = null;
         this.fixPrRequest = fixPrRequest;
         this.replyRequest = null;
+        this.hookRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -62,7 +66,20 @@ public class JobRecord {
         this.reviewRequest = null;
         this.fixPrRequest = null;
         this.replyRequest = replyRequest;
+        this.hookRequest = null;
         this.jobType = jobType;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, HookJobRequest hookRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = hookRequest;
+        this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -72,6 +89,7 @@ public class JobRecord {
     public ReviewPrRequest getReviewRequest() { return reviewRequest; }
     public FixPrRequest getFixPrRequest() { return fixPrRequest; }
     public ReplyCommentRequest getReplyRequest() { return replyRequest; }
+    public HookJobRequest getHookRequest() { return hookRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 

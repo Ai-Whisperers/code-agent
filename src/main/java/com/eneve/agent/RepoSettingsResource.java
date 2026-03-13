@@ -94,8 +94,9 @@ public class RepoSettingsResource {
         boolean enabled = request.reviewEnabled() != null ? request.reviewEnabled() : true;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
+        List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
 
-        settingsStore.upsert(workspace, repoSlug, enabled, ruleNames, prompt);
+        settingsStore.upsert(workspace, repoSlug, enabled, ruleNames, prompt, disabledHooks);
 
         return Response.ok(Map.of(
                 "action", "saved",
@@ -187,6 +188,7 @@ public class RepoSettingsResource {
     public record UpsertRepoSettingsRequest(
             Boolean reviewEnabled,
             List<String> ruleNames,
-            String reviewPrompt
+            String reviewPrompt,
+            List<String> disabledHooks
     ) {}
 }
