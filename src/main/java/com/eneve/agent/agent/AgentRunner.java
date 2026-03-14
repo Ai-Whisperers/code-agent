@@ -265,8 +265,10 @@ public class AgentRunner {
 
             // If the webhook told us the current HEAD SHA, check whether we already reviewed it.
             // This avoids re-running the LLM when a non-commit MR update fires (title, labels, etc.).
+            // Bitbucket sends 12-char short SHAs; stored SHAs are always the full 40-char rev-parse output.
+            // Use a prefix match so both short and full SHAs compare correctly.
             String lastReviewedSha = ReviewCommentProcessor.extractLastReviewedSha(existingAgentComments);
-            if (request.headCommitSha() != null && request.headCommitSha().equals(lastReviewedSha)) {
+            if (request.headCommitSha() != null && shaAlreadyReviewed(request.headCommitSha(), lastReviewedSha)) {
                 LOG.infof("Review: PR #%s already reviewed at commit %s — skipping",
                         request.prId(), lastReviewedSha);
                 job.setStatus(JobStatus.SUCCESS);
@@ -1089,6 +1091,19 @@ public class AgentRunner {
         RunResult result = buildResult(job, false);
         teamsNotifier.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+    }
+
+    /**
+     * Returns true when the webhook-supplied SHA (which may be a short prefix, e.g. Bitbucket's
+     * 12-char hash) matches the full SHA stored in the reviewed-up-to comment marker.
+     */
+    private static boolean shaAlreadyReviewed(String webhookSha, String storedSha) {
+        if (webhookSha == null || storedSha == null) return false;
+        if (webhookSha.equals(storedSha)) return true;
+        // Short SHA from webhook is a prefix of the stored full SHA
+        if (webhookSha.length() < storedSha.length()) return storedSha.startsWith(webhookSha);
+        // Stored SHA is somehow shorter (unusual but safe to handle)
+        return webhookSha.startsWith(storedSha);
     }
 
     private void failReview(JobRecord job, String message) {

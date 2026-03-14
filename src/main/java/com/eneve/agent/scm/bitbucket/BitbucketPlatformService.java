@@ -143,6 +143,20 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     @Override
+    public void updatePrComment(String org, String project, String repo, String prId,
+                                long commentId, String commentBody) {
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + prId + "/comments/" + commentId;
+        String body = """
+                {
+                  "content": { "raw": "%s" }
+                }
+                """.formatted(escapeJson(commentBody));
+        putAndReturn(path, body, "update comment #" + commentId + " on PR #" + prId);
+        LOG.infof("Updated review comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
+    }
+
+    @Override
     public long addInlinePrComment(String org, String project, String repo, String prId,
                                    String filePath, int line, String commentBody) {
         String path = "/repositories/" + org + "/" + repo
@@ -352,13 +366,21 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private String postAndReturn(String path, String body, String operation) {
+        return sendAndReturn(path, body, "POST", operation);
+    }
+
+    private String putAndReturn(String path, String body, String operation) {
+        return sendAndReturn(path, body, "PUT", operation);
+    }
+
+    private String sendAndReturn(String path, String body, String method, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .method(method, HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());

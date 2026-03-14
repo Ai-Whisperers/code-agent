@@ -144,6 +144,19 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     @Override
+    public void updatePrComment(String org, String project, String repo, String prId,
+                                long commentId, String commentBody) {
+        String projectPath = encodedProjectPath(org, repo);
+        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+                + "/notes/" + commentId;
+        String body = """
+                { "body": "%s" }
+                """.formatted(escapeJson(commentBody));
+        putAndReturn(url, body, "update note #" + commentId + " on MR !" + prId);
+        LOG.infof("Updated review note %d on MR !%s in %s/%s", commentId, prId, org, repo);
+    }
+
+    @Override
     public long addInlinePrComment(String org, String project, String repo, String prId,
                                    String filePath, int line, String commentBody) {
         String projectPath = encodedProjectPath(org, repo);
