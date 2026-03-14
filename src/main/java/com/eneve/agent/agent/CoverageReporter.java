@@ -31,7 +31,7 @@ public class CoverageReporter {
     private static final Logger LOG = Logger.getLogger(CoverageReporter.class);
     private static final String JACOCO_REPORT_PATH = "target/site/jacoco/jacoco.xml";
 
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
+    @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
     long timeoutMinutes;
 
     // ─── Public API ──────────────────────────────────────────────────────

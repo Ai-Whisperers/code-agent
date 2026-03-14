@@ -7,5 +7,6 @@ public enum JobType {
     REPLY,
     FIX_COMMENT,
     HOOK,
-    GENERATE_TESTS
+    GENERATE_TESTS,
+    GENERATE_DOCS
 }

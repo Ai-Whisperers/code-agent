@@ -16,7 +16,9 @@ import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
+import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
@@ -68,6 +70,8 @@ public class AgentRunner {
     @Inject CodeGraphQueryService codeGraphQueryService;
     @Inject PrSummaryGenerator prSummaryGenerator;
     @Inject CoverageReporter coverageReporter;
+    @Inject ConfluenceService confluenceService;
+    @Inject DocsEmbeddingService docsEmbeddingService;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -86,6 +90,12 @@ public class AgentRunner {
 
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
+
+    @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
+    int generateTestsMaxIterations;
+
+    @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
+    long generateTestsTimeoutMinutes;
 
     @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
     boolean prSummaryEnabled;
@@ -925,7 +935,7 @@ public class AgentRunner {
             LOG.infof("GenerateTests: cloning %s/%s (branch: %s)", coords.organization(), coords.repository(), testBranch);
             try {
                 workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
-                        testBranch, jobTimeoutMinutes);
+                        testBranch, generateTestsTimeoutMinutes);
             } catch (Exception e) {
                 failGenerateTests(job, "Clone/branch failed: " + e.getMessage());
                 return;
@@ -957,7 +967,7 @@ public class AgentRunner {
             String summary;
             try {
                 summary = toolUseLoop.run(systemPrompt, workspace,
-                        job.getJobId(), job.getJobType().name());
+                        generateTestsMaxIterations, job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 failGenerateTests(job, "Agent loop error: " + e.getMessage());
                 return;
@@ -1012,7 +1022,7 @@ public class AgentRunner {
             }
 
             try {
-                workspace.push(testBranch, jobTimeoutMinutes);
+                workspace.push(testBranch, generateTestsTimeoutMinutes);
             } catch (Exception e) {
                 failGenerateTests(job, "Push failed: " + e.getMessage());
                 return;
@@ -1227,6 +1237,155 @@ public class AgentRunner {
 
     private String resolveWebhookUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultN8nWebhookUrl;
+    }
+
+    // ─── Generate Docs ───────────────────────────────────────────────────
+
+    public void executeGenerateDocs(JobRecord job) {
+        GenerateDocsRequest request = job.getGenerateDocsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        LOG.infof("GenerateDocs job %s starting for %s", job.getJobId(), request.repoUrl());
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            fail(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        String ws = coords.organization();
+        String repoSlug = coords.repository();
+
+        RepoSettings settings = repoSettingsStore.find(ws, repoSlug)
+                .orElse(RepoSettings.defaults(ws, repoSlug));
+
+        if (!settings.docsEnabled()) {
+            fail(job, "Documentation generation is disabled for " + ws + "/" + repoSlug);
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String targetBranch = request.targetBranchOrDefault();
+
+            if (request.commitDirect()) {
+                try {
+                    workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone failed: " + e.getMessage());
+                    return;
+                }
+            } else {
+                try {
+                    workspace.cloneAndCreateBranch(authUrl, targetBranch,
+                            request.branchName(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone/branch failed: " + e.getMessage());
+                    return;
+                }
+            }
+
+            configureGitIfNeeded(workspace);
+
+            workspace.putMetadata("workspace", ws);
+            workspace.putMetadata("repoSlug", repoSlug);
+
+            boolean confluenceActive = false;
+            String confluenceSpaceKey = settings.confluenceSpaceKey();
+            String confluenceParentPageId = settings.confluenceParentPageId();
+
+            if (confluenceService.isEnabled() && confluenceSpaceKey != null && !confluenceSpaceKey.isBlank()) {
+                Boolean override = request.publishConfluence();
+                if (override == null || override) {
+                    confluenceActive = true;
+                    workspace.putMetadata("confluenceSpaceKey", confluenceSpaceKey);
+                    if (confluenceParentPageId != null && !confluenceParentPageId.isBlank()) {
+                        workspace.putMetadata("confluenceParentPageId", confluenceParentPageId);
+                    }
+                }
+            }
+
+            String systemPrompt = promptBuilder.buildGenerateDocsPrompt(
+                    request, workspace, settings, confluenceActive, confluenceSpaceKey);
+
+            var tools = confluenceActive
+                    ? ToolDefinitions.docsGeneration()
+                    : ToolDefinitions.docsGenerationNoConfluence();
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace, tools,
+                        "Please generate comprehensive documentation for this repository. "
+                                + "Start by exploring the project structure, then create all doc files.",
+                        job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                fail(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            try {
+                docsEmbeddingService.indexDocs(workspace, ws, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Doc embedding failed (non-fatal): %s", e.getMessage());
+            }
+
+            String pushBranch = request.commitDirect() ? targetBranch : request.branchName();
+            String commitMsg = "docs: generate project documentation";
+
+            boolean hasChanges;
+            try {
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                fail(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("Documentation generation completed with no new files.");
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: no changes made", job.getJobId());
+                return;
+            }
+
+            try {
+                workspace.push(pushBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                fail(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            if (request.commitDirect()) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary(summary);
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: committed to %s", job.getJobId(), pushBranch);
+            } else {
+                try {
+                    String title = "docs: generate project documentation";
+                    String description = "**Automated documentation generated by code-agent**\n\n" + summary;
+                    String[] prResult = platformService.createPullRequest(
+                            coords.organization(), coords.project(), coords.repository(),
+                            request.branchName(), targetBranch,
+                            title, description);
+                    job.setStatus(JobStatus.AWAITING_APPROVAL);
+                    job.setSummary(summary);
+                    job.setPrUrl(prResult[0]);
+                    job.setPrId(prResult[1]);
+                    jobStore.update(job);
+                    LOG.infof("GenerateDocs job %s completed: PR %s created", job.getJobId(), prResult[0]);
+                } catch (Exception e) {
+                    fail(job, "Create PR failed: " + e.getMessage());
+                }
+            }
+
+        } catch (Exception e) {
+            fail(job, "Unexpected error in doc generation: " + e.getMessage());
+        }
     }
 
     // ─── Execute Hook ────────────────────────────────────────────────────

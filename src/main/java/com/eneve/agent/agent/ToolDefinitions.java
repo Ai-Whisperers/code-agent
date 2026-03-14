@@ -36,6 +36,33 @@ public final class ToolDefinitions {
         );
     }
 
+    public static List<ToolUnion> docsGeneration() {
+        return List.of(
+                ToolUnion.ofTool(readFile()),
+                ToolUnion.ofTool(writeFile()),
+                ToolUnion.ofTool(listFiles()),
+                ToolUnion.ofTool(searchCode()),
+                ToolUnion.ofTool(queryCodeGraph()),
+                ToolUnion.ofTool(semanticSearch()),
+                ToolUnion.ofTool(runCommand()),
+                ToolUnion.ofTool(fetchUrl()),
+                ToolUnion.ofTool(publishConfluence())
+        );
+    }
+
+    public static List<ToolUnion> docsGenerationNoConfluence() {
+        return List.of(
+                ToolUnion.ofTool(readFile()),
+                ToolUnion.ofTool(writeFile()),
+                ToolUnion.ofTool(listFiles()),
+                ToolUnion.ofTool(searchCode()),
+                ToolUnion.ofTool(queryCodeGraph()),
+                ToolUnion.ofTool(semanticSearch()),
+                ToolUnion.ofTool(runCommand()),
+                ToolUnion.ofTool(fetchUrl())
+        );
+    }
+
     private static Tool readFile() {
         return Tool.builder()
                 .name("read_file")
@@ -198,6 +225,38 @@ public final class ToolDefinitions {
                                 )))
                                 .build())
                         .addRequired("url")
+                        .build())
+                .build();
+    }
+
+    private static Tool publishConfluence() {
+        return Tool.builder()
+                .name("publish_confluence")
+                .description("Publish a Markdown document as a Confluence page. "
+                        + "Creates a new page or updates an existing one with the same title. "
+                        + "Markdown is automatically converted to Confluence storage format, "
+                        + "including Mermaid diagrams rendered via the Mermaid macro.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("title", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The title for the Confluence page"
+                                )))
+                                .putAdditionalProperty("markdown_content", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The full Markdown content to publish"
+                                )))
+                                .putAdditionalProperty("space_key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Confluence space key (optional, defaults to repo settings)"
+                                )))
+                                .putAdditionalProperty("parent_page_id", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Parent page ID to nest under (optional, defaults to repo settings)"
+                                )))
+                                .build())
+                        .addRequired("title")
+                        .addRequired("markdown_content")
                         .build())
                 .build();
     }

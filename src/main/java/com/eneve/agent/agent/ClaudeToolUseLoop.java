@@ -66,7 +66,7 @@ public class ClaudeToolUseLoop {
     public String run(String systemPrompt, WorkspaceContext workspace,
                       List<ToolUnion> tools, String initialUserMessage,
                       String jobId, String jobType) {
-        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType);
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType, maxIterations);
     }
 
     /**
@@ -77,12 +77,24 @@ public class ClaudeToolUseLoop {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(),
                 "Please complete the task described in the system prompt. "
                         + "Start by listing the repository structure, then proceed.",
-                jobId, jobType);
+                jobId, jobType, maxIterations);
+    }
+
+    /**
+     * Run the agentic tool-use loop with default tools and a per-call iteration cap override.
+     * Use this for job types that require more iterations than the global default.
+     */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      int maxIterationsOverride, String jobId, String jobType) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(),
+                "Please complete the task described in the system prompt. "
+                        + "Start by listing the repository structure, then proceed.",
+                jobId, jobType, maxIterationsOverride);
     }
 
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
-                         String jobId, String jobType) {
+                         String jobId, String jobType, int iterationCap) {
         AnthropicClient client = AnthropicOkHttpClient.builder()
                 .apiKey(apiKey)
                 .build();
@@ -93,8 +105,8 @@ public class ClaudeToolUseLoop {
                 .content(initialUserMessage)
                 .build());
 
-        for (int iteration = 0; iteration < maxIterations; iteration++) {
-            LOG.infof("Agent loop iteration %d/%d", iteration + 1, maxIterations);
+        for (int iteration = 0; iteration < iterationCap; iteration++) {
+            LOG.infof("Agent loop iteration %d/%d", iteration + 1, iterationCap);
 
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(Model.of(modelName))
@@ -191,7 +203,7 @@ public class ClaudeToolUseLoop {
             }
         }
 
-        LOG.warnf("Agent loop hit max iterations (%d)", maxIterations);
+        LOG.warnf("Agent loop hit max iterations (%d)", iterationCap);
         return "Agent loop reached maximum iterations without completing. Partial work may exist.";
     }
 

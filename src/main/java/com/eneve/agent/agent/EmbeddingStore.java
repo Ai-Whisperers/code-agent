@@ -149,6 +149,20 @@ public class EmbeddingStore {
         }
     }
 
+    public void deleteBySymbolType(String workspace, String repoSlug, String symbolType) {
+        String sql = "DELETE FROM code_embeddings WHERE workspace = ? AND repo_slug = ? AND symbol_type = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            ps.setString(3, symbolType);
+            int rows = ps.executeUpdate();
+            LOG.debugf("Deleted %d embeddings with symbol_type=%s for %s/%s", rows, symbolType, workspace, repoSlug);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to delete embeddings by symbol_type for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+    }
+
     public void deleteForFile(String workspace, String repoSlug, String filePath) {
         String sql = "DELETE FROM code_embeddings WHERE workspace = ? AND repo_slug = ? AND file_path = ?";
         try (Connection conn = dataSource.getConnection();

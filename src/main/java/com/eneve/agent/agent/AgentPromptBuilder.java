@@ -12,6 +12,7 @@ import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
@@ -337,6 +338,118 @@ public class AgentPromptBuilder {
                 humanMessage != null ? humanMessage : "(no additional instructions)",
                 threadSection.isBlank() ? "(no previous thread)" : threadSection
         );
+    }
+
+    public String buildGenerateDocsPrompt(GenerateDocsRequest request, WorkspaceContext workspace,
+                                          RepoSettings settings, boolean confluenceActive,
+                                          String confluenceSpaceKey) {
+        String rulesRepoUrl = resolveRulesRepoUrl(null);
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String confluenceSection = "";
+        if (confluenceActive) {
+            confluenceSection = """
+
+                    ## Confluence Publishing
+                    After writing each documentation file, publish it to Confluence using the `publish_confluence` tool.
+                    - Use the document title as the Confluence page title (e.g. "Architecture Overview", "API Documentation").
+                    - Pass the full Markdown content as `markdown_content` — it will be converted automatically.
+                    - The space key and parent page are pre-configured; you do not need to supply them.
+                    - If a page with the same title already exists, it will be updated.
+                    """;
+        }
+
+        String docsInstructions = """
+                You are generating comprehensive documentation for a software project.
+                Your goal is to explore the entire codebase and produce high-quality Markdown documentation
+                in the `docs/` folder at the repository root.
+
+                ## Discovery (do this FIRST)
+                1. Use `list_files` to understand the overall project structure (src layout, config files, build system).
+                2. Read `pom.xml` or `build.gradle` to identify the tech stack, frameworks, and dependencies.
+                3. Read `application.properties` / `application.yml` or `.env` for configuration reference.
+                4. Read key source files: controllers/endpoints, services, models/entities, database migrations.
+                5. Use `search_code` and `query_code_graph` to understand class hierarchies and call chains.
+                6. Use `semantic_search` to find related patterns if vector indexing is available.
+
+                ## Documentation to Generate
+
+                Create the following files using `write_file`. Each file should be well-structured Markdown
+                with Mermaid diagrams where they add value.
+
+                ### 1. `docs/README.md` — Index
+                - Brief project summary (1-2 paragraphs).
+                - Table of contents linking to all other doc files.
+                - Quick start command (how to build and run).
+
+                ### 2. `docs/architecture.md` — Architecture Overview
+                - High-level system design: what the project does, how components interact.
+                - Tech stack summary (frameworks, databases, external services).
+                - Use `flowchart` Mermaid diagrams for component maps.
+                - Use `classDiagram` for key class relationships.
+                - Cover deployment topology if evident from config.
+
+                ### 3. `docs/api.md` — API Documentation
+                - List all REST endpoints grouped by controller/tag.
+                - For each endpoint: HTTP method, path, description, request body schema, response schema, error codes.
+                - Read the controller classes and OpenAPI annotations to extract this.
+                - Include authentication requirements if present.
+
+                ### 4. `docs/data-model.md` — Data Model
+                - Document all database tables, their columns, types, and constraints.
+                - Derive from Flyway migration files (`src/main/resources/db/migration/`).
+                - Use `erDiagram` Mermaid diagrams for entity relationships.
+                - Note important indexes and unique constraints.
+
+                ### 5. `docs/getting-started.md` — Developer Onboarding
+                - Prerequisites (JDK version, Docker, database, etc.).
+                - Step-by-step environment setup.
+                - How to build, run, and test the project.
+                - Project structure walkthrough (what each top-level directory contains).
+                - Key configuration that must be set before first run.
+
+                ### 6. `docs/flows.md` — Key Business Flows
+                - Document the most important workflows as `sequenceDiagram` Mermaid diagrams.
+                - Cover: the main job lifecycle, webhook processing, external integrations.
+                - Each flow should have a brief text description followed by the diagram.
+
+                ### 7. `docs/configuration.md` — Configuration Reference
+                - List ALL configuration properties and environment variables.
+                - Group by feature area (e.g. "Database", "Authentication", "External Services").
+                - For each: property name, env var name, description, default value, whether required.
+                - Read `application.properties` and `.env` files as sources.
+                %s
+                ## Writing Guidelines
+                - **Depth**: Moderate — cover packages and key classes, skip private internals.
+                - **Audience**: Mixed — both internal developers and external API consumers.
+                - Use clear language and avoid jargon without explanation.
+                - Every Mermaid diagram must be in a fenced code block with the `mermaid` language tag.
+                - Keep diagrams focused — no more than ~15 nodes per diagram. Split large diagrams.
+                - Use tables for structured data (endpoints, config properties, DB columns).
+                - Cross-reference between docs using relative links (e.g. `[see API docs](api.md)`).
+
+                ## Process
+                1. Explore the codebase thoroughly before writing any documentation.
+                2. Write each doc file using `write_file`.
+                3. After writing all files, provide a summary of what was generated.
+                """.formatted(confluenceSection);
+
+        String guardrailText = """
+                You MUST follow these rules without exception:
+                - Do NOT modify files under these paths: %s
+                - Only write files under the `docs/` directory. Do NOT modify source code.
+                - Only run allowed commands: %s
+                - Never read or write files outside the repository root.
+                """.formatted(
+                String.join(", ", guardrails.getBlockedPaths()),
+                String.join(", ", guardrails.getAllowedCommands())
+        );
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, docsInstructions);
     }
 
     // ─── Private helpers ────────────────────────────────────────────────
