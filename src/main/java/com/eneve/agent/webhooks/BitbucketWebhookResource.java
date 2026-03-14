@@ -140,11 +140,14 @@ public class BitbucketWebhookResource {
             }
 
             String jiraKey = extractJiraKey(prTitle);
+            String headCommitSha = pr.path("source").path("commit").path("hash").asText(null);
+            if (headCommitSha != null && headCommitSha.isBlank()) headCommitSha = null;
 
-            LOG.infof("Bitbucket webhook: triggering review for PR #%s (%s -> %s) on %s",
-                    prId, sourceBranch, destBranch, repoFullName);
+            LOG.infof("Bitbucket webhook: triggering review for PR #%s (%s -> %s) on %s (head: %s)",
+                    prId, sourceBranch, destBranch, repoFullName,
+                    headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
 
-            return submitReviewJob(repoUrl, prId, destBranch, jiraKey);
+            return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("Bitbucket webhook processing error: %s", e.getMessage());
@@ -152,7 +155,8 @@ public class BitbucketWebhookResource {
         }
     }
 
-    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey) {
+    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
+                                     String headCommitSha) {
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
                 prId,
@@ -161,7 +165,8 @@ public class BitbucketWebhookResource {
                 defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
                 null,
                 null,
-                null
+                null,
+                headCommitSha
         );
 
         String jobId = UUID.randomUUID().toString();

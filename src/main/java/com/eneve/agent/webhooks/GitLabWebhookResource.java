@@ -151,11 +151,14 @@ public class GitLabWebhookResource {
             }
 
             String jiraKey = extractJiraKey(mrTitle);
+            String headCommitSha = attrs.path("last_commit").path("id").asText(null);
+            if (headCommitSha != null && headCommitSha.isBlank()) headCommitSha = null;
 
-            LOG.infof("GitLab webhook: triggering review for MR !%s (%s -> %s) on %s",
-                    mrIid, sourceBranch, targetBranch, projectPath);
+            LOG.infof("GitLab webhook: triggering review for MR !%s (%s -> %s) on %s (head: %s)",
+                    mrIid, sourceBranch, targetBranch, projectPath,
+                    headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
 
-            return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey);
+            return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("GitLab webhook processing error: %s", e.getMessage());
@@ -163,7 +166,8 @@ public class GitLabWebhookResource {
         }
     }
 
-    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey) {
+    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
+                                     String headCommitSha) {
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
                 prId,
@@ -172,7 +176,8 @@ public class GitLabWebhookResource {
                 defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
                 null,
                 null,
-                null
+                null,
+                headCommitSha
         );
 
         String jobId = UUID.randomUUID().toString();

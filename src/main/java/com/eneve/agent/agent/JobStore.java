@@ -80,6 +80,49 @@ public class JobStore {
     }
 
     /**
+     * Move a terminal job (SUCCESS or FAILED) from the active `jobs` table into
+     * `job_history` atomically. The job stays in the cache so that
+     * /status/{jobId} continues to work immediately after completion.
+     */
+    public void archive(JobRecord job) {
+        String insert = """
+                INSERT INTO job_history
+                    (job_id, job_type, status, request_payload, created_at, updated_at, archived_at,
+                     summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT (job_id) DO NOTHING
+                """;
+        String delete = "DELETE FROM jobs WHERE job_id = ?";
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement ins = conn.prepareStatement(insert)) {
+                ins.setString(1, job.getJobId());
+                ins.setString(2, job.getJobType().name());
+                ins.setString(3, job.getStatus().name());
+                ins.setString(4, serializeRequest(job));
+                ins.setTimestamp(5, Timestamp.from(job.getCreatedAt()));
+                ins.setTimestamp(6, Timestamp.from(Instant.now()));
+                setNullable(ins, 7, job.getSummary());
+                setNullable(ins, 8, job.getErrorMessage());
+                setNullable(ins, 9, job.getPrUrl());
+                setNullable(ins, 10, job.getPrId());
+                ins.setInt(11, job.getFilesChanged());
+                ins.setInt(12, job.getLinesChanged());
+                setNullable(ins, 13, extractJiraKey(job));
+                ins.executeUpdate();
+            }
+            try (PreparedStatement del = conn.prepareStatement(delete)) {
+                del.setString(1, job.getJobId());
+                del.executeUpdate();
+            }
+            conn.commit();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to archive job %s: %s", job.getJobId(), e.getMessage());
+        }
+        cache.put(job.getJobId(), job);
+    }
+
+    /**
      * Persist the mutable fields of a job to the database and update the cache.
      * Called after every state transition in AgentRunner.
      */
@@ -115,15 +158,18 @@ public class JobStore {
     }
 
     /**
-     * Retrieve a job by ID. Checks the cache first; falls back to the database for
-     * completed or evicted jobs. This ensures /status/{jobId} works for all historical jobs.
+     * Retrieve a job by ID. Checks the cache first, then the active `jobs` table,
+     * then `job_history`. This ensures /status/{jobId} works for all jobs including
+     * completed ones that have been archived.
      */
     public Optional<JobRecord> get(String jobId) {
         JobRecord cached = cache.get(jobId);
         if (cached != null) {
             return Optional.of(cached);
         }
-        return loadFromDb(jobId);
+        Optional<JobRecord> active = loadFromTable("jobs", jobId);
+        if (active.isPresent()) return active;
+        return loadFromTable("job_history", jobId);
     }
 
     /**
@@ -169,19 +215,38 @@ public class JobStore {
     }
 
     /**
-     * Returns true if this JIRA key has ever been processed (any status).
+     * Returns true if this JIRA key has ever been processed (any status, either table).
      * Replaces the old file-backed processed-keys ledger.
      */
     public boolean hasEverBeenProcessed(String jiraKey) {
-        String sql = "SELECT 1 FROM jobs WHERE jira_key = ? LIMIT 1";
-        return existsQuery(sql, jiraKey);
+        String sql = """
+                SELECT 1 FROM jobs WHERE jira_key = ?
+                UNION ALL
+                SELECT 1 FROM job_history WHERE jira_key = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jiraKey);
+            ps.setString(2, jiraKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Existence query failed: %s", e.getMessage());
+            return false;
+        }
     }
 
     /**
-     * Returns all distinct JIRA keys that have ever been processed.
+     * Returns all distinct JIRA keys that have ever been processed (both tables).
      */
     public Set<String> getProcessedKeys() {
-        String sql = "SELECT DISTINCT jira_key FROM jobs WHERE jira_key IS NOT NULL";
+        String sql = """
+                SELECT DISTINCT jira_key FROM jobs         WHERE jira_key IS NOT NULL
+                UNION
+                SELECT DISTINCT jira_key FROM job_history  WHERE jira_key IS NOT NULL
+                """;
         Set<String> keys = ConcurrentHashMap.newKeySet();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
@@ -217,12 +282,10 @@ public class JobStore {
     // Private helpers
     // -------------------------------------------------------------------------
 
-    private Optional<JobRecord> loadFromDb(String jobId) {
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
-                FROM jobs WHERE job_id = ?
-                """;
+    private Optional<JobRecord> loadFromTable(String table, String jobId) {
+        String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
+                + " summary, error_message, pr_url, pr_id, files_changed, lines_changed"
+                + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, jobId);
@@ -236,7 +299,7 @@ public class JobStore {
                 }
             }
         } catch (SQLException e) {
-            LOG.errorf("Failed to load job %s from DB: %s", jobId, e.getMessage());
+            LOG.errorf("Failed to load job %s from %s: %s", jobId, table, e.getMessage());
         }
         return Optional.empty();
     }

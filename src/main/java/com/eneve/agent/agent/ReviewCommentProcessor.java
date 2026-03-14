@@ -168,17 +168,20 @@ public class ReviewCommentProcessor {
 
     /**
      * Scan existing agent comments for the last-reviewed commit SHA marker.
+     * Returns the most recent match (last in list) so incremental diffs are
+     * computed from the latest reviewed commit, not an older one.
      */
     public static String extractLastReviewedSha(List<AgentComment> existingComments) {
+        String lastFound = null;
         for (AgentComment comment : existingComments) {
             if (comment.filePath().isEmpty() && comment.line() == 0) {
                 Matcher m = REVIEWED_UP_TO_PATTERN.matcher(comment.content());
                 if (m.find()) {
-                    return m.group(1);
+                    lastFound = m.group(1);
                 }
             }
         }
-        return null;
+        return lastFound;
     }
 
     static String extractJsonBlock(String text) {

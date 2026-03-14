@@ -119,11 +119,14 @@ public class AzureDevOpsWebhookResource {
             }
 
             String jiraKey = extractJiraKey(prTitle);
+            String headCommitSha = resource.path("lastMergeSourceCommit").path("commitId").asText(null);
+            if (headCommitSha != null && headCommitSha.isBlank()) headCommitSha = null;
 
-            LOG.infof("Azure DevOps webhook: triggering review for PR #%s (%s -> %s) on %s/%s",
-                    prId, sourceBranch, destBranch, projectName, repoName);
+            LOG.infof("Azure DevOps webhook: triggering review for PR #%s (%s -> %s) on %s/%s (head: %s)",
+                    prId, sourceBranch, destBranch, projectName, repoName,
+                    headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
 
-            return submitReviewJob(repoUrl, prId, destBranch, jiraKey);
+            return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("Azure DevOps webhook processing error: %s", e.getMessage());
@@ -131,11 +134,12 @@ public class AzureDevOpsWebhookResource {
         }
     }
 
-    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey) {
+    private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
+                                     String headCommitSha) {
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl, prId, targetBranch, jiraKey,
                 defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
-                null, null, null);
+                null, null, null, headCommitSha);
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);

@@ -110,7 +110,7 @@ public class JobQueue {
         if (!pendingQueue.offer(job)) {
             job.setStatus(JobStatus.FAILED);
             job.setErrorMessage("Job queue is full");
-            jobStore.update(job);
+            jobStore.archive(job);
             return false;
         }
         String label = switch (job.getJobType()) {
@@ -177,7 +177,7 @@ public class JobQueue {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());
                         job.setStatus(JobStatus.FAILED);
                         job.setErrorMessage("Unhandled error: " + e.getMessage());
-                        jobStore.update(job);
+                        jobStore.archive(job);
                     } finally {
                         semaphore.release();
                     }
