@@ -70,6 +70,16 @@ public class ClaudeToolUseLoop {
     }
 
     /**
+     * Run the agentic tool-use loop with a custom tool set, initial user message,
+     * and a per-call iteration cap override.
+     */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      List<ToolUnion> tools, String initialUserMessage,
+                      int maxIterationsOverride, String jobId, String jobType) {
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType, maxIterationsOverride);
+    }
+
+    /**
      * Run the agentic tool-use loop with default tools.
      */
     public String run(String systemPrompt, WorkspaceContext workspace,

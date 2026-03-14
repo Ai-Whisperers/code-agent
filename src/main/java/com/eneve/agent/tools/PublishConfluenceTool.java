@@ -10,11 +10,15 @@ import jakarta.inject.Inject;
 
 /**
  * Agent tool that publishes a Markdown document to a Confluence page.
- * The space key and parent page ID default to workspace metadata (set by
- * executeGenerateDocs) but can be overridden via tool parameters.
+ * <p>
+ * The first page published becomes the root documentation page. All subsequent
+ * pages are created as children of that root, forming a single-level hierarchy
+ * under the configured parent page.
  */
 @ApplicationScoped
 public class PublishConfluenceTool implements ToolExecutor {
+
+    private static final String META_DOCS_ROOT_PAGE_ID = "confluenceDocsRootPageId";
 
     @Inject
     ConfluenceService confluenceService;
@@ -48,17 +52,38 @@ public class PublishConfluenceTool implements ToolExecutor {
             return "ERROR: No Confluence space key available. Provide 'space_key' parameter or configure it in repo settings.";
         }
 
-        String parentPageId = (String) input.get("parent_page_id");
-        if (parentPageId == null || parentPageId.isBlank()) {
-            parentPageId = workspace.getMetadata("confluenceParentPageId");
-        }
+        String parentPageId = resolveParentPageId(workspace, input);
 
-        String pageUrl = confluenceService.createOrUpdatePage(spaceKey, parentPageId, title, markdownContent);
+        ConfluenceService.PageResult result =
+                confluenceService.createOrUpdatePage(spaceKey, parentPageId, title, markdownContent);
 
-        if (pageUrl == null) {
+        if (result == null) {
             return "ERROR: Failed to publish page '" + title + "' to Confluence space " + spaceKey;
         }
 
-        return "Published Confluence page: " + title + "\nURL: " + pageUrl;
+        if (workspace.getMetadata(META_DOCS_ROOT_PAGE_ID) == null) {
+            workspace.putMetadata(META_DOCS_ROOT_PAGE_ID, result.pageId());
+        }
+
+        return "Published Confluence page: " + title + "\nURL: " + result.pageUrl();
+    }
+
+    /**
+     * Determines the parent page for the current publish call.
+     * - If a docs root page has already been published in this session, use it.
+     * - Otherwise fall back to the tool parameter or repo-settings parent page.
+     */
+    private String resolveParentPageId(WorkspaceContext workspace, Map<String, Object> input) {
+        String docsRoot = workspace.getMetadata(META_DOCS_ROOT_PAGE_ID);
+        if (docsRoot != null) {
+            return docsRoot;
+        }
+
+        String explicit = (String) input.get("parent_page_id");
+        if (explicit != null && !explicit.isBlank()) {
+            return explicit;
+        }
+
+        return workspace.getMetadata("confluenceParentPageId");
     }
 }

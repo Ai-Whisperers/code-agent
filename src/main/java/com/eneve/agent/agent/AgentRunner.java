@@ -97,6 +97,9 @@ public class AgentRunner {
     @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
     long generateTestsTimeoutMinutes;
 
+    @ConfigProperty(name = "generate-docs.max-loop-iterations", defaultValue = "200")
+    int generateDocsMaxIterations;
+
     @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
     boolean prSummaryEnabled;
 
@@ -1321,7 +1324,7 @@ public class AgentRunner {
                 summary = toolUseLoop.run(systemPrompt, workspace, tools,
                         "Please generate comprehensive documentation for this repository. "
                                 + "Start by exploring the project structure, then create all doc files.",
-                        job.getJobId(), job.getJobType().name());
+                        generateDocsMaxIterations, job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 fail(job, "Agent loop error: " + e.getMessage());
                 return;

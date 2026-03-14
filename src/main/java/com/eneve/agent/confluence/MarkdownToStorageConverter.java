@@ -1,5 +1,8 @@
 package com.eneve.agent.confluence;
 
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -7,13 +10,19 @@ import java.util.regex.Pattern;
  * Converts Markdown to Confluence XHTML storage format.
  * Handles headings, code fences (including Mermaid), bold, italic,
  * links, images, tables, lists, and blockquotes.
+ * <p>
+ * Mermaid diagrams are extracted as {@link MermaidDiagram} entries so the
+ * caller can render them server-side and upload as page attachments.
  */
 public final class MarkdownToStorageConverter {
 
     private MarkdownToStorageConverter() {}
 
+    private static final String PLACEHOLDER_PREFIX = "\u0000CODE_BLOCK_";
+    private static final String PLACEHOLDER_SUFFIX = "\u0000";
+
     private static final Pattern FENCED_CODE = Pattern.compile(
-            "```(\\w*)\\n(.*?)```", Pattern.DOTALL);
+            "^```(\\w*)\\s*\\n(.*?)^```\\s*$", Pattern.DOTALL | Pattern.MULTILINE);
     private static final Pattern HEADING = Pattern.compile(
             "^(#{1,6})\\s+(.+)$", Pattern.MULTILINE);
     private static final Pattern BOLD = Pattern.compile("\\*\\*(.+?)\\*\\*");
@@ -24,18 +33,27 @@ public final class MarkdownToStorageConverter {
     private static final Pattern BLOCKQUOTE_LINE = Pattern.compile("^>\\s?(.*)$", Pattern.MULTILINE);
     private static final Pattern TABLE_ROW = Pattern.compile("^\\|(.+)\\|\\s*$", Pattern.MULTILINE);
     private static final Pattern TABLE_SEPARATOR = Pattern.compile("^\\|[-:|\\s]+\\|\\s*$", Pattern.MULTILINE);
+    private static final Pattern LIST_ITEM_UL = Pattern.compile("^[-*+]\\s+(.+)");
+    private static final Pattern LIST_ITEM_OL = Pattern.compile("^\\d+\\.\\s+(.+)");
+
+    public record MermaidDiagram(String filename, String sourceCode) {}
+
+    public record ConversionResult(String xhtml, List<MermaidDiagram> mermaidDiagrams) {}
 
     /**
      * Converts a Markdown document to Confluence storage format (XHTML).
+     * Mermaid code blocks are converted to attachment image references and
+     * returned separately so the caller can render and upload them.
      */
-    public static String convert(String markdown) {
+    public static ConversionResult convert(String markdown) {
         if (markdown == null || markdown.isBlank()) {
-            return "";
+            return new ConversionResult("", Collections.emptyList());
         }
 
-        String result = markdown;
+        List<String> codeBlocks = new ArrayList<>();
+        List<MermaidDiagram> mermaidDiagrams = new ArrayList<>();
+        String result = extractCodeBlocks(markdown, codeBlocks, mermaidDiagrams);
 
-        result = convertFencedCode(result);
         result = convertTables(result);
         result = convertBlockquotes(result);
         result = convertLists(result);
@@ -47,34 +65,53 @@ public final class MarkdownToStorageConverter {
         result = convertInlineCode(result);
         result = convertParagraphs(result);
 
-        return result.trim();
+        result = restoreCodeBlocks(result, codeBlocks);
+
+        return new ConversionResult(result.trim(), mermaidDiagrams);
     }
 
-    private static String convertFencedCode(String input) {
+    private static String extractCodeBlocks(String input, List<String> codeBlocks,
+                                            List<MermaidDiagram> mermaidDiagrams) {
         Matcher m = FENCED_CODE.matcher(input);
         StringBuilder sb = new StringBuilder();
+        int mermaidIndex = 0;
         while (m.find()) {
             String lang = m.group(1);
             String code = m.group(2);
 
-            String replacement;
+            String html;
             if ("mermaid".equalsIgnoreCase(lang)) {
-                replacement = "<ac:structured-macro ac:name=\"mermaid\">"
-                        + "<ac:plain-text-body><![CDATA[" + code.trim() + "]]></ac:plain-text-body>"
-                        + "</ac:structured-macro>";
+                mermaidIndex++;
+                String filename = "mermaid-" + mermaidIndex + ".png";
+                mermaidDiagrams.add(new MermaidDiagram(filename, code.trim()));
+                html = "<ac:image ac:width=\"800\">"
+                        + "<ri:attachment ri:filename=\"" + filename + "\" />"
+                        + "</ac:image>";
             } else {
                 String langParam = (lang != null && !lang.isBlank())
                         ? "<ac:parameter ac:name=\"language\">" + escapeXml(lang) + "</ac:parameter>"
                         : "";
-                replacement = "<ac:structured-macro ac:name=\"code\">"
+                html = "<ac:structured-macro ac:name=\"code\">"
                         + langParam
                         + "<ac:plain-text-body><![CDATA[" + code.trim() + "]]></ac:plain-text-body>"
                         + "</ac:structured-macro>";
             }
-            m.appendReplacement(sb, Matcher.quoteReplacement(replacement));
+
+            int index = codeBlocks.size();
+            codeBlocks.add(html);
+            m.appendReplacement(sb, Matcher.quoteReplacement(
+                    PLACEHOLDER_PREFIX + index + PLACEHOLDER_SUFFIX));
         }
         m.appendTail(sb);
         return sb.toString();
+    }
+
+    private static String restoreCodeBlocks(String input, List<String> codeBlocks) {
+        String result = input;
+        for (int i = 0; i < codeBlocks.size(); i++) {
+            result = result.replace(PLACEHOLDER_PREFIX + i + PLACEHOLDER_SUFFIX, codeBlocks.get(i));
+        }
+        return result;
     }
 
     private static String convertHeadings(String input) {
@@ -149,34 +186,55 @@ public final class MarkdownToStorageConverter {
 
     private static String convertLists(String input) {
         StringBuilder sb = new StringBuilder();
+        String[] lines = input.split("\n");
         boolean inUl = false;
         boolean inOl = false;
 
-        for (String line : input.split("\n")) {
-            String trimmed = line.trim();
-            if (trimmed.matches("^[-*+]\\s+.+")) {
+        for (int i = 0; i < lines.length; i++) {
+            String trimmed = lines[i].trim();
+
+            if (trimmed.isEmpty() && (inUl || inOl)) {
+                if (hasUpcomingListItem(lines, i + 1, inUl)) {
+                    continue;
+                }
+            }
+
+            Matcher ulMatcher = LIST_ITEM_UL.matcher(trimmed);
+            Matcher olMatcher = LIST_ITEM_OL.matcher(trimmed);
+
+            if (ulMatcher.matches()) {
                 if (!inUl) {
                     if (inOl) { sb.append("</ol>\n"); inOl = false; }
                     sb.append("<ul>\n");
                     inUl = true;
                 }
-                sb.append("<li>").append(trimmed.replaceFirst("^[-*+]\\s+", "")).append("</li>\n");
-            } else if (trimmed.matches("^\\d+\\.\\s+.+")) {
+                sb.append("<li>").append(ulMatcher.group(1)).append("</li>\n");
+            } else if (olMatcher.matches()) {
                 if (!inOl) {
                     if (inUl) { sb.append("</ul>\n"); inUl = false; }
                     sb.append("<ol>\n");
                     inOl = true;
                 }
-                sb.append("<li>").append(trimmed.replaceFirst("^\\d+\\.\\s+", "")).append("</li>\n");
+                sb.append("<li>").append(olMatcher.group(1)).append("</li>\n");
             } else {
                 if (inUl) { sb.append("</ul>\n"); inUl = false; }
                 if (inOl) { sb.append("</ol>\n"); inOl = false; }
-                sb.append(line).append("\n");
+                sb.append(lines[i]).append("\n");
             }
         }
         if (inUl) sb.append("</ul>\n");
         if (inOl) sb.append("</ol>\n");
         return sb.toString();
+    }
+
+    private static boolean hasUpcomingListItem(String[] lines, int from, boolean expectUl) {
+        for (int i = from; i < lines.length; i++) {
+            String t = lines[i].trim();
+            if (t.isEmpty()) continue;
+            if (expectUl) return LIST_ITEM_UL.matcher(t).matches();
+            return LIST_ITEM_OL.matcher(t).matches();
+        }
+        return false;
     }
 
     private static String convertTables(String input) {
@@ -228,14 +286,15 @@ public final class MarkdownToStorageConverter {
     }
 
     private static String convertParagraphs(String input) {
-        String[] lines = input.split("\n\n");
+        String[] blocks = input.split("\n\n");
         StringBuilder sb = new StringBuilder();
-        for (String block : lines) {
+        for (String block : blocks) {
             String trimmed = block.trim();
             if (trimmed.isEmpty()) continue;
             if (trimmed.startsWith("<h") || trimmed.startsWith("<ul")
                     || trimmed.startsWith("<ol") || trimmed.startsWith("<table")
-                    || trimmed.startsWith("<blockquote") || trimmed.startsWith("<ac:")) {
+                    || trimmed.startsWith("<blockquote") || trimmed.startsWith("<ac:")
+                    || trimmed.startsWith(PLACEHOLDER_PREFIX)) {
                 sb.append(trimmed).append("\n");
             } else {
                 sb.append("<p>").append(trimmed.replace("\n", "<br/>")).append("</p>\n");

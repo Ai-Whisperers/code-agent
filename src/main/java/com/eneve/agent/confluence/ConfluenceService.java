@@ -1,5 +1,6 @@
 package com.eneve.agent.confluence;
 
+import java.io.ByteArrayOutputStream;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -8,6 +9,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.List;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -21,12 +23,15 @@ import jakarta.enterprise.context.ApplicationScoped;
 /**
  * Client for the Confluence Cloud REST API v2.
  * Creates or updates pages in Confluence spaces using XHTML storage format.
+ * Mermaid diagrams are rendered server-side via mermaid.ink and uploaded
+ * as page attachments.
  */
 @ApplicationScoped
 public class ConfluenceService {
 
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String MERMAID_INK_BASE = "https://mermaid.ink/img/base64:";
 
     @ConfigProperty(name = "confluence.base.url", defaultValue = "")
     String baseUrl;
@@ -38,7 +43,8 @@ public class ConfluenceService {
     String apiToken;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(10))
+            .connectTimeout(Duration.ofSeconds(15))
+            .followRedirects(HttpClient.Redirect.NORMAL)
             .build();
 
     public boolean isEnabled() {
@@ -47,31 +53,44 @@ public class ConfluenceService {
                 && apiToken != null && !apiToken.isBlank();
     }
 
+    public record PageResult(String pageId, String pageUrl) {}
+
     /**
      * Creates or updates a Confluence page. If a page with the given title already
      * exists under the specified parent, it is updated; otherwise a new page is created.
+     * Mermaid diagrams in the markdown are rendered server-side and uploaded as
+     * page attachments.
      *
      * @param spaceKey       the Confluence space key
      * @param parentPageId   parent page ID (may be null for top-level pages)
      * @param title          page title
      * @param markdownBody   raw markdown content (converted to storage format internally)
-     * @return the full URL of the created/updated page, or null on failure
+     * @return result containing the page ID and URL, or null on failure
      */
-    public String createOrUpdatePage(String spaceKey, String parentPageId,
-                                     String title, String markdownBody) {
+    public PageResult createOrUpdatePage(String spaceKey, String parentPageId,
+                                         String title, String markdownBody) {
         if (!isEnabled()) {
             LOG.warn("Confluence is not configured, skipping page publish");
             return null;
         }
 
-        String storageBody = MarkdownToStorageConverter.convert(markdownBody);
+        MarkdownToStorageConverter.ConversionResult conversion =
+                MarkdownToStorageConverter.convert(markdownBody);
 
         try {
             String existingPageId = findPageByTitle(spaceKey, title);
+            String pageId;
             if (existingPageId != null) {
-                return updatePage(existingPageId, title, storageBody);
+                String url = updatePage(existingPageId, title, conversion.xhtml());
+                pageId = existingPageId;
+                if (url == null) return null;
+                uploadMermaidDiagrams(pageId, conversion.mermaidDiagrams());
+                return new PageResult(pageId, url);
             } else {
-                return createPage(spaceKey, parentPageId, title, storageBody);
+                pageId = createPage(spaceKey, parentPageId, title, conversion.xhtml());
+                if (pageId == null) return null;
+                uploadMermaidDiagrams(pageId, conversion.mermaidDiagrams());
+                return new PageResult(pageId, buildPageUrl(pageId));
             }
         } catch (Exception e) {
             LOG.errorf("Failed to publish Confluence page '%s' in space %s: %s",
@@ -115,7 +134,157 @@ public class ConfluenceService {
         }
     }
 
-    private String createPage(String spaceKey, String parentPageId, String title, String storageBody) throws Exception {
+    // ─── Mermaid rendering & attachment upload ─────────────────────────
+
+    private void uploadMermaidDiagrams(String pageId,
+                                       List<MarkdownToStorageConverter.MermaidDiagram> diagrams) {
+        if (diagrams.isEmpty()) return;
+
+        for (MarkdownToStorageConverter.MermaidDiagram diagram : diagrams) {
+            try {
+                byte[] png = renderMermaidToPng(diagram.sourceCode());
+                uploadAttachment(pageId, diagram.filename(), png, "image/png");
+                LOG.infof("Uploaded Mermaid attachment '%s' (%d bytes) to page %s",
+                        diagram.filename(), png.length, pageId);
+            } catch (Exception e) {
+                LOG.warnf("Failed to render/upload Mermaid diagram '%s': %s",
+                        diagram.filename(), e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Renders a Mermaid diagram to PNG via the mermaid.ink public service.
+     */
+    byte[] renderMermaidToPng(String mermaidCode) throws Exception {
+        String encoded = Base64.getUrlEncoder().withoutPadding()
+                .encodeToString(mermaidCode.getBytes(StandardCharsets.UTF_8));
+        String url = MERMAID_INK_BASE + encoded;
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Accept", "image/png")
+                .timeout(Duration.ofSeconds(30))
+                .GET()
+                .build();
+
+        HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("mermaid.ink returned HTTP " + response.statusCode());
+        }
+        return response.body();
+    }
+
+    /**
+     * Uploads a binary file as a page attachment via the Confluence v1 REST API.
+     * If an attachment with the same filename already exists, it is updated.
+     */
+    void uploadAttachment(String pageId, String filename, byte[] data,
+                          String contentType) throws Exception {
+        String boundary = "----AttachBoundary" + System.nanoTime();
+        byte[] body = buildMultipartBody(boundary, filename, data, contentType);
+
+        String url = baseUrl + "/wiki/rest/api/content/" + pageId + "/child/attachment";
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", authHeader())
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .header("X-Atlassian-Token", "nocheck")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+            return;
+        }
+
+        if (response.statusCode() == 409) {
+            updateExistingAttachment(pageId, filename, data, contentType, boundary);
+            return;
+        }
+
+        throw new RuntimeException("Attachment upload failed (" + response.statusCode() + "): "
+                + response.body());
+    }
+
+    private void updateExistingAttachment(String pageId, String filename,
+                                          byte[] data, String contentType,
+                                          String boundary) throws Exception {
+        String attachmentId = findAttachmentId(pageId, filename);
+        if (attachmentId == null) {
+            LOG.warnf("409 on attachment upload but could not find existing attachment '%s'", filename);
+            return;
+        }
+
+        byte[] body = buildMultipartBody(boundary, filename, data, contentType);
+        String url = baseUrl + "/wiki/rest/api/content/" + pageId
+                + "/child/attachment/" + attachmentId + "/data";
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", authHeader())
+                .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                .header("X-Atlassian-Token", "nocheck")
+                .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() < 200 || response.statusCode() >= 300) {
+            throw new RuntimeException("Attachment update failed (" + response.statusCode() + "): "
+                    + response.body());
+        }
+    }
+
+    private String findAttachmentId(String pageId, String filename) throws Exception {
+        String url = baseUrl + "/wiki/rest/api/content/" + pageId
+                + "/child/attachment?filename=" + URLEncoder.encode(filename, StandardCharsets.UTF_8);
+
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", authHeader())
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) return null;
+
+        JsonNode results = MAPPER.readTree(response.body()).path("results");
+        if (results.isArray() && !results.isEmpty()) {
+            return results.get(0).path("id").asText();
+        }
+        return null;
+    }
+
+    private static byte[] buildMultipartBody(String boundary, String filename,
+                                             byte[] data, String contentType) {
+        try {
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            String header = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"file\"; filename=\"" + filename + "\"\r\n"
+                    + "Content-Type: " + contentType + "\r\n\r\n";
+            bos.write(header.getBytes(StandardCharsets.UTF_8));
+            bos.write(data);
+            String footer = "\r\n"
+                    + "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"minorEdit\"\r\n\r\n"
+                    + "true\r\n"
+                    + "--" + boundary + "--\r\n";
+            bos.write(footer.getBytes(StandardCharsets.UTF_8));
+            return bos.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build multipart body", e);
+        }
+    }
+
+    // ─── Page CRUD ────────────────────────────────────────────────────
+
+    /**
+     * Creates a page and returns the page ID (not the URL),
+     * so the caller can upload attachments before building the final URL.
+     */
+    private String createPage(String spaceKey, String parentPageId,
+                              String title, String storageBody) throws Exception {
         ObjectNode body = MAPPER.createObjectNode();
         body.put("spaceId", resolveSpaceId(spaceKey));
         body.put("status", "current");
@@ -148,7 +317,7 @@ public class ConfluenceService {
         JsonNode result = MAPPER.readTree(response.body());
         String pageId = result.path("id").asText();
         LOG.infof("Created Confluence page '%s' (id=%s) in space %s", title, pageId, spaceKey);
-        return buildPageUrl(pageId);
+        return pageId;
     }
 
     private String updatePage(String pageId, String title, String storageBody) throws Exception {

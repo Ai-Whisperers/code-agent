@@ -235,7 +235,7 @@ public final class ToolDefinitions {
                 .description("Publish a Markdown document as a Confluence page. "
                         + "Creates a new page or updates an existing one with the same title. "
                         + "Markdown is automatically converted to Confluence storage format, "
-                        + "including Mermaid diagrams rendered via the Mermaid macro.")
+                        + "including Mermaid diagrams rendered as SVG images.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("title", JsonValue.from(Map.of(

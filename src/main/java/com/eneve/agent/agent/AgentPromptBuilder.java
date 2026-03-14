@@ -355,6 +355,8 @@ public class AgentPromptBuilder {
 
                     ## Confluence Publishing
                     After writing each documentation file, publish it to Confluence using the `publish_confluence` tool.
+                    - **IMPORTANT**: Publish the index page (`docs/README.md`) FIRST. It becomes the parent page \
+                    under which all other documentation pages are created as children.
                     - Use the document title as the Confluence page title (e.g. "Architecture Overview", "API Documentation").
                     - Pass the full Markdown content as `markdown_content` — it will be converted automatically.
                     - The space key and parent page are pre-configured; you do not need to supply them.
@@ -430,6 +432,9 @@ public class AgentPromptBuilder {
                 - Keep diagrams focused — no more than ~15 nodes per diagram. Split large diagrams.
                 - Use tables for structured data (endpoints, config properties, DB columns).
                 - Cross-reference between docs using relative links (e.g. `[see API docs](api.md)`).
+                - Do NOT reference any specific git hosting platform (e.g. GitHub, GitLab, Bitbucket) unless the \
+                codebase explicitly integrates with one. This project supports multiple git platforms. \
+                Use generic terms like "git repository", "pull request / merge request", or "remote" instead.
 
                 ## Process
                 1. Explore the codebase thoroughly before writing any documentation.
