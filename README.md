@@ -28,15 +28,19 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
        ┌────────────┼────────┐       │
        ▼            ▼        ▼       ▼
   Clone repo  Resolve   Load     Compute diff
-  (BB/ADO)    prompt    rules    against target
-              (JIRA/    (Cursor   branch
+  (BB/ADO/    prompt    rules    against target
+   GitLab)    (JIRA/    (Cursor   branch
                Aikido)   rules)       │
        │            │        │       ▼
-       └────────────┼────────┘  Claude review
-                    ▼           (security, design,
-           Claude tool-use      quality, tests,
-           loop (read/write/    performance)
-           run/list)                 │
+       └────────────┼────────┘  Index code graph
+                    ▼           + impact analysis
+           Claude tool-use           │
+           loop (read/write/         ▼
+           run/list)            Claude review
+                    │           (security, design,
+                    │           quality, tests,
+                    │           performance)
+                    │                │
                     │                ▼
                     ▼           Post inline
            mvn test / build     comments on PR
@@ -105,6 +109,13 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/enable` | Enable automated review for a repo |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
+
+### Code Graph
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/graph/build-missing` | Build code graphs for all repos that lack one |
+| POST | `/graph/rebuild/{workspace}/{repoSlug}` | Rebuild the code graph for a single repository |
 
 ### Review Quality Metrics
 
@@ -458,6 +469,14 @@ All config via environment variables (or `application.properties` for local dev)
 | `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
 
+### Code Graph
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CODE_GRAPH_SCHEDULER_ENABLED` | Enable background graph pre-building | `true` |
+| `CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH` | Default branch to clone for graph builds | `main` |
+| `CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT` | Clone timeout in minutes for scheduled builds | `10` |
+
 ### Linter / SAST
 
 | Variable | Description | Default |
@@ -785,13 +804,38 @@ The agent performs automated code reviews on pull requests, triggered either via
 
 ### Contextual repo exploration
 
-Before generating findings, the agent proactively explores the cloned repository for context. It uses three tools:
+Before generating findings, the agent proactively explores the cloned repository for context. It uses four tools:
 
 - **`search_code`** — grep-based code search over the full repo (e.g. find all callers of a changed method, locate interface implementations). Accepts a `pattern` (required), optional directory `path`, and optional file-type `include` glob (e.g. `*.java`).
+- **`query_code_graph`** — query the per-repo code graph to find callers, implementations, or dependents of a specific symbol. See [Code graph](#code-graph-impact-analysis) below.
 - **`read_file`** — read the full contents of any file in the repo (interfaces, base classes, configuration).
 - **`list_files`** — directory listing up to 5 levels deep, configurable via an optional `depth` parameter (default 3, max 5).
 
 This prevents false positives that arise from reviewing a diff without its wider context — the same capability BugBot uses to browse the whole repository.
+
+### Code graph (impact analysis)
+
+The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+
+**How it works:**
+
+1. On the first review of a repository, a full index is built from all `.java` and `.cs` files in the workspace
+2. On subsequent reviews, only the files touched in the diff are re-indexed (typically 5–20 files)
+3. The agent queries the graph to find code that depends on the changed symbols and injects this as context
+4. During the review tool-use loop, the agent can query the graph on-demand via `query_code_graph`
+
+**Available tools during review:**
+
+- **`query_code_graph`** — find callers, implementations, or dependents of a specific symbol. Parameters: `symbol` (e.g. `MyClass.myMethod`), `relation` (`callers`, `implementations`, or `dependents`)
+
+**Background pre-building:** A scheduler runs every 6 hours to pre-build graphs for repos that don't have one yet, so the first review isn't slowed down by a full index. This can also be triggered on demand via `POST /graph/build-missing`.
+
+**Rebuild a single repo:**
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
+```
+
+**Supported languages:** Java (full AST via JavaParser), C# (regex-based — classes, interfaces, structs, enums, methods, fields, inheritance, using directives, method calls). Non-supported files are silently skipped.
 
 ### Review memory
 
@@ -834,7 +878,7 @@ curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
 
 **Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
 
-**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{IMPACT_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
 
 ```bash
 curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
@@ -970,6 +1014,8 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 | `jobs` | Active job queue with status, PR URL, and diff stats |
 | `job_history` | Archived completed jobs |
 | `comment_feedback` | Developer feedback on individual findings (`/fp` marks); powers FP rate metrics and auto-suppression |
+| `code_graph_nodes` | Code graph symbols (classes, methods, fields, enums) per repo |
+| `code_graph_edges` | Code graph relationships (calls, extends, implements, imports) per repo |
 
 ## Project Structure
 
@@ -978,13 +1024,14 @@ src/main/java/com/eneve/agent/
 ├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr)
 ├── MemoryResource.java          # REST endpoints (/memory)
 ├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
+├── CodeGraphResource.java       # REST endpoints (/graph/build-missing, /graph/rebuild)
 ├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
 ├── ReviewMetricsResource.java   # REST endpoints (/metrics/review-quality)
 ├── agent/
 │   ├── AgentRunner.java         # Job orchestrator (fix + review)
 │   ├── AgentPromptBuilder.java  # System prompt construction (context, memory, FP sections)
 │   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, list_files, run_command)
+│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, query_code_graph, list_files, run_command)
 │   ├── BuildValidator.java      # Maven build validation
 │   ├── FindingResolver.java     # Determines if past findings were addressed in new commits
 │   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
@@ -999,7 +1046,12 @@ src/main/java/com/eneve/agent/
 │   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
 │   ├── RepoSettings.java        # Per-repo settings record
 │   ├── RepoSettingsStore.java   # Repo settings persistence (PostgreSQL)
-│   └── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
+│   ├── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
+│   ├── CodeGraphStore.java      # Code graph persistence (nodes + edges in PostgreSQL)
+│   ├── CodeGraphIndexer.java    # JavaParser (Java) + regex (C#) AST indexer
+│   ├── CodeGraphQueryService.java # Impact analysis prompt builder from graph
+│   ├── CodeGraphBuildService.java # Clone-and-index logic for background/on-demand builds
+│   └── CodeGraphScheduler.java  # Scheduled pre-building of missing code graphs
 ├── aikido/
 │   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
 │   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
@@ -1054,6 +1106,7 @@ src/main/java/com/eneve/agent/
 │   ├── ToolRegistry.java
 │   ├── ReadFileTool.java
 │   ├── SearchCodeTool.java              # grep-based code search for review context
+│   ├── QueryCodeGraphTool.java          # On-demand code graph queries during review
 │   ├── WriteFileTool.java
 │   ├── RunCommandTool.java
 │   └── ListFilesTool.java
