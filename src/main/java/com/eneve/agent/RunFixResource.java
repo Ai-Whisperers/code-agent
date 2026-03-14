@@ -100,8 +100,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -169,8 +167,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -293,8 +289,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -352,8 +346,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -398,8 +390,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -596,8 +586,6 @@ public class RunFixResource {
             jobStore.put(job);
 
             if (!jobQueue.submit(job)) {
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Job queue is full");
                 skipped.add(Map.of("key", issue.key(), "reason", "Queue full"));
                 break;
             }

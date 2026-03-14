@@ -8,7 +8,6 @@ import java.util.regex.Pattern;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -143,8 +142,6 @@ public class AzureDevOpsWebhookResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429)
                     .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
                     .build();

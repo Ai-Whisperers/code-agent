@@ -55,6 +55,7 @@ public class AgentRunner {
     @Inject CommentStore commentStore;
     @Inject LinterService linterService;
     @Inject LearningExtractor learningExtractor;
+    @Inject JobStore jobStore;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -79,6 +80,7 @@ public class AgentRunner {
     public void execute(JobRecord job) {
         RunFixRequest request = job.getRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -191,6 +193,7 @@ public class AgentRunner {
             job.setSummary(summary);
             job.setPrUrl(prUrl);
             job.setPrId(prId);
+            jobStore.update(job);
 
             safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
             safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
@@ -212,6 +215,7 @@ public class AgentRunner {
     public void executeReview(JobRecord job) {
         ReviewPrRequest request = job.getReviewRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -320,6 +324,7 @@ public class AgentRunner {
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(reviewSummary);
             job.setPrUrl(prInfo.getOrDefault("prUrl", ""));
+            jobStore.update(job);
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentSuccess(request.jiraKey(),
@@ -342,6 +347,7 @@ public class AgentRunner {
     public void executeFixPr(JobRecord job) {
         FixPrRequest request = job.getFixPrRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -490,6 +496,7 @@ public class AgentRunner {
             job.setSummary(summary);
             job.setPrUrl(prUrl);
             job.setPrId(newPrId);
+            jobStore.update(job);
 
             safeComment(() -> platformService.addPrComment(
                     coords.organization(), coords.project(), coords.repository(), request.prId(),
@@ -517,6 +524,7 @@ public class AgentRunner {
         ReplyCommentRequest request = job.getReplyRequest();
         job.setStatus(JobStatus.RUNNING);
         job.setPrId(request.prId());
+        jobStore.update(job);
 
         Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
         if (ctxOpt.isEmpty()) {
@@ -610,6 +618,7 @@ public class AgentRunner {
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary("Replied to comment thread on PR #" + request.prId());
+            jobStore.update(job);
             LOG.infof("Reply job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
@@ -624,6 +633,7 @@ public class AgentRunner {
         ReplyCommentRequest request = job.getReplyRequest();
         job.setStatus(JobStatus.RUNNING);
         job.setPrId(request.prId());
+        jobStore.update(job);
 
         Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
         if (ctxOpt.isEmpty()) {
@@ -760,6 +770,7 @@ public class AgentRunner {
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(summary);
+            jobStore.update(job);
             LOG.infof("FixComment job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
@@ -778,6 +789,7 @@ public class AgentRunner {
         try {
             platformService.mergePullRequest(coords.organization(), coords.project(), coords.repository(), job.getPrId());
             job.setStatus(JobStatus.SUCCESS);
+            jobStore.update(job);
             if (jiraKey != null && !jiraKey.isBlank()) {
                 safeJira(() -> jiraService.commentMerged(jiraKey));
                 safeJira(() -> jiraService.transitionToDone(jiraKey));
@@ -802,6 +814,7 @@ public class AgentRunner {
 
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage("Rejected: " + (reason != null ? reason : "No reason provided"));
+        jobStore.update(job);
         if (jiraKey != null && !jiraKey.isBlank()) {
             safeJira(() -> jiraService.commentRejected(jiraKey, reason));
             safeJira(() -> jiraService.transitionToRejected(jiraKey));
@@ -935,6 +948,7 @@ public class AgentRunner {
     public void executeHook(JobRecord job) {
         HookJobRequest request = job.getHookRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         LOG.infof("Hook job %s starting: hook='%s' repo=%s/%s target=%s commitDirect=%s",
                 job.getJobId(), request.hookName(), request.workspace(), request.repoSlug(),
@@ -1004,6 +1018,7 @@ public class AgentRunner {
             if (!hasChanges) {
                 job.setStatus(JobStatus.SUCCESS);
                 job.setSummary("Hook '" + request.hookName() + "' completed with no changes needed.");
+                jobStore.update(job);
                 LOG.infof("Hook job %s completed: no changes made", job.getJobId());
                 return;
             }
@@ -1018,6 +1033,7 @@ public class AgentRunner {
             if (request.commitDirect()) {
                 job.setStatus(JobStatus.SUCCESS);
                 job.setSummary(summary);
+                jobStore.update(job);
                 LOG.infof("Hook job %s completed: committed directly to %s", job.getJobId(), pushBranch);
             } else {
                 try {
@@ -1031,6 +1047,7 @@ public class AgentRunner {
                     job.setSummary(summary);
                     job.setPrUrl(prResult[0]);
                     job.setPrId(prResult[1]);
+                    jobStore.update(job);
                     LOG.infof("Hook job %s completed: PR %s created", job.getJobId(), prResult[0]);
                 } catch (Exception e) {
                     fail(job, "Create PR failed: " + e.getMessage());
@@ -1048,6 +1065,7 @@ public class AgentRunner {
         LOG.errorf("Job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.update(job);
 
         RunFixRequest request = job.getRequest();
         safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
@@ -1061,6 +1079,7 @@ public class AgentRunner {
         LOG.errorf("Review job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.update(job);
 
         ReviewPrRequest request = job.getReviewRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
@@ -1076,6 +1095,7 @@ public class AgentRunner {
         LOG.errorf("Fix-PR job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.update(job);
 
         FixPrRequest request = job.getFixPrRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
@@ -1091,12 +1111,14 @@ public class AgentRunner {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.update(job);
     }
 
     private void failFixComment(JobRecord job, ReplyCommentRequest request, String message) {
         LOG.errorf("FixComment job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.update(job);
 
         try {
             RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());

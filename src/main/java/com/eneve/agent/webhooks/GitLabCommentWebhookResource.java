@@ -14,7 +14,6 @@ import com.eneve.agent.agent.MemoryEntry;
 import com.eneve.agent.agent.MemoryStore;
 import com.eneve.agent.agent.RepoSettingsStore;
 import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ReplyCommentRequest;
 import com.eneve.agent.scm.GitPlatformService;
@@ -215,8 +214,6 @@ public class GitLabCommentWebhookResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429)
                     .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
                     .build();
