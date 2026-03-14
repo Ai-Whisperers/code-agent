@@ -34,8 +34,8 @@ public class RepoSettingsStore {
 
     public Optional<RepoSettings> find(String workspace, String repoSlug) {
         String sql = """
-                SELECT id, workspace, repo_slug, review_enabled, rule_names,
-                       review_prompt, disabled_hooks, created_at, updated_at
+                SELECT id, workspace, repo_slug, review_enabled, vector_enabled,
+                       rule_names, review_prompt, disabled_hooks, created_at, updated_at
                 FROM repo_settings
                 WHERE workspace = ? AND repo_slug = ?
                 """;
@@ -56,8 +56,8 @@ public class RepoSettingsStore {
 
     public List<RepoSettings> listAll() {
         String sql = """
-                SELECT id, workspace, repo_slug, review_enabled, rule_names,
-                       review_prompt, disabled_hooks, created_at, updated_at
+                SELECT id, workspace, repo_slug, review_enabled, vector_enabled,
+                       rule_names, review_prompt, disabled_hooks, created_at, updated_at
                 FROM repo_settings
                 ORDER BY workspace, repo_slug
                 """;
@@ -75,29 +75,33 @@ public class RepoSettingsStore {
     }
 
     public void upsert(String workspace, String repoSlug, boolean reviewEnabled,
-                       List<String> ruleNames, String reviewPrompt, List<String> disabledHooks) {
+                       boolean vectorEnabled, List<String> ruleNames,
+                       String reviewPrompt, List<String> disabledHooks) {
         String sql = """
                 INSERT INTO repo_settings
-                    (workspace, repo_slug, review_enabled, rule_names, review_prompt,
-                     disabled_hooks, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, now(), now())
+                    (workspace, repo_slug, review_enabled, vector_enabled, rule_names,
+                     review_prompt, disabled_hooks, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (workspace, repo_slug)
-                DO UPDATE SET review_enabled = EXCLUDED.review_enabled,
-                              rule_names    = EXCLUDED.rule_names,
-                              review_prompt = EXCLUDED.review_prompt,
-                              disabled_hooks = EXCLUDED.disabled_hooks,
-                              updated_at    = now()
+                DO UPDATE SET review_enabled  = EXCLUDED.review_enabled,
+                              vector_enabled  = EXCLUDED.vector_enabled,
+                              rule_names      = EXCLUDED.rule_names,
+                              review_prompt   = EXCLUDED.review_prompt,
+                              disabled_hooks  = EXCLUDED.disabled_hooks,
+                              updated_at      = now()
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, workspace);
             ps.setString(2, repoSlug);
             ps.setBoolean(3, reviewEnabled);
-            setNullableString(ps, 4, toJson(ruleNames));
-            setNullableString(ps, 5, reviewPrompt);
-            setNullableString(ps, 6, toJson(disabledHooks));
+            ps.setBoolean(4, vectorEnabled);
+            setNullableString(ps, 5, toJson(ruleNames));
+            setNullableString(ps, 6, reviewPrompt);
+            setNullableString(ps, 7, toJson(disabledHooks));
             ps.executeUpdate();
-            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s)", workspace, repoSlug, reviewEnabled);
+            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s)",
+                    workspace, repoSlug, reviewEnabled, vectorEnabled);
         } catch (SQLException e) {
             LOG.errorf("Failed to upsert repo settings for %s/%s: %s", workspace, repoSlug, e.getMessage());
         }
@@ -185,6 +189,39 @@ public class RepoSettingsStore {
         return false;
     }
 
+    public boolean isVectorEnabled(String workspace, String repoSlug) {
+        String sql = "SELECT vector_enabled FROM repo_settings WHERE workspace = ? AND repo_slug = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getBoolean("vector_enabled");
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to check vector enabled for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+        return false;
+    }
+
+    public void setVectorEnabled(String workspace, String repoSlug, boolean enabled) {
+        String sql = """
+                UPDATE repo_settings SET vector_enabled = ?, updated_at = now()
+                WHERE workspace = ? AND repo_slug = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBoolean(1, enabled);
+            ps.setString(2, workspace);
+            ps.setString(3, repoSlug);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to set vector_enabled for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+    }
+
     public void setReviewEnabled(String workspace, String repoSlug, boolean enabled) {
         String sql = """
                 UPDATE repo_settings SET review_enabled = ?, updated_at = now()
@@ -211,6 +248,7 @@ public class RepoSettingsStore {
                 rs.getString("workspace"),
                 rs.getString("repo_slug"),
                 rs.getBoolean("review_enabled"),
+                rs.getBoolean("vector_enabled"),
                 fromJson(rs.getString("rule_names")),
                 rs.getString("review_prompt"),
                 fromJson(rs.getString("disabled_hooks")),

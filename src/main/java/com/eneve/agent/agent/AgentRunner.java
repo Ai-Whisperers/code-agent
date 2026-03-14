@@ -61,6 +61,8 @@ public class AgentRunner {
     @Inject FindingResolver findingResolver;
     @Inject CodeGraphStore codeGraphStore;
     @Inject CodeGraphIndexer codeGraphIndexer;
+    @Inject EmbeddingIndexer embeddingIndexer;
+    @Inject RepoSettingsStore repoSettingsStore;
     @Inject CodeGraphQueryService codeGraphQueryService;
     @Inject PrSummaryGenerator prSummaryGenerator;
 
@@ -368,9 +370,17 @@ public class AgentRunner {
                 if (codeGraphStore.hasGraph(coords.organization(), coords.repository())) {
                     codeGraphIndexer.indexIncremental(workspace,
                             coords.organization(), coords.repository(), changedFiles);
+                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                        embeddingIndexer.indexIncremental(workspace,
+                                coords.organization(), coords.repository(), changedFiles);
+                    }
                 } else {
                     codeGraphIndexer.indexFull(workspace,
                             coords.organization(), coords.repository());
+                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                        embeddingIndexer.indexFull(workspace,
+                                coords.organization(), coords.repository());
+                    }
                 }
                 impactSection = codeGraphQueryService.buildImpactSection(
                         coords.organization(), coords.repository(), changedFiles);

@@ -1,7 +1,8 @@
 package com.eneve.agent;
 
-import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.eneve.agent.agent.CodeGraphBuildService;
 import com.eneve.agent.agent.CodeGraphStore;
@@ -10,6 +11,7 @@ import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
@@ -24,58 +26,76 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Code Graph", description = "Build and manage per-repo code graphs for impact analysis")
 public class CodeGraphResource {
 
+    private static final Logger LOG = Logger.getLogger(CodeGraphResource.class);
+
     @Inject
     CodeGraphBuildService buildService;
 
     @Inject
     CodeGraphStore codeGraphStore;
 
+    private final ExecutorService graphExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "graph-build");
+        t.setDaemon(true);
+        return t;
+    });
+
     @POST
     @Path("/build-missing")
     @Operation(
             operationId = "buildMissingGraphs",
             summary = "Build code graphs for all repos that lack one",
-            description = "Scans repo_settings for review-enabled repos without a code graph "
-                    + "and builds one by cloning the default branch and indexing all source files."
+            description = "Submits a background job that scans repo_settings for review-enabled repos "
+                    + "without a code graph and builds them. Returns immediately."
     )
-    @APIResponse(responseCode = "200", description = "Build results summary")
+    @APIResponse(responseCode = "202", description = "Build job accepted")
     public Response buildMissing() {
-        CodeGraphBuildService.BuildResult result = buildService.buildMissingGraphs();
+        graphExecutor.submit(() -> {
+            try {
+                CodeGraphBuildService.BuildResult result = buildService.buildMissingGraphs();
+                LOG.infof("Build missing graphs finished: %d built, %d skipped, %d already present",
+                        result.built(), result.skipped(), result.alreadyPresent());
+            } catch (Exception e) {
+                LOG.errorf("Build missing graphs failed: %s", e.getMessage());
+            }
+        });
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("built", result.built());
-        body.put("skipped", result.skipped());
-        body.put("alreadyPresent", result.alreadyPresent());
-        return Response.ok(body).build();
+        return Response.accepted(Map.of("action", "build_missing_started")).build();
     }
 
     @POST
     @Path("/rebuild/{workspace}/{repoSlug}")
     @Operation(
             operationId = "rebuildGraph",
-            summary = "Rebuild the code graph for a single repository",
-            description = "Deletes the existing graph (if any) and rebuilds it from scratch "
-                    + "by cloning the default branch."
+            summary = "Rebuild the code graph (and embeddings if enabled) for a single repository",
+            description = "Submits a background job that deletes the existing graph and rebuilds it "
+                    + "from scratch by cloning the default branch. If vector indexing is enabled for "
+                    + "the repo, embeddings are also regenerated. Returns immediately."
     )
-    @APIResponse(responseCode = "200", description = "Build succeeded")
-    @APIResponse(responseCode = "500", description = "Build failed")
+    @APIResponse(responseCode = "202", description = "Rebuild job accepted")
     public Response rebuild(
             @Parameter(description = "Workspace or GitLab namespace", required = true)
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
 
-        boolean success = buildService.buildGraph(workspace, repoSlug);
+        graphExecutor.submit(() -> {
+            try {
+                boolean success = buildService.buildGraph(workspace, repoSlug);
+                if (success) {
+                    LOG.infof("Graph rebuild succeeded for %s/%s", workspace, repoSlug);
+                } else {
+                    LOG.warnf("Graph rebuild failed for %s/%s", workspace, repoSlug);
+                }
+            } catch (Exception e) {
+                LOG.errorf("Graph rebuild error for %s/%s: %s", workspace, repoSlug, e.getMessage());
+            }
+        });
 
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("workspace", workspace);
-        body.put("repoSlug", repoSlug);
-        body.put("success", success);
-
-        if (success) {
-            return Response.ok(body).build();
-        }
-        body.put("error", "Graph build failed — check server logs for details");
-        return Response.serverError().entity(body).build();
+        return Response.accepted(Map.of(
+                "action", "rebuild_started",
+                "workspace", workspace,
+                "repoSlug", repoSlug
+        )).build();
     }
 }

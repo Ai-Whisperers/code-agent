@@ -21,6 +21,7 @@ public class CodeGraphBuildService {
 
     @Inject CodeGraphStore codeGraphStore;
     @Inject CodeGraphIndexer codeGraphIndexer;
+    @Inject EmbeddingIndexer embeddingIndexer;
     @Inject RepoSettingsStore repoSettingsStore;
 
     @ConfigProperty(name = "git.username")
@@ -117,6 +118,12 @@ public class CodeGraphBuildService {
             }
 
             codeGraphIndexer.indexFull(ws, workspace, repoSlug);
+
+            if (repoSettingsStore.isVectorEnabled(workspace, repoSlug)) {
+                LOG.infof("Vector indexing enabled for %s/%s — generating embeddings", workspace, repoSlug);
+                embeddingIndexer.indexFull(ws, workspace, repoSlug);
+            }
+
             LOG.infof("Code graph built successfully for %s/%s", workspace, repoSlug);
             return true;
 

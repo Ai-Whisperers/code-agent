@@ -13,6 +13,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
@@ -28,6 +29,11 @@ import org.jboss.logging.Logger;
 
 @ApplicationScoped
 public class CodeGraphIndexer {
+
+    static {
+        StaticJavaParser.getParserConfiguration()
+                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
+    }
 
     private static final Logger LOG = Logger.getLogger(CodeGraphIndexer.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB

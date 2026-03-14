@@ -108,6 +108,8 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PUT | `/settings/repos/{workspace}/{repoSlug}` | Create or update repository settings |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/enable` | Enable automated review for a repo |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/enable` | Enable semantic vector indexing for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/disable` | Disable semantic vector indexing for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
 
 ### Code Graph
@@ -470,6 +472,17 @@ All config via environment variables (or `application.properties` for local dev)
 | `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
 
+### Voyage AI (Semantic Search)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOYAGE_API_KEY` | Voyage AI API key (sign up at [dash.voyageai.com](https://dash.voyageai.com)) | (optional) |
+| `VOYAGE_MODEL` | Voyage embedding model | `voyage-code-3` |
+| `VOYAGE_BATCH_SIZE` | Max texts per API call | `128` |
+| `EMBEDDING_MAX_SOURCE_CHARS` | Max source code characters per symbol embedding | `16000` |
+
+Vector indexing is controlled per-repo via `repo_settings.vector_enabled` (default: `false`). The Voyage API key must be set for semantic search to function. Without it, the feature is silently disabled.
+
 ### Code Graph
 
 | Variable | Description | Default |
@@ -522,9 +535,12 @@ export BITBUCKET_USER=your-bb-user
 export BITBUCKET_APP_PASSWORD=your-app-password
 export BITBUCKET_WORKSPACE=your-workspace
 export DATABASE_PASSWORD=your-db-password
+export VOYAGE_API_KEY=pa-...              # optional, for semantic search
 
 mvn quarkus:dev
 ```
+
+**Note:** Semantic search requires pgvector installed in your local PostgreSQL. See [Semantic search — local setup](#semantic-search-cross-repo-vector-search) for instructions.
 
 The server starts on `http://localhost:8080`. Swagger UI is available at `http://localhost:8080/q/swagger-ui`.
 
@@ -601,6 +617,7 @@ aws secretsmanager create-secret \
   --region eu-central-1 \
   --secret-string '{
     "ANTHROPIC_API_KEY": "sk-ant-...",
+    "VOYAGE_API_KEY": "pa-...",
     "JIRA_API_TOKEN": "ATATT3x...",
     "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
     "DATABASE_PASSWORD": "...",
@@ -831,10 +848,11 @@ Disable per-environment with `REVIEW_PR_SUMMARY_ENABLED=false`.
 
 ### Contextual repo exploration
 
-Before generating findings, the agent proactively explores the cloned repository for context. It uses four tools:
+Before generating findings, the agent proactively explores the cloned repository for context. It uses five tools:
 
 - **`search_code`** — grep-based code search over the full repo (e.g. find all callers of a changed method, locate interface implementations). Accepts a `pattern` (required), optional directory `path`, and optional file-type `include` glob (e.g. `*.java`).
 - **`query_code_graph`** — query the per-repo code graph to find callers, implementations, or dependents of a specific symbol. See [Code graph](#code-graph-impact-analysis) below.
+- **`semantic_search`** — search across all vector-indexed repositories by meaning. Useful for finding library implementations, shared utilities, or similar patterns in other repos. See [Semantic search](#semantic-search-cross-repo-vector-search) below.
 - **`read_file`** — read the full contents of any file in the repo (interfaces, base classes, configuration).
 - **`list_files`** — directory listing up to 5 levels deep, configurable via an optional `depth` parameter (default 3, max 5).
 
@@ -863,6 +881,58 @@ curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
 ```
 
 **Supported languages:** Java (full AST via JavaParser), C# (regex-based — classes, interfaces, structs, enums, methods, fields, inheritance, using directives, method calls). Non-supported files are silently skipped.
+
+### Semantic search (cross-repo vector search)
+
+The agent can search across all indexed repositories by meaning using vector embeddings, powered by Voyage AI and pgvector. This lets Claude find library implementations, shared utilities, base classes, or similar patterns in other repos during reviews — even when the exact terms don't appear in the code.
+
+**How it works:**
+
+1. When vector indexing is enabled for a repo, the agent extracts class and method source code and generates vector embeddings via Voyage AI (`voyage-code-3`)
+2. Embeddings are stored in PostgreSQL using pgvector (1024-dimensional vectors with IVFFlat indexing)
+3. During reviews, Claude can invoke `semantic_search` with a natural language query (e.g. "payment refund handling logic")
+4. The query is embedded and matched against all vector-indexed repos using cosine similarity
+5. Claude receives the top matching code snippets with file paths, repo names, and line numbers
+
+**Enable vector indexing for a repo:**
+
+```bash
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+```
+
+Then rebuild the graph to generate embeddings:
+
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/shared-lib
+```
+
+Vector indexing is opt-in per repo (default: disabled). Start by enabling it on shared libraries that other repos depend on.
+
+**Available tools during review:**
+
+- **`semantic_search`** — search across all vector-indexed repos by meaning. Parameters: `query` (required, natural language), `repo` (optional, restrict to one repo), `top_k` (optional, default 10, max 25)
+
+**Local setup — pgvector:**
+
+pgvector must be installed in your PostgreSQL instance. On macOS with Homebrew:
+
+```bash
+# Check your PostgreSQL version
+brew list | grep postgres
+
+# Build and install pgvector for your version (e.g. postgresql@14)
+cd /tmp
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+export PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config
+make
+make install
+
+# Verify
+ls /opt/homebrew/share/postgresql@14/extension/vector.control
+```
+
+On AWS RDS for PostgreSQL, pgvector is available natively on versions 14.7+, 15.2+, and later — no manual installation needed.
 
 ### Review memory
 
@@ -903,6 +973,16 @@ curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/disable
 curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
 ```
 
+**Enable/disable vector indexing:** Turn semantic vector indexing on or off per repo. When enabled, embeddings are generated during graph builds and the repo becomes searchable via `semantic_search`. Default: disabled.
+
+```bash
+# Enable vector indexing for a shared library
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+
+# Disable
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/disable
+```
+
 **Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
 
 **Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{IMPACT_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
@@ -912,6 +992,7 @@ curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
   -H 'Content-Type: application/json' \
   -d '{
     "reviewEnabled": true,
+    "vectorEnabled": false,
     "ruleNames": ["java-conventions", "security-standards"],
     "reviewPrompt": "You are reviewing a pull request for {{PR_TITLE}}.\n\n{{MEMORY_SECTION}}\n\nFocus only on security and performance issues.\n\n## Diff\n```\n{{DIFF}}\n```"
   }'
@@ -1037,12 +1118,13 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 | `agent_comments` | Maps comment IDs to agent findings for reply tracking and resolution |
 | `ai_calls` | AI call metrics (tokens, cost, duration) per job |
 | `review_memory` | Team preferences learned during PR reviews (via `/learn` and auto-suppression) |
-| `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
+| `repo_settings` | Per-repo configuration (review enabled, vector enabled, rule names, custom prompt) |
 | `jobs` | Active job queue with status, PR URL, and diff stats |
 | `job_history` | Archived completed jobs |
 | `comment_feedback` | Developer feedback on individual findings (`/fp` marks); powers FP rate metrics and auto-suppression |
 | `code_graph_nodes` | Code graph symbols (classes, methods, fields, enums) per repo |
 | `code_graph_edges` | Code graph relationships (calls, extends, implements, imports) per repo |
+| `code_embeddings` | Vector embeddings for semantic code search (pgvector, 1024-dim) per repo |
 
 ## Project Structure
 
@@ -1058,7 +1140,7 @@ src/main/java/com/eneve/agent/
 │   ├── AgentRunner.java         # Job orchestrator (fix + review)
 │   ├── AgentPromptBuilder.java  # System prompt construction (context, memory, FP sections)
 │   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, query_code_graph, list_files, run_command)
+│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, query_code_graph, semantic_search, list_files, run_command)
 │   ├── BuildValidator.java      # Maven build validation
 │   ├── FindingResolver.java     # Determines if past findings were addressed in new commits
 │   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
@@ -1079,7 +1161,10 @@ src/main/java/com/eneve/agent/
 │   ├── CodeGraphIndexer.java    # JavaParser (Java) + regex (C#) AST indexer
 │   ├── CodeGraphQueryService.java # Impact analysis prompt builder from graph
 │   ├── CodeGraphBuildService.java # Clone-and-index logic for background/on-demand builds
-│   └── CodeGraphScheduler.java  # Scheduled pre-building of missing code graphs
+│   ├── CodeGraphScheduler.java  # Scheduled pre-building of missing code graphs
+│   ├── VoyageEmbeddingService.java # Voyage AI embeddings HTTP client (batching, document/query types)
+│   ├── EmbeddingStore.java      # Vector embedding persistence (pgvector cosine search)
+│   └── EmbeddingIndexer.java    # Extracts symbol source code and generates embeddings
 ├── aikido/
 │   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
 │   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
@@ -1135,6 +1220,7 @@ src/main/java/com/eneve/agent/
 │   ├── ReadFileTool.java
 │   ├── SearchCodeTool.java              # grep-based code search for review context
 │   ├── QueryCodeGraphTool.java          # On-demand code graph queries during review
+│   ├── SemanticSearchTool.java          # Cross-repo semantic search via pgvector
 │   ├── WriteFileTool.java
 │   ├── RunCommandTool.java
 │   └── ListFilesTool.java

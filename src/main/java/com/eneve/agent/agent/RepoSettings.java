@@ -13,6 +13,7 @@ public record RepoSettings(
         String workspace,
         String repoSlug,
         boolean reviewEnabled,
+        boolean vectorEnabled,
         List<String> ruleNames,
         String reviewPrompt,
         List<String> disabledHooks,
@@ -21,7 +22,7 @@ public record RepoSettings(
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
-        return new RepoSettings(null, workspace, repoSlug, true,
+        return new RepoSettings(null, workspace, repoSlug, true, false,
                 List.of(), null, List.of(), Instant.now(), Instant.now());
     }
 }

@@ -29,6 +29,7 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(readFile()),
                 ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(queryCodeGraph()),
+                ToolUnion.ofTool(semanticSearch()),
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(listFiles()),
                 ToolUnion.ofTool(fetchUrl())
@@ -131,6 +132,34 @@ public final class ToolDefinitions {
                                 .build())
                         .addRequired("symbol")
                         .addRequired("relation")
+                        .build())
+                .build();
+    }
+
+    private static Tool semanticSearch() {
+        return Tool.builder()
+                .name("semantic_search")
+                .description("Search for code across all indexed repositories by meaning. "
+                        + "Use this to find library implementations, shared utilities, base classes, "
+                        + "or similar patterns in other repos beyond the one currently being reviewed. "
+                        + "Unlike search_code (grep), this understands intent — e.g. searching "
+                        + "'payment refund logic' finds relevant code even if those exact words don't appear.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("query", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Natural language description of the code you want to find"
+                                )))
+                                .putAdditionalProperty("repo", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Optional: restrict search to a specific repository slug. Omit to search across all indexed repos."
+                                )))
+                                .putAdditionalProperty("top_k", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Number of results to return (default: 10, max: 25)"
+                                )))
+                                .build())
+                        .addRequired("query")
                         .build())
                 .build();
     }
