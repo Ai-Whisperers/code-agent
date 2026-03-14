@@ -15,7 +15,9 @@ import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
+import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
@@ -65,6 +67,7 @@ public class AgentRunner {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject CodeGraphQueryService codeGraphQueryService;
     @Inject PrSummaryGenerator prSummaryGenerator;
+    @Inject CoverageReporter coverageReporter;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -900,6 +903,168 @@ public class AgentRunner {
         }
     }
 
+    // ─── Generate Unit Tests ─────────────────────────────────────────────
+
+    public void executeGenerateTests(JobRecord job) {
+        GenerateTestsRequest request = job.getGenerateTestsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failGenerateTests(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String testBranch = request.branchName();
+            LOG.infof("GenerateTests: cloning %s/%s (branch: %s)", coords.organization(), coords.repository(), testBranch);
+            try {
+                workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
+                        testBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failGenerateTests(job, "Clone/branch failed: " + e.getMessage());
+                return;
+            }
+
+            configureGitIfNeeded(workspace);
+
+            // ── Baseline coverage (before agent writes any tests) ──
+            CoverageSnapshot baselineCoverage = null;
+            if (coverageReporter.isJacocoPresent(workspace)) {
+                try {
+                    LOG.info("GenerateTests: measuring baseline coverage...");
+                    baselineCoverage = coverageReporter.measureCoverage(workspace);
+                    if (baselineCoverage != null) {
+                        LOG.infof("GenerateTests: baseline — lines %.1f%%, branches %.1f%%",
+                                baselineCoverage.lineRate(), baselineCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("Baseline coverage measurement failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentStarted(request.jiraKey(), testBranch));
+            }
+
+            String systemPrompt = promptBuilder.buildGenerateTestsPrompt(request, workspace, baselineCoverage);
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                failGenerateTests(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            // ── Validate build + measure post-generation coverage ──
+            CoverageSnapshot afterCoverage = null;
+            if (coverageReporter.isJacocoPresent(workspace)) {
+                // Running JaCoCo also validates the tests (throws if they fail)
+                try {
+                    LOG.info("GenerateTests: measuring post-generation coverage...");
+                    afterCoverage = coverageReporter.measureCoverage(workspace);
+                    if (afterCoverage != null) {
+                        LOG.infof("GenerateTests: after — lines %.1f%%, branches %.1f%%",
+                                afterCoverage.lineRate(), afterCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    failGenerateTests(job, "Build validation failed (generated tests did not pass): " + e.getMessage());
+                    return;
+                }
+            } else {
+                // No JaCoCo: fall back to plain build validation
+                try {
+                    buildValidator.validate(workspace);
+                } catch (Exception e) {
+                    failGenerateTests(job, "Build validation failed (generated tests did not pass): " + e.getMessage());
+                    return;
+                }
+            }
+
+            // ── Build coverage section for commit msg and PR description ──
+            String coverageSummary = "";
+            if (afterCoverage != null) {
+                coverageSummary = "\n\n" + afterCoverage.formatMarkdownComparison(baselineCoverage);
+            }
+
+            boolean hasChanges;
+            try {
+                String commitMsg = "test: generate unit tests"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? " for " + request.jiraKey() : "")
+                        + "\n\n" + summary;
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                failGenerateTests(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                failGenerateTests(job, "Agent completed but made no file changes. Claude summary: " + summary);
+                return;
+            }
+
+            try {
+                workspace.push(testBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failGenerateTests(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            DiffStats stats = countChanges(workspace);
+            job.setFilesChanged(stats.filesChanged);
+            job.setLinesChanged(stats.linesChanged);
+
+            String prUrl;
+            String prId;
+            try {
+                String title = "test: generate unit tests"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? " (" + request.jiraKey() + ")" : "");
+                String description = "**Automated unit test generation by Code Agent**\n\n"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? "JIRA: " + request.jiraKey() + "\n\n" : "")
+                        + summary
+                        + coverageSummary;
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
+                        testBranch, request.targetBranchOrDefault(),
+                        title, description);
+                prUrl = prResult[0];
+                prId = prResult[1];
+            } catch (Exception e) {
+                failGenerateTests(job, "Create PR failed: " + e.getMessage());
+                return;
+            }
+
+            job.setStatus(JobStatus.AWAITING_APPROVAL);
+            job.setSummary(summary);
+            job.setPrUrl(prUrl);
+            job.setPrId(prId);
+            jobStore.update(job);
+
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
+            }
+
+            RunResult result = buildGenerateTestsResult(job, true);
+            teamsNotifier.sendNotification(result);
+            n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+
+            LOG.infof("GenerateTests job %s completed. PR: %s", job.getJobId(), prUrl);
+
+        } catch (Exception e) {
+            failGenerateTests(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
     // ─── Approve / Reject ───────────────────────────────────────────────
 
     public void approve(JobRecord job) {
@@ -1241,6 +1406,22 @@ public class AgentRunner {
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
+    private void failGenerateTests(JobRecord job, String message) {
+        LOG.errorf("GenerateTests job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+
+        GenerateTestsRequest request = job.getGenerateTestsRequest();
+        if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+        }
+
+        RunResult result = buildGenerateTestsResult(job, false);
+        teamsNotifier.sendNotification(result);
+        n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+    }
+
     private void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
@@ -1283,6 +1464,16 @@ public class AgentRunner {
                 "PR-" + req.prId(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 0, 0);
+    }
+
+    private RunResult buildGenerateTestsResult(JobRecord job, boolean success) {
+        GenerateTestsRequest req = job.getGenerateTestsRequest();
+        return new RunResult(
+                job.getJobId(), success,
+                req.jiraKey() != null ? req.jiraKey() : "",
+                req.branchName(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged());
     }
 
     private RunResult buildFixPrResult(JobRecord job, boolean success) {

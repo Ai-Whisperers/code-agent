@@ -13,6 +13,7 @@ import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
@@ -395,6 +396,50 @@ public class RunFixResource {
 
         LOG.infof("Fix-PR job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
         return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
+    }
+
+    @POST
+    @Path("/generate-tests")
+    @Tag(name = "Code Review")
+    @Operation(
+            operationId = "generateTests",
+            summary = "Submit a unit test generation job",
+            description = "Queues a job that clones the repo, uses the AI agent to generate unit tests "
+                    + "for the specified source files (or discovers untested classes automatically), "
+                    + "validates the tests with `mvn test`, and creates a pull request with the generated tests. "
+                    + "Returns immediately with a jobId for polling."
+    )
+    @RequestBody(
+            required = true,
+            description = "Unit test generation specification with repo URL and branch name",
+            content = @Content(schema = @Schema(implementation = GenerateTestsRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Test generation job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"repoUrl is required\"}"))),
+            @APIResponse(responseCode = "429", description = "Job queue is full",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"Job queue is full\"}")))
+    })
+    public Response generateTests(GenerateTestsRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+        if (request.branchName() == null || request.branchName().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "branchName is required")).build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        LOG.infof("GenerateTests job %s accepted for %s (branch: %s)", jobId, request.repoUrl(), request.branchName());
+        return Response.accepted(Map.of("jobId", jobId, "branch", request.branchName())).build();
     }
 
     @GET

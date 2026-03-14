@@ -9,6 +9,7 @@ import com.eneve.agent.agent.CommentStore;
 import com.eneve.agent.agent.IntentClassifier;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ReplyCommentRequest;
@@ -131,6 +132,11 @@ public class AzureDevOpsCommentWebhookResource {
             LOG.infof("Comment webhook: developer replied (comment %d) to agent comment %d on PR #%s (%s/%s)",
                     commentId, parentCommentId, prId, projectName, repoName);
 
+            // Fast path: /generate-tests triggers a unit test generation job for this PR
+            if (commentText.equalsIgnoreCase("/generate-tests")) {
+                return handleGenerateTestsCommand(remoteUrl, prId, parentCommentId);
+            }
+
             String originalFinding = commentStore.find(parentCommentId)
                     .map(CommentContext::findingText).orElse(null);
             CommentIntent intent = intentClassifier.classify(commentText, originalFinding);
@@ -144,6 +150,32 @@ public class AzureDevOpsCommentWebhookResource {
             LOG.errorf("Azure DevOps comment webhook processing error: %s", e.getMessage());
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
+    }
+
+    private Response handleGenerateTestsCommand(String repoUrl, String prId,
+                                                  long parentCommentId) {
+        String branchName = "agent/tests/pr-" + prId;
+        GenerateTestsRequest request = new GenerateTestsRequest(
+                repoUrl, branchName, null, null, null, null, null, null, null);
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429)
+                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
+                    .build();
+        }
+
+        LOG.infof("/generate-tests triggered job %s for PR #%s", jobId, prId);
+
+        return Response.ok(Map.of(
+                "action", "generate_tests_triggered",
+                "jobId", jobId,
+                "branch", branchName,
+                "prId", prId
+        )).build();
     }
 
     private Response submitJob(String repoUrl, String prId,

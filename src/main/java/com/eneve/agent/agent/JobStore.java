@@ -14,6 +14,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
@@ -364,6 +365,8 @@ public class JobStore {
                         JobType.FIX_COMMENT);
                 case HOOK -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, HookJobRequest.class));
+                case GENERATE_TESTS -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, GenerateTestsRequest.class));
             };
         } catch (Exception e) {
             LOG.errorf("Failed to deserialize request payload for job %s (type=%s): %s",
@@ -379,6 +382,7 @@ public class JobStore {
             case FIX_PR -> job.getFixPrRequest();
             case REPLY, FIX_COMMENT -> job.getReplyRequest();
             case HOOK -> job.getHookRequest();
+            case GENERATE_TESTS -> job.getGenerateTestsRequest();
         };
         if (request == null) return "{}";
         try {

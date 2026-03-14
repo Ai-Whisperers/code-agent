@@ -16,6 +16,7 @@ import com.eneve.agent.agent.JobStore;
 import com.eneve.agent.agent.MemoryEntry;
 import com.eneve.agent.agent.MemoryStore;
 import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ReplyCommentRequest;
@@ -202,6 +203,12 @@ public class GitLabCommentWebhookResource {
                         inReplyToId, noteAuthor);
             }
 
+            // Fast path: /generate-tests triggers a unit test generation job for this MR
+            if (lowerNote.equals("/generate-tests")) {
+                return handleGenerateTestsCommand(repoUrl, mrIid, inReplyToId,
+                        namespace, repoSlug);
+            }
+
             // Classify intent: is this a fix request or a discussion?
             String originalFinding = commentStore.find(inReplyToId)
                     .map(CommentContext::findingText).orElse(null);
@@ -243,6 +250,40 @@ public class GitLabCommentWebhookResource {
                 "jobType", jobType.name(),
                 "parentCommentId", parentNoteId,
                 "prId", prId
+        )).build();
+    }
+
+    private Response handleGenerateTestsCommand(String repoUrl, String mrIid,
+                                                  long parentNoteId,
+                                                  String namespace, String repoSlug) {
+        String branchName = "agent/tests/mr-" + mrIid;
+        GenerateTestsRequest request = new GenerateTestsRequest(
+                repoUrl, branchName, null, null, null, null, null, null, null);
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429)
+                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
+                    .build();
+        }
+
+        LOG.infof("/generate-tests triggered job %s for MR !%s (%s/%s)", jobId, mrIid, namespace, repoSlug);
+
+        try {
+            platformService.replyToComment(namespace, "", repoSlug, mrIid, parentNoteId,
+                    "Generating unit tests — a merge request with the generated tests will be created shortly. Job ID: `" + jobId + "`");
+        } catch (Exception e) {
+            LOG.warnf("Failed to post /generate-tests confirmation reply (non-fatal): %s", e.getMessage());
+        }
+
+        return Response.ok(Map.of(
+                "action", "generate_tests_triggered",
+                "jobId", jobId,
+                "branch", branchName,
+                "mrIid", mrIid
         )).build();
     }
 

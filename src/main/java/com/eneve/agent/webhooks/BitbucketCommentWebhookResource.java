@@ -17,6 +17,7 @@ import com.eneve.agent.agent.MemoryEntry;
 import com.eneve.agent.agent.MemoryStore;
 import com.eneve.agent.agent.RepoSettingsStore;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ReplyCommentRequest;
@@ -176,6 +177,16 @@ public class BitbucketCommentWebhookResource {
                         parentCommentId, commentAuthor);
             }
 
+            // Fast path: /generate-tests triggers a unit test generation job for this PR
+            if (lowerText.equals("/generate-tests")) {
+                String[] parts = repoFullName.split("/", 2);
+                if (parts.length != 2) {
+                    return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
+                }
+                return handleGenerateTestsCommand(repoUrl, prId, parentCommentId,
+                        parts[0], parts[1]);
+            }
+
             // Classify intent: is this a fix request or a discussion?
             String originalFinding = commentStore.find(parentCommentId)
                     .map(CommentContext::findingText).orElse(null);
@@ -217,6 +228,40 @@ public class BitbucketCommentWebhookResource {
                 "jobId", jobId,
                 "jobType", jobType.name(),
                 "parentCommentId", parentCommentId,
+                "prId", prId
+        )).build();
+    }
+
+    private Response handleGenerateTestsCommand(String repoUrl, String prId,
+                                                  long parentCommentId,
+                                                  String workspace, String repoSlug) {
+        String branchName = "agent/tests/pr-" + prId;
+        GenerateTestsRequest request = new GenerateTestsRequest(
+                repoUrl, branchName, null, null, null, null, null, null, null);
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429)
+                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
+                    .build();
+        }
+
+        LOG.infof("/generate-tests triggered job %s for PR #%s (%s/%s)", jobId, prId, workspace, repoSlug);
+
+        try {
+            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
+                    "Generating unit tests — a pull request with the generated tests will be created shortly. Job ID: `" + jobId + "`");
+        } catch (Exception e) {
+            LOG.warnf("Failed to post /generate-tests confirmation reply (non-fatal): %s", e.getMessage());
+        }
+
+        return Response.ok(Map.of(
+                "action", "generate_tests_triggered",
+                "jobId", jobId,
+                "branch", branchName,
                 "prId", prId
         )).build();
     }

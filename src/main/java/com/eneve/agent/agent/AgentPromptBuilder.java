@@ -12,6 +12,7 @@ import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.rules.CursorRulesLoader;
@@ -179,6 +180,86 @@ public class AgentPromptBuilder {
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, fixInstructions);
+    }
+
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace) {
+        return buildGenerateTestsPrompt(request, workspace, null);
+    }
+
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace,
+                                           CoverageReporter.CoverageSnapshot baseline) {
+        String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String targetFilesSection;
+        if (request.targetFiles() != null && !request.targetFiles().isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Focus ONLY on generating tests for these specific source files/packages:\n");
+            for (String f : request.targetFiles()) {
+                sb.append("  - ").append(f).append("\n");
+            }
+            targetFilesSection = sb.toString();
+        } else if (baseline != null) {
+            targetFilesSection = """
+                    Scan `src/main/java` to find classes that currently have low or no test coverage. \
+                    Use the coverage baseline below to identify the highest-impact targets. \
+                    Prioritize service classes, utility classes, and classes with non-trivial business logic. \
+                    Skip generated code (e.g. Panache entities, mappers).
+                    """;
+        } else {
+            targetFilesSection = """
+                    Scan `src/main/java` to find classes that currently have no corresponding test file \
+                    in `src/test/java`. Prioritize service classes, utility classes, and classes with \
+                    non-trivial business logic. Skip generated code (e.g. Panache entities, mappers).
+                    """;
+        }
+
+        String coverageSection = baseline != null
+                ? "\n" + baseline.formatForPrompt() + "\n"
+                : "";
+
+        String generateTestsInstructions = """
+                You are generating unit tests for a Java project.
+                Your ONLY goal is to write new or improved test files. Do NOT modify any production source code.
+                %s
+                ## Discovery (do this FIRST)
+                1. Read `pom.xml` or `build.gradle` to identify the test framework and mocking library in use \
+                (e.g. JUnit 5, Mockito, AssertJ, Quarkus test extensions, Spring Boot Test).
+                2. List and read a sample of existing test files under `src/test/java` to understand the \
+                project's testing conventions, base classes, and annotation patterns.
+                3. Note the package structure so you place new test files in the correct mirrored package.
+
+                ## Scope
+                %s
+                ## Test Writing Rules
+                - Place each test file at the mirrored path in `src/test/java/...`.
+                - Use the same test framework and assertion library already used in the project.
+                - Prefer plain `@ExtendWith(MockitoExtension.class)` unit tests unless the class requires \
+                a full container (`@QuarkusTest`).
+                - For each class under test, cover:
+                  - Happy path (typical valid inputs)
+                  - Edge cases (null inputs, empty collections, boundary values)
+                  - Error paths (exceptions, invalid state)
+                - Use descriptive `@DisplayName` or method name patterns already present in the project.
+                - Mock all external dependencies (repositories, services, HTTP clients) with Mockito.
+                - Do NOT add `@Disabled` tests or tests that always pass trivially.
+                - If a test file already exists for a class, ADD missing test cases rather than replacing the file.
+
+                ## After Writing Tests
+                - Run `mvn test` (or `gradle test` if there is no `pom.xml`) to verify the tests compile and pass.
+                - If tests fail, read the error output carefully, fix the failures, and re-run.
+                - Repeat until all tests pass.
+                - Provide a summary listing which test files were created or modified and the number of test \
+                cases added for each.
+                """.formatted(coverageSection, targetFilesSection);
+
+        String guardrailText = buildTestGenerationGuardrailText();
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, generateTestsInstructions);
     }
 
     public String buildReplyPrompt(CommentContext ctx, List<ThreadComment> thread,
@@ -436,6 +517,26 @@ public class AgentPromptBuilder {
 
     private String resolveRulesRepoUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;
+    }
+
+    /**
+     * Guardrails for unit test generation: no file/line count cap (the agent may need to
+     * create many test files), but production code is fully off-limits.
+     */
+    private String buildTestGenerationGuardrailText() {
+        return """
+                You MUST follow these rules without exception:
+                - Do NOT modify files under these paths: %s
+                - Do NOT modify ANY file under src/main/java — only write or update files under src/test/java.
+                - Only run allowed commands: %s
+                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - If tests fail, report the failure and do NOT proceed
+                - Stop as soon as all requested tests have been written and pass.
+                - Never read or write files outside the repository root.
+                """.formatted(
+                String.join(", ", guardrails.getBlockedPaths()),
+                String.join(", ", guardrails.getAllowedCommands())
+        );
     }
 
     private String buildWritableGuardrailText(String stopCondition) {
