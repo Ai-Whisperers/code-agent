@@ -19,7 +19,8 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(readFile()),
                 ToolUnion.ofTool(writeFile()),
                 ToolUnion.ofTool(runCommand()),
-                ToolUnion.ofTool(listFiles())
+                ToolUnion.ofTool(listFiles()),
+                ToolUnion.ofTool(fetchUrl())
         );
     }
 
@@ -29,7 +30,8 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(queryCodeGraph()),
                 ToolUnion.ofTool(runCommand()),
-                ToolUnion.ofTool(listFiles())
+                ToolUnion.ofTool(listFiles()),
+                ToolUnion.ofTool(fetchUrl())
         );
     }
 
@@ -149,6 +151,24 @@ public final class ToolDefinitions {
                                         "description", "How many levels deep to traverse (1-5, default 3)"
                                 )))
                                 .build())
+                        .build())
+                .build();
+    }
+
+    private static Tool fetchUrl() {
+        return Tool.builder()
+                .name("fetch_url")
+                .description("Fetch a web page (documentation, API reference, framework guide) and return its text content. "
+                        + "Use this to look up official docs when reviewing code that uses specific frameworks, libraries, or APIs. "
+                        + "Only HTTPS URLs are supported.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("url", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The HTTPS URL to fetch (e.g. official docs page, API reference, framework guide)"
+                                )))
+                                .build())
+                        .addRequired("url")
                         .build())
                 .build();
     }

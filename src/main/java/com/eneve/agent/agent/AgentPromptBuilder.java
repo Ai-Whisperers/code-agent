@@ -205,7 +205,7 @@ public class AgentPromptBuilder {
                 - If they ask for clarification, explain your reasoning in more detail with code references.
                 - If they disagree, consider their argument carefully. Acknowledge if they make a valid point.
                 - If they provide additional context that changes your assessment, say so explicitly.
-                - You can use `read_file` and `list_files` to examine the code for additional context.
+                - You can use `read_file`, `list_files`, and `fetch_url` to examine the code or look up official documentation for additional context.
                 - Keep your response focused and conversational — this is a thread reply, not a full review.
                 - Do NOT output JSON. Write your response in natural language (markdown is fine).
                 - Your final message will be posted directly as a Bitbucket comment, so make it clean.
@@ -327,6 +327,7 @@ public class AgentPromptBuilder {
                 - Use `read_file` to examine interfaces, base classes, utility files, or configuration referenced in the diff.
                 - Use `list_files` to understand the module and package structure around changed files.
                 - Look at test files for changed modules to understand expected behaviour and existing coverage.
+                - Use `fetch_url` to look up official framework or library documentation when the changed code uses specific APIs, annotations, or patterns you want to verify (e.g. Quarkus, Spring, React, or any third-party library docs). Prefer official documentation sites.
                 - Only gather context that is directly relevant to the changed code — do not explore unrelated areas.
 
                 This context will help you avoid false positives and produce more precise, actionable findings.
@@ -407,7 +408,7 @@ public class AgentPromptBuilder {
                 - **summary**: 2-4 sentence overall assessment
                 %s
                 ## Instructions
-                - Use `search_code`, `query_code_graph`, `read_file`, and `list_files` to gather context before finalising findings (see Context Gathering above).
+                - Use `search_code`, `query_code_graph`, `read_file`, `list_files`, and `fetch_url` to gather context before finalising findings (see Context Gathering above).
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
                 - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
