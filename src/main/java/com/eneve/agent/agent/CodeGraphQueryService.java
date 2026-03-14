@@ -13,6 +13,10 @@ public class CodeGraphQueryService {
 
     private static final Logger LOG = Logger.getLogger(CodeGraphQueryService.class);
     private static final int MAX_OUTPUT_CHARS = 3000;
+    private static final int MAX_DIAGRAM_CHARS = 2000;
+    private static final int MAX_FILES_FOR_DIAGRAM = 5;
+    private static final int MAX_SYMBOLS_PER_FILE = 10;
+    private static final int MAX_EDGES_PER_SYMBOL = 5;
 
     @Inject
     CodeGraphStore store;
@@ -87,5 +91,92 @@ public class CodeGraphQueryService {
         LOG.debugf("Built impact section (%d chars) for %s/%s from %d changed files",
                 sb.length(), workspace, repoSlug, sourceFiles.size());
         return sb.toString();
+    }
+
+    /**
+     * Builds a structured description of call relationships and class hierarchies
+     * for the symbols changed in this PR. Used as context for LLM-generated Mermaid diagrams.
+     */
+    public String buildDiagramContext(String workspace, String repoSlug, List<String> changedFiles) {
+        List<String> sourceFiles = changedFiles.stream()
+                .filter(f -> f.endsWith(".java") || f.endsWith(".cs"))
+                .limit(MAX_FILES_FOR_DIAGRAM)
+                .toList();
+
+        if (sourceFiles.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder calls = new StringBuilder();
+        StringBuilder hierarchy = new StringBuilder();
+
+        for (String filePath : sourceFiles) {
+            List<String> symbols = store.findSymbolsInFile(workspace, repoSlug, filePath)
+                    .stream().limit(MAX_SYMBOLS_PER_FILE).toList();
+
+            for (String symbol : symbols) {
+                if (calls.length() + hierarchy.length() > MAX_DIAGRAM_CHARS) {
+                    break;
+                }
+
+                if (symbol.contains(".")) {
+                    // Method symbol: gather callers and callees
+                    List<CodeGraphStore.EdgeResult> callers =
+                            store.findCallers(workspace, repoSlug, symbol)
+                                    .stream().limit(MAX_EDGES_PER_SYMBOL).toList();
+                    List<CodeGraphStore.EdgeResult> callees =
+                            store.findCallees(workspace, repoSlug, symbol)
+                                    .stream().limit(MAX_EDGES_PER_SYMBOL).toList();
+
+                    if (!callers.isEmpty()) {
+                        calls.append("- `").append(symbol).append("` ← called by: ");
+                        calls.append(callers.stream()
+                                .map(CodeGraphStore.EdgeResult::sourceNode)
+                                .reduce((a, b) -> a + ", " + b).orElse(""));
+                        calls.append("\n");
+                    }
+                    if (!callees.isEmpty()) {
+                        calls.append("- `").append(symbol).append("` → calls: ");
+                        calls.append(callees.stream()
+                                .map(CodeGraphStore.EdgeResult::sourceNode)
+                                .reduce((a, b) -> a + ", " + b).orElse(""));
+                        calls.append("\n");
+                    }
+                } else {
+                    // Type symbol: gather implementations/extensions
+                    List<CodeGraphStore.EdgeResult> impls =
+                            store.findImplementations(workspace, repoSlug, symbol)
+                                    .stream().limit(MAX_EDGES_PER_SYMBOL).toList();
+
+                    if (!impls.isEmpty()) {
+                        hierarchy.append("- `").append(symbol).append("` ← implemented/extended by: ");
+                        hierarchy.append(impls.stream()
+                                .map(CodeGraphStore.EdgeResult::sourceNode)
+                                .reduce((a, b) -> a + ", " + b).orElse(""));
+                        hierarchy.append("\n");
+                    }
+                }
+            }
+        }
+
+        if (calls.isEmpty() && hierarchy.isEmpty()) {
+            return "";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Code Relationships (for diagram generation)\n");
+        if (!calls.isEmpty()) {
+            sb.append("\n### Call Graph\n").append(calls);
+        }
+        if (!hierarchy.isEmpty()) {
+            sb.append("\n### Class Hierarchy\n").append(hierarchy);
+        }
+
+        String result = sb.toString();
+        if (result.length() > MAX_DIAGRAM_CHARS) {
+            result = result.substring(0, MAX_DIAGRAM_CHARS) + "\n... (truncated)\n";
+        }
+        LOG.debugf("Built diagram context (%d chars) for %s/%s", result.length(), workspace, repoSlug);
+        return result;
     }
 }

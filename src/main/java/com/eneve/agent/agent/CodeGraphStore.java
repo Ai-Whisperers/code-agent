@@ -156,6 +156,30 @@ public class CodeGraphStore {
         return queryEdges(sql, workspace, repoSlug, symbolName);
     }
 
+    public List<EdgeResult> findCallees(String workspace, String repoSlug, String symbolName) {
+        String sql = """
+                SELECT target_node, target_file FROM code_graph_edges
+                WHERE workspace = ? AND repo_slug = ? AND source_node = ? AND edge_type = 'CALLS'
+                LIMIT 10
+                """;
+        List<EdgeResult> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            ps.setString(3, symbolName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new EdgeResult(rs.getString("target_node"), rs.getString("target_file")));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query callees for symbol %s in %s/%s: %s",
+                    symbolName, workspace, repoSlug, e.getMessage());
+        }
+        return results;
+    }
+
     public List<String> findSymbolsInFile(String workspace, String repoSlug, String filePath) {
         String sql = """
                 SELECT symbol_name FROM code_graph_nodes

@@ -47,19 +47,25 @@ public class PrSummaryGenerator {
     @Inject
     AiCallStore aiCallStore;
 
+    @Inject
+    MermaidRenderer mermaidRenderer;
+
     /**
      * Generate a PR summary comment body from the diff. Returns fully formatted
      * markdown ready to be posted as a PR comment, or null if generation fails.
+     *
+     * @param diagramContext optional code-graph relationship text for diagram generation;
+     *                       pass null or blank to skip diagram generation
      */
     public String generate(String prTitle, String targetBranch, List<ParsedDiffFile> parsedFiles,
-                           String jobId) {
+                           String jobId, String diagramContext) {
         if (parsedFiles == null || parsedFiles.isEmpty()) {
             return null;
         }
 
         String compactDiff = buildCompactDiff(parsedFiles);
         String fileList = buildFileList(parsedFiles);
-        String prompt = buildPrompt(prTitle, targetBranch, fileList, compactDiff);
+        String prompt = buildPrompt(prTitle, targetBranch, fileList, compactDiff, diagramContext);
 
         String responseText = callClaude(prompt, jobId);
         if (responseText == null) {
@@ -75,7 +81,35 @@ public class PrSummaryGenerator {
     }
 
     private String buildPrompt(String prTitle, String targetBranch, String fileList,
-                               String compactDiff) {
+                               String compactDiff, String diagramContext) {
+        boolean includeDiagrams = diagramContext != null && !diagramContext.isBlank();
+
+        String diagramSection = includeDiagrams ? """
+
+                ## Code Relationships
+                %s
+                """.formatted(diagramContext) : "";
+
+        String diagramOutputSpec = includeDiagrams ? """
+                ,
+                  "diagrams": [
+                    {
+                      "title": "Short descriptive title",
+                      "mermaid": "sequenceDiagram or classDiagram syntax here (no fences)"
+                    }
+                  ]
+                """ : "";
+
+        String diagramRule = includeDiagrams ? """
+                - Include a "diagrams" array only when the PR affects component interactions \
+                (API calls, event flows, service chains) or type hierarchies. \
+                Omit it entirely for trivial single-file changes.
+                - Each diagram must use valid Mermaid syntax (sequenceDiagram or classDiagram). \
+                Use the Code Relationships section above to ground the diagram in real call chains. \
+                Do not invent relationships that are not in the diff or the code graph.
+                - Keep diagrams concise: max 10 participants or nodes.
+                """ : "";
+
         return """
                 Analyze this pull request diff and produce a JSON summary.
 
@@ -85,7 +119,7 @@ public class PrSummaryGenerator {
 
                 ## Changed Files
                 %s
-
+                %s
                 ## Diff
                 ```
                 %s
@@ -101,7 +135,7 @@ public class PrSummaryGenerator {
                       "file": "exact/path/to/file.java",
                       "changes": "Concise one-line description of what changed in this file"
                     }
-                  ]
+                  ]%s
                 }
 
                 Rules:
@@ -111,12 +145,15 @@ public class PrSummaryGenerator {
                 - Use technical but accessible language.
                 - For renamed/moved files, mention the rename.
                 - For deleted files, say "Removed" with a brief reason if discernible.
-                - Output ONLY the JSON object. No explanation, no markdown fences.
+                %s- Output ONLY the JSON object. No explanation, no markdown fences.
                 """.formatted(
                 prTitle != null ? prTitle : "(untitled)",
                 targetBranch != null ? targetBranch : "(unknown)",
                 fileList,
-                compactDiff
+                diagramSection,
+                compactDiff,
+                diagramOutputSpec,
+                diagramRule
         );
     }
 
@@ -239,6 +276,20 @@ public class PrSummaryGenerator {
                     if (!file.isEmpty()) {
                         changes = changes.replace("|", "\\|");
                         comment.append("| `").append(file).append("` | ").append(changes).append(" |\n");
+                    }
+                }
+            }
+
+            JsonNode diagrams = root.path("diagrams");
+            if (diagrams.isArray() && !diagrams.isEmpty()) {
+                comment.append("\n### Sequence Diagrams\n\n");
+                for (JsonNode diagram : diagrams) {
+                    String title = diagram.path("title").asText("").strip();
+                    String mermaid = diagram.path("mermaid").asText("").strip();
+                    if (!title.isEmpty() && !mermaid.isEmpty()) {
+                        comment.append("<details><summary>").append(title).append("</summary>\n\n");
+                        comment.append(mermaidRenderer.render(title, mermaid));
+                        comment.append("\n\n</details>\n\n");
                     }
                 }
             }

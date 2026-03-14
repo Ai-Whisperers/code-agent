@@ -87,6 +87,9 @@ public class AgentRunner {
     @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
     boolean prSummaryEnabled;
 
+    @ConfigProperty(name = "review.sequence-diagrams.enabled", defaultValue = "true")
+    boolean sequenceDiagramsEnabled;
+
     // ─── Run-Fix (implement a JIRA ticket) ──────────────────────────────
 
     public void execute(JobRecord job) {
@@ -395,8 +398,15 @@ public class AgentRunner {
             if (prSummaryEnabled) {
                 try {
                     List<ParsedDiffFile> summaryFiles = DiffParser.parse(diff);
+                    List<String> changedFilePaths = summaryFiles.stream()
+                            .map(ParsedDiffFile::path).toList();
+                    String diagramContext = null;
+                    if (sequenceDiagramsEnabled && !impactSection.isBlank()) {
+                        diagramContext = codeGraphQueryService.buildDiagramContext(
+                                coords.organization(), coords.repository(), changedFilePaths);
+                    }
                     String summaryBody = prSummaryGenerator.generate(
-                            prTitle, targetBranch, summaryFiles, job.getJobId());
+                            prTitle, targetBranch, summaryFiles, job.getJobId(), diagramContext);
                     if (summaryBody != null) {
                         postOrUpdatePrSummary(coords, request.prId(), existingAgentComments,
                                 summaryBody, job.getJobId());
