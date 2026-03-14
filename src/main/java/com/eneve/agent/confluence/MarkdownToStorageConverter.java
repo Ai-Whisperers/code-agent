@@ -3,6 +3,7 @@ package com.eneve.agent.confluence;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -52,9 +53,10 @@ public final class MarkdownToStorageConverter {
 
         String normalized = normalizeMarkdown(markdown);
 
+        String uniqueSuffix = UUID.randomUUID().toString().substring(0, 8);
         List<String> codeBlocks = new ArrayList<>();
         List<MermaidDiagram> mermaidDiagrams = new ArrayList<>();
-        String result = extractCodeBlocks(normalized, codeBlocks, mermaidDiagrams);
+        String result = extractCodeBlocks(normalized, codeBlocks, mermaidDiagrams, uniqueSuffix);
 
         result = convertTables(result);
         result = convertBlockquotes(result);
@@ -74,7 +76,8 @@ public final class MarkdownToStorageConverter {
     }
 
     private static String extractCodeBlocks(String input, List<String> codeBlocks,
-                                            List<MermaidDiagram> mermaidDiagrams) {
+                                            List<MermaidDiagram> mermaidDiagrams,
+                                            String uniqueSuffix) {
         Matcher m = FENCED_CODE.matcher(input);
         StringBuilder sb = new StringBuilder();
         int mermaidIndex = 0;
@@ -85,7 +88,7 @@ public final class MarkdownToStorageConverter {
             String html;
             if ("mermaid".equalsIgnoreCase(lang)) {
                 mermaidIndex++;
-                String filename = "mermaid-" + mermaidIndex + ".png";
+                String filename = "mermaid-" + uniqueSuffix + "-" + mermaidIndex + ".png";
                 mermaidDiagrams.add(new MermaidDiagram(filename, code.trim()));
                 html = "<ac:image ac:width=\"800\">"
                         + "<ri:attachment ri:filename=\"" + filename + "\" />"

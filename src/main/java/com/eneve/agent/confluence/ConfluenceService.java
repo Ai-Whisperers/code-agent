@@ -1,20 +1,24 @@
 package com.eneve.agent.confluence;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
-import java.util.zip.Deflater;
+import java.util.concurrent.TimeUnit;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -24,7 +28,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 /**
  * Client for the Confluence Cloud REST API v2.
  * Creates or updates pages in Confluence spaces using XHTML storage format.
- * Mermaid diagrams are rendered server-side via mermaid.ink and uploaded
+ * Mermaid diagrams are rendered locally via the Mermaid CLI (mmdc) and uploaded
  * as page attachments.
  */
 @ApplicationScoped
@@ -32,7 +36,7 @@ public class ConfluenceService {
 
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String MERMAID_INK_BASE = "https://mermaid.ink/img/pako:";
+    private static final long MMDC_TIMEOUT_SECONDS = 60;
 
     @ConfigProperty(name = "confluence.base.url", defaultValue = "")
     String baseUrl;
@@ -154,104 +158,59 @@ public class ConfluenceService {
         }
     }
 
-    private static final int MERMAID_MAX_RETRIES = 3;
-    private static final long MERMAID_INITIAL_BACKOFF_MS = 2_000;
-
     /**
-     * Renders a Mermaid diagram to PNG via the mermaid.ink public service.
-     * Uses the pako (zlib deflate) encoding format expected by mermaid.ink.
-     * Retries on transient errors (HTTP 5xx, timeouts) with exponential backoff.
+     * Renders a Mermaid diagram to PNG locally using the Mermaid CLI (mmdc).
+     * Writes a temp .mmd file, invokes mmdc, and reads back the PNG output.
      */
     byte[] renderMermaidToPng(String mermaidCode) throws Exception {
-        String sanitized = sanitizeMermaidCode(mermaidCode);
-        String json = "{\"code\":" + MAPPER.writeValueAsString(sanitized)
-                + ",\"mermaid\":{\"theme\":\"default\"}}";
+        Path tmpDir = Files.createTempDirectory("mermaid-render");
+        Path inputFile = tmpDir.resolve("input.mmd");
+        Path outputFile = tmpDir.resolve("output.png");
+        try {
+            Files.writeString(inputFile, mermaidCode.strip(), StandardCharsets.UTF_8);
 
-        Deflater deflater = new Deflater(9);
-        deflater.setInput(json.getBytes(StandardCharsets.UTF_8));
-        deflater.finish();
+            ProcessBuilder pb = new ProcessBuilder(
+                    "mmdc",
+                    "-i", inputFile.toString(),
+                    "-o", outputFile.toString(),
+                    "-b", "white",
+                    "--scale", "2"
+            );
+            String chromiumPath = System.getenv("PUPPETEER_EXECUTABLE_PATH");
+            if (chromiumPath != null && !chromiumPath.isBlank()) {
+                pb.environment().put("PUPPETEER_EXECUTABLE_PATH", chromiumPath);
+            }
+            pb.redirectErrorStream(true);
 
-        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
-        byte[] buf = new byte[4096];
-        while (!deflater.finished()) {
-            int count = deflater.deflate(buf);
-            compressed.write(buf, 0, count);
-        }
-        deflater.end();
+            Process process = pb.start();
+            String processOutput = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+            boolean finished = process.waitFor(MMDC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
-        String encoded = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(compressed.toByteArray());
-        String url = MERMAID_INK_BASE + encoded + "?type=png&bgColor=!white";
-
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create(url))
-                .header("Accept", "image/png")
-                .timeout(Duration.ofSeconds(30))
-                .GET()
-                .build();
-
-        Exception lastException = null;
-        for (int attempt = 1; attempt <= MERMAID_MAX_RETRIES; attempt++) {
-            try {
-                HttpResponse<byte[]> response = httpClient.send(request,
-                        HttpResponse.BodyHandlers.ofByteArray());
-                int status = response.statusCode();
-
-                if (status == 200) {
-                    return response.body();
-                }
-
-                if (status >= 500) {
-                    lastException = new RuntimeException(
-                            "mermaid.ink returned HTTP " + status);
-                    LOG.warnf("mermaid.ink HTTP %d (attempt %d/%d), retrying...",
-                            status, attempt, MERMAID_MAX_RETRIES);
-                } else {
-                    String body = new String(response.body(), StandardCharsets.UTF_8);
-                    String snippet = body.length() > 200 ? body.substring(0, 200) : body;
-                    throw new RuntimeException(
-                            "mermaid.ink returned HTTP " + status + ": " + snippet);
-                }
-            } catch (java.net.http.HttpTimeoutException e) {
-                lastException = e;
-                LOG.warnf("mermaid.ink timeout (attempt %d/%d), retrying...",
-                        attempt, MERMAID_MAX_RETRIES);
+            if (!finished) {
+                process.destroyForcibly();
+                throw new RuntimeException("mmdc timed out after " + MMDC_TIMEOUT_SECONDS + "s");
             }
 
-            if (attempt < MERMAID_MAX_RETRIES) {
-                long backoff = MERMAID_INITIAL_BACKOFF_MS * (1L << (attempt - 1));
-                Thread.sleep(backoff);
+            if (process.exitValue() != 0) {
+                throw new RuntimeException("mmdc failed (exit " + process.exitValue() + "): "
+                        + processOutput.substring(0, Math.min(processOutput.length(), 500)));
             }
+
+            if (!Files.exists(outputFile)) {
+                throw new RuntimeException("mmdc did not produce output file. stdout: "
+                        + processOutput.substring(0, Math.min(processOutput.length(), 500)));
+            }
+
+            return Files.readAllBytes(outputFile);
+        } finally {
+            deleteQuietly(inputFile);
+            deleteQuietly(outputFile);
+            deleteQuietly(tmpDir);
         }
-        throw new RuntimeException("mermaid.ink failed after " + MERMAID_MAX_RETRIES
-                + " attempts", lastException);
     }
 
-    /**
-     * Sanitizes Mermaid code for rendering compatibility:
-     * - Normalizes erDiagram relationship lines (removes extra spaces)
-     * - Ensures diagram type keywords are on their own line
-     */
-    static String sanitizeMermaidCode(String code) {
-        if (code == null || code.isBlank()) return code;
-
-        String trimmed = code.strip();
-
-        // erDiagram: ensure relationship operators have no leading/trailing whitespace
-        // and attribute definitions are clean
-        if (trimmed.startsWith("erDiagram")) {
-            String[] lines = trimmed.split("\n");
-            StringBuilder sb = new StringBuilder();
-            for (String line : lines) {
-                String stripped = line.stripTrailing();
-                // Collapse multiple spaces around ER relationship operators
-                stripped = stripped.replaceAll("\\s*(\\|[o|{])(-+)(o[||}]|[||}])\\s*", " $1$2$3 ");
-                sb.append(stripped).append('\n');
-            }
-            return sb.toString().strip();
-        }
-
-        return trimmed;
+    private static void deleteQuietly(Path path) {
+        try { Files.deleteIfExists(path); } catch (IOException ignored) { }
     }
 
     /**
@@ -277,7 +236,7 @@ public class ConfluenceService {
             return;
         }
 
-        if (response.statusCode() == 409) {
+        if (response.statusCode() == 409 || response.statusCode() == 400) {
             updateExistingAttachment(pageId, filename, data, contentType, boundary);
             return;
         }
