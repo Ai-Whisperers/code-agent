@@ -1,205 +1,246 @@
 # Getting Started
 
-This guide walks you through setting up a development environment for the Code Agent Runner, from initial prerequisites to running your first automation job.
+This guide will help you set up and configure the Code Agent Runner for development or production use. Follow these steps to get the system running and integrated with your development workflow.
 
 ## Prerequisites
 
-### Required Software
-- **JDK 17+** - OpenJDK or Oracle JDK
-- **Docker** - For database and containerized dependencies  
-- **Git** - Version control operations
-- **PostgreSQL 13+** - With pgvector extension
+Before setting up the Code Agent Runner, ensure you have the following:
 
-### Optional Development Tools
-- **IDE**: IntelliJ IDEA, VS Code, or Eclipse with Java support
-- **Database Client**: pgAdmin, DBeaver, or similar for database inspection
-- **REST Client**: Postman, Insomnia, or curl for API testing
+### Software Requirements
+
+| Component | Minimum Version | Recommended | Notes |
+|-----------|----------------|-------------|-------|
+| **Java** | 21 | OpenJDK 21 LTS | Eclipse Temurin or similar distribution |
+| **Maven** | 3.8.0 | Latest 3.9.x | Build automation and dependency management |
+| **PostgreSQL** | 14.0 | 15.0+ | With pgvector extension for semantic search |
+| **Git** | 2.30.0 | Latest | For repository operations |
+| **Docker** | 20.10.0 | Latest | For containerized deployment (optional) |
+
+### Optional Components
+
+| Component | Purpose | Notes |
+|-----------|---------|-------|
+| **Node.js** | ESLint integration | Version 18.x or 20.x |
+| **.NET SDK** | C# code formatting | Version 6.0 or 8.0 |
+| **Chromium** | Mermaid diagram rendering | Headless browser for SVG generation |
 
 ### External Service Accounts
-Set up accounts for the integrations you plan to use:
 
-- **Anthropic** - Claude AI API access ([console.anthropic.com](https://console.anthropic.com))
-- **JIRA Cloud** - For issue tracking integration
+You'll need accounts and API credentials for:
+
+- **Anthropic** - Claude API access for AI functionality
+- **JIRA Cloud** - Issue management integration 
 - **Git Platform** - Bitbucket Cloud, Azure DevOps, or GitLab
-- **Aikido Security** (Optional) - For vulnerability management
-- **Confluence Cloud** (Optional) - For documentation publishing
-- **Voyage AI** (Optional) - For semantic code search
+- **Aikido Security** - Vulnerability management (optional)
+- **Voyage AI** - Vector embeddings for semantic search (optional)
 
 ## Environment Setup
 
-### 1. Clone Repository
+### 1. Local Development Environment
+
+#### Install Java 21
 ```bash
-git clone <repository-url>
-cd code-agent-runner
+# macOS with Homebrew
+brew install openjdk@21
+export JAVA_HOME=$(/usr/libexec/java_home -v 21)
+
+# Ubuntu/Debian
+sudo apt update
+sudo apt install openjdk-21-jdk
+
+# Verify installation
+java -version
 ```
 
-### 2. Database Setup
-
-#### Option A: Docker (Recommended for Development)
+#### Install PostgreSQL with pgvector
 ```bash
-# Start PostgreSQL with pgvector extension
-docker run -d --name postgres-pgvector \
-  -e POSTGRES_DB=code_agent \
-  -e POSTGRES_USER=code_agent \
-  -e POSTGRES_PASSWORD=your_secure_password \
-  -p 5432:5432 \
-  pgvector/pgvector:pg17
+# macOS with Homebrew
+brew install postgresql@15
+brew services start postgresql@15
 
-# Verify connection
-docker exec postgres-pgvector psql -U code_agent -d code_agent -c "SELECT version();"
+# Install pgvector extension
+cd /tmp
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+export PG_CONFIG=/opt/homebrew/opt/postgresql@15/bin/pg_config
+make && make install
+
+# Ubuntu/Debian
+sudo apt install postgresql postgresql-contrib
+sudo systemctl start postgresql
+
+# Build pgvector from source
+sudo apt install postgresql-server-dev-15 build-essential
+cd /tmp && git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector && make && sudo make install
 ```
 
-#### Option B: Local PostgreSQL Installation
-```bash
-# Install pgvector extension (varies by OS)
-# Ubuntu/Debian:
-sudo apt install postgresql-17-pgvector
+#### Create Database
+```sql
+-- Connect as postgres user
+createdb code_agent
+psql code_agent
 
-# macOS with Homebrew:
-brew install pgvector
-
-# Create database and user
-sudo -u postgres psql << EOF
-CREATE DATABASE code_agent;
-CREATE USER code_agent WITH ENCRYPTED PASSWORD 'your_secure_password';
+-- Create user and grant permissions
+CREATE USER code_agent WITH PASSWORD 'secure_password';
 GRANT ALL PRIVILEGES ON DATABASE code_agent TO code_agent;
-\q
-EOF
 
-# Enable pgvector extension
-sudo -u postgres psql -d code_agent -c "CREATE EXTENSION IF NOT EXISTS vector;"
+-- Enable pgvector extension
+CREATE EXTENSION IF NOT EXISTS vector;
 ```
 
-### 3. Environment Configuration
+### 2. Configuration
 
-Create a `.env` file in the project root with your configuration:
+#### Environment Variables
+
+Create a `.env` file in the project root with required configuration:
 
 ```bash
-# Required: AI Integration
-ANTHROPIC_API_KEY=your-anthropic-api-key
+# Core Configuration
+ANTHROPIC_API_KEY=sk-ant-api03-...
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
 
-# Required: Database
-DATABASE_PASSWORD=your_secure_password
+# Database
+DATABASE_URL=jdbc:postgresql://localhost:5432/code_agent
+DATABASE_USER=code_agent
+DATABASE_PASSWORD=secure_password
 
-# Required: JIRA Integration  
-JIRA_BASE_URL=https://yourcompany.atlassian.net
+# JIRA Cloud
+JIRA_BASE_URL=https://your-domain.atlassian.net
 JIRA_USER=your-email@company.com
-JIRA_API_TOKEN=your-jira-api-token
+JIRA_API_TOKEN=ATATT3xFFGF0...
+JIRA_AGENT_ASSIGNEE=Code Agent
 
-# Required: Git Platform (choose one)
+# Git Platform (choose one)
 GIT_PLATFORM=bitbucket
 
-# For Bitbucket:
-BITBUCKET_WORKSPACE=your-bitbucket-workspace
+# Bitbucket Cloud
+BITBUCKET_WORKSPACE=your-workspace
 BITBUCKET_USER=your-username
-BITBUCKET_APP_PASSWORD=your-app-password
+BITBUCKET_APP_PASSWORD=ATCTT3xFFGF0...
 
-# For Azure DevOps:
-AZUREDEVOPS_BASE_URL=https://dev.azure.com/your-org
-AZUREDEVOPS_PAT=your-personal-access-token
-AZUREDEVOPS_AGENT_USER=agent-user
+# OR Azure DevOps
+# AZUREDEVOPS_PAT=your-pat-token
+# AZUREDEVOPS_AGENT_USER=Code Agent
 
-# For GitLab:
-GITLAB_TOKEN=your-gitlab-token
-GITLAB_AGENT_USER=agent-user
-
-# Optional: Security
-API_KEY=your-api-key-for-rest-endpoints
-
-# Optional: Webhook Security
-WEBHOOK_SECRET_BITBUCKET=your-webhook-secret
-WEBHOOK_SECRET_JIRA=your-webhook-secret
-
-# Optional: Notifications
-TEAMS_WEBHOOK_URL=https://your-teams-webhook-url
-N8N_WEBHOOK_URL=https://your-n8n-webhook-url
-
-# Optional: Aikido Security
-AIKIDO_CLIENT_ID=your-aikido-client-id
-AIKIDO_CLIENT_SECRET=your-aikido-client-secret
-
-# Optional: Confluence Publishing
-CONFLUENCE_BASE_URL=https://yourcompany.atlassian.net/wiki
-CONFLUENCE_USER=your-email@company.com
-CONFLUENCE_API_TOKEN=your-confluence-api-token
+# OR GitLab
+# GITLAB_TOKEN=glpat-...
+# GITLAB_AGENT_USER=Code Agent
 
 # Optional: Semantic Search
-VOYAGE_API_KEY=your-voyage-ai-api-key
+VOYAGE_API_KEY=pa-...
+
+# Optional: Security
+API_KEY=your-api-key
+WEBHOOK_SECRET_BITBUCKET=your-webhook-secret
 ```
 
-### 4. Build and Test
+#### Getting API Credentials
 
+**Anthropic API Key:**
+1. Visit [console.anthropic.com](https://console.anthropic.com)
+2. Sign up/login and navigate to API Keys
+3. Create a new key and copy the value
+
+**JIRA API Token:**
+1. Go to [id.atlassian.com/manage-profile/security/api-tokens](https://id.atlassian.com/manage-profile/security/api-tokens)
+2. Click "Create API token"
+3. Give it a descriptive label and copy the token
+
+**Bitbucket App Password:**
+1. Go to Bitbucket Settings > Personal settings > App passwords
+2. Create app password with Repository (Read, Write) and Pull requests (Read, Write) permissions
+3. Copy the generated password
+
+**Azure DevOps PAT:**
+1. Go to Azure DevOps > User settings > Personal access tokens
+2. Create new token with Code (read & write) and Pull Request (read & write) scopes
+3. Copy the token value
+
+### 3. Build and Run
+
+#### Development Mode
 ```bash
-# Build the project
-./mvnw clean compile
+# Clone the repository
+git clone <repository-url>
+cd code-agent-runner
 
-# Run tests  
-./mvnw test
-
-# Package application
-./mvnw package
+# Install dependencies and run in development mode
+mvn quarkus:dev
 ```
 
-### 5. Run in Development Mode
+This starts the application with:
+- Hot reload enabled
+- Database migrations applied automatically
+- API available at `http://localhost:8080`
+- Swagger UI at `http://localhost:8080/q/swagger-ui`
 
+#### Production Build
 ```bash
-# Start with hot reload
-./mvnw quarkus:dev
+# Build the application
+mvn clean package -DskipTests
+
+# Run the packaged application
+java -jar target/quarkus-app/quarkus-run.jar
 ```
 
-The application will start on `http://localhost:8080` with:
-- **Swagger UI**: `http://localhost:8080/q/swagger-ui`
-- **Health Check**: `http://localhost:8080/q/health`
-- **Development UI**: `http://localhost:8080/q/dev`
+#### Docker Deployment
+```bash
+# Build Docker image
+docker build -t code-agent-runner .
+
+# Run with environment variables
+docker run -p 8080:8080 \
+  --env-file .env \
+  code-agent-runner
+```
 
 ## Project Structure
 
+Understanding the codebase layout will help you navigate and extend the system:
+
 ```
 code-agent-runner/
-├── src/
-│   ├── main/
-│   │   ├── java/com/eneve/agent/
-│   │   │   ├── agent/              # Core AI agent logic
-│   │   │   ├── bitbucket/         # Bitbucket integration
-│   │   │   ├── scm/               # SCM service abstraction
-│   │   │   ├── jira/              # JIRA integration  
-│   │   │   ├── tools/             # AI tool implementations
-│   │   │   ├── model/             # Data models and DTOs
-│   │   │   ├── webhooks/          # Webhook handlers
-│   │   │   ├── workspace/         # Git workspace management
-│   │   │   ├── diff/              # Code diff analysis
-│   │   │   ├── linter/            # Code quality tools
-│   │   │   ├── aikido/            # Security integration
-│   │   │   └── *.java            # REST controllers
-│   │   └── resources/
-│   │       ├── db/migration/      # Database schema
-│   │       └── application.properties
-│   └── test/                      # Unit and integration tests
-├── docs/                          # Project documentation
-├── pom.xml                        # Maven configuration
-├── Dockerfile                     # Container build
-└── README.md                      # Basic project info
+├── src/main/java/com/eneve/agent/
+│   ├── RunFixResource.java          # Main REST endpoints
+│   ├── agent/                       # Core agent logic
+│   │   ├── AgentRunner.java         # Job orchestrator
+│   │   ├── ClaudeToolUseLoop.java   # AI interaction loop
+│   │   ├── JobQueue.java            # Concurrent job processing
+│   │   └── *Store.java              # Data persistence layers
+│   ├── scm/                         # Git platform integrations
+│   │   ├── bitbucket/               # Bitbucket Cloud support
+│   │   ├── azuredevops/            # Azure DevOps support
+│   │   └── gitlab/                  # GitLab support
+│   ├── webhooks/                    # Webhook handlers
+│   ├── tools/                       # AI tool implementations
+│   ├── linter/                      # Static analysis integration
+│   └── model/                       # Data transfer objects
+├── src/main/resources/
+│   ├── application.properties       # Configuration defaults
+│   └── db/migration/               # Database schema migrations
+├── src/test/java/                  # Unit and integration tests
+├── docs/                           # Documentation (this folder)
+├── Dockerfile                      # Container build definition
+├── settings.xml                    # Maven settings with Nexus support
+└── pom.xml                         # Maven project definition
 ```
 
 ### Key Packages
 
-| Package | Description |
-|---------|-------------|
-| `agent` | Core AI agent runner and job queue |
-| `tools` | AI tool registry and implementations |
-| `scm` | Git platform abstraction layer |
-| `model` | Request/response models and entities |
-| `webhooks` | Platform-specific webhook handlers |
-| `workspace` | Git repository management |
-| `jira` | JIRA API integration |
-| `aikido` | Security vulnerability management |
-| `linter` | Code quality and static analysis |
+- **`agent/`**: Core business logic for job processing and AI interaction
+- **`scm/`**: Pluggable git platform integrations (Bitbucket, Azure DevOps, GitLab)
+- **`webhooks/`**: Handlers for incoming webhooks from external systems
+- **`tools/`**: AI tool implementations (file operations, code search, etc.)
+- **`model/`**: Request/response DTOs and data models
 
 ## First Steps
 
 ### 1. Verify Installation
+
+Test your setup by checking the health endpoint:
+
 ```bash
-# Check health endpoint
 curl http://localhost:8080/health
 
 # Expected response:
@@ -211,183 +252,259 @@ curl http://localhost:8080/health
 }
 ```
 
-### 2. Configure a Repository
-```bash
-# Enable reviews for a repository
-curl -X PUT \
-  -H "Content-Type: application/json" \
-  -d '{"reviewEnabled": true, "ruleNames": "java-conventions"}' \
-  http://localhost:8080/settings/repos/your-workspace/your-repo
-```
+### 2. Configure Repository Settings
 
-### 3. Submit Your First Job
+Enable automated review for a test repository:
+
 ```bash
-# Quick fix job using JIRA key
-curl -X POST \
+curl -X PUT http://localhost:8080/settings/repos/your-workspace/test-repo \
   -H "Content-Type: application/json" \
   -d '{
-    "repoUrl": "https://bitbucket.org/workspace/repo.git",
-    "jiraKey": "PROJ-123"
-  }' \
-  http://localhost:8080/quick-fix
+    "reviewEnabled": true,
+    "vectorEnabled": false,
+    "ruleNames": ["java-conventions"]
+  }'
 ```
 
-### 4. Monitor Job Progress
+### 3. Submit a Test Job
+
+Try the quick-fix endpoint with a JIRA ticket:
+
 ```bash
-# Check job status (use jobId from previous response)
-curl http://localhost:8080/status/{jobId}
+curl -X POST http://localhost:8080/quick-fix \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jiraKey": "PROJ-123",
+    "repoUrl": "https://bitbucket.org/workspace/repo.git"
+  }'
 
-# Monitor in real-time with watch
-watch -n 5 'curl -s http://localhost:8080/status/{jobId} | jq'
+# Response includes jobId for status polling:
+{
+  "jobId": "550e8400-e29b-41d4-a716-446655440000",
+  "branch": "agent/PROJ-123-fix-issue"
+}
 ```
 
-## Common Configuration
+### 4. Poll Job Status
 
-### JIRA Integration Setup
-1. Create API token in JIRA: **Account Settings** → **Security** → **API tokens**
-2. Test connection:
+Monitor the job progress:
+
+```bash
+curl http://localhost:8080/status/550e8400-e29b-41d4-a716-446655440000
+
+# Status progression: QUEUED → RUNNING → AWAITING_APPROVAL → APPROVED
+```
+
+## Integration Setup
+
+### JIRA Webhook
+
+Set up automatic job triggering when issues are assigned to the agent:
+
+1. **Create Agent User**: Add a "Code Agent" user in JIRA
+2. **Configure Webhook**: Go to JIRA Settings > System > Webhooks
+   - URL: `https://your-agent-host/webhooks/jira`
+   - Events: Issue created, Issue updated
+   - JQL: `assignee = "Code Agent"`
+
+3. **Environment Variables**:
    ```bash
-   curl -H "Authorization: Basic $(echo -n 'your-email:your-token' | base64)" \
-        https://yourcompany.atlassian.net/rest/api/2/myself
+   JIRA_AGENT_ASSIGNEE=Code Agent
+   JIRA_AGENT_DEFAULT_REPO_URL=https://bitbucket.org/workspace/main-repo.git
    ```
 
-### Bitbucket Integration Setup
-1. Create app password: **Personal settings** → **App passwords**
-2. Required permissions: Repositories (Read/Write), Pull requests (Read/Write)
-3. Test connection:
+### Git Platform Webhooks
+
+#### Bitbucket Cloud
+
+1. **Repository Webhooks**: Go to Repository Settings > Webhooks
+2. **Add PR Review Webhook**:
+   - URL: `https://your-agent-host/webhooks/bitbucket/pull-request`
+   - Events: Pull Request Created, Pull Request Updated
+   - Secret: Set `WEBHOOK_SECRET_BITBUCKET`
+
+3. **Add Comment Webhook**:
+   - URL: `https://your-agent-host/webhooks/bitbucket/pull-request-comment`
+   - Events: Pull Request Comment Created
+
+#### Azure DevOps
+
+1. **Service Hooks**: Go to Project Settings > Service Hooks
+2. **Web Hook Subscription**:
+   - Event: Pull request created, Pull request updated
+   - URL: `https://your-agent-host/webhooks/azuredevops/pull-request`
+
+## Advanced Configuration
+
+### Semantic Search Setup
+
+Enable vector-based code search across repositories:
+
+1. **Get Voyage AI API Key**: Sign up at [dash.voyageai.com](https://dash.voyageai.com)
+2. **Configure Environment**:
    ```bash
-   curl -H "Authorization: Basic $(echo -n 'username:app-password' | base64)" \
-        https://api.bitbucket.org/2.0/user
+   VOYAGE_API_KEY=pa-...
+   VOYAGE_MODEL=voyage-code-3
    ```
 
-### Webhook Configuration
-Set up webhooks in your git platform to trigger automated reviews:
+3. **Enable for Repository**:
+   ```bash
+   curl -X PATCH http://localhost:8080/settings/repos/workspace/repo/vector/enable
+   ```
 
-**Bitbucket Webhooks:**
-- URL: `https://your-domain/webhooks/bitbucket/pull-request`
-- Events: Pull request created, updated
-- URL: `https://your-domain/webhooks/bitbucket/pull-request-comment`  
-- Events: Pull request comment created
+4. **Build Code Graph**:
+   ```bash
+   curl -X POST http://localhost:8080/graph/rebuild/workspace/repo
+   ```
 
-**JIRA Webhooks:**
-- URL: `https://your-domain/webhooks/jira`
-- Events: Issue created, updated
+### Coding Rules Integration
 
-## Development Workflow
+Set up shared coding standards via Cursor rules:
 
-### Hot Reload Development
+1. **Create Rules Repository**: Store `.cursor/rules/*.mdc` files
+2. **Configure Default Repository**:
+   ```bash
+   RULES_REPO_URL=https://bitbucket.org/workspace/cursor-rules.git
+   ```
+
+3. **Apply Rules to Jobs**:
+   ```json
+   {
+     "ruleNames": ["java-conventions", "security-standards"],
+     "extraRules": "Always validate input parameters"
+   }
+   ```
+
+### Static Analysis Integration
+
+Enable automated linting during code reviews:
+
 ```bash
-# Start dev mode with automatic reload
-./mvnw quarkus:dev
+# Enable specific linters
+LINTER_ENABLED=true
+LINTER_CHECKSTYLE_ENABLED=true
+LINTER_PMD_ENABLED=true
+LINTER_SPOTBUGS_ENABLED=true
+LINTER_ESLINT_ENABLED=true
 
-# Make code changes - application reloads automatically
-# Database schema changes require restart
+# Configure behavior
+LINTER_MAX_FIX_ITERATIONS=2
+LINTER_FAIL_ON_NEW_ISSUES=false
 ```
 
-### Database Operations
+### Security Hardening
+
+Production security configurations:
+
 ```bash
-# Connect to database
-docker exec -it postgres-pgvector psql -U code_agent -d code_agent
+# API Protection
+API_KEY=secure-random-key
 
-# View migration status
-SELECT version, description, success FROM flyway_schema_history ORDER BY installed_rank;
+# Webhook Security
+WEBHOOK_SECRET_BITBUCKET=secure-webhook-secret
+WEBHOOK_SECRET_AZUREDEVOPS=secure-webhook-secret
+WEBHOOK_SECRET_JIRA=secure-webhook-secret
 
-# Reset database (destroys all data)
-docker stop postgres-pgvector && docker rm postgres-pgvector
+# Guardrails
+RUN_FIX_BLOCKED_PATHS=src/main/security,src/main/billing,.github,.env
+RUN_FIX_ALLOWED_COMMANDS=mvn,git diff,git status,ls,find,cat,grep
+RUN_FIX_MAX_FILES_CHANGED=10
+RUN_FIX_MAX_LINES_CHANGED=500
 ```
 
-### Testing
-```bash
-# Run all tests
-./mvnw test
+## Production Deployment
 
-# Run specific test class
-./mvnw test -Dtest=RunFixResourceTest
+### AWS ECS Fargate
 
-# Integration tests with testcontainers
-./mvnw test -Dquarkus.test.profile=test
-```
+For production deployment on AWS, see the detailed AWS section in the main README. Key considerations:
 
-### Docker Development
-```bash
-# Build container
-./mvnw package -Dquarkus.container-image.build=true
+1. **Use Secrets Manager** for API keys and tokens
+2. **Deploy in Private Subnets** with NAT gateway for outbound access
+3. **Configure ALB** with HTTPS termination
+4. **Set Up RDS PostgreSQL** with pgvector extension
+5. **Use ECR** for Docker image storage
 
-# Run container
-docker run -p 8080:8080 \
-  -e DATABASE_URL="jdbc:postgresql://host.docker.internal:5432/code_agent" \
-  -e ANTHROPIC_API_KEY="your-key" \
-  code-agent-runner:1.0.0-SNAPSHOT
-```
+### Health Checks
+
+Configure health check endpoints:
+
+- **Liveness**: `GET /q/health/live` - Application is running
+- **Readiness**: `GET /q/health/ready` - Application is ready for traffic
+- **Custom**: `GET /health` - Includes job queue status
+
+### Monitoring
+
+Key metrics to monitor:
+
+- **Job Queue Depth**: Indicates system load
+- **AI API Costs**: Track via `GET /stats/ai-calls/summary`
+- **Review Quality**: Monitor via `GET /metrics/review-quality/{workspace}/{repo}`
+- **Database Performance**: Query times and connection pool usage
 
 ## Troubleshooting
 
 ### Common Issues
 
-**Database Connection Errors**
+**PostgreSQL Connection Failed**
 ```bash
-# Check if PostgreSQL is running
-docker ps | grep postgres
+# Check database connection
+psql -h localhost -U code_agent -d code_agent
 
-# Check database connectivity
-docker exec postgres-pgvector pg_isready -U code_agent
-
-# View database logs
-docker logs postgres-pgvector
-```
-
-**Missing pgvector Extension**
-```sql
--- Connect to database and run:
-CREATE EXTENSION IF NOT EXISTS vector;
+# Verify pgvector extension
 SELECT * FROM pg_extension WHERE extname = 'vector';
 ```
 
-**JIRA Authentication Issues**
+**AI API Rate Limits**
 ```bash
-# Test JIRA credentials
-curl -v -H "Authorization: Basic $(echo -n 'email:token' | base64)" \
-     https://yourcompany.atlassian.net/rest/api/2/myself
+# Check API call history
+curl http://localhost:8080/stats/ai-calls?from=2024-01-15
+
+# Adjust rate limiting if needed
+ANTHROPIC_MAX_TOKENS=4096
 ```
 
-**Git Platform Authentication**
+**Git Authentication Issues**
 ```bash
-# Test Bitbucket credentials
-curl -v -H "Authorization: Basic $(echo -n 'user:password' | base64)" \
-     https://api.bitbucket.org/2.0/user
+# Test git credentials
+git clone https://bitbucket.org/workspace/repo.git
 
-# Test Git clone (should not prompt for credentials)
-git clone https://username:password@bitbucket.org/workspace/repo.git /tmp/test-clone
+# Verify app password permissions
+# Must include: Repository (Read, Write), Pull requests (Read, Write)
 ```
 
-### Logging Configuration
-```properties
-# Add to application.properties for more detailed logging
+### Log Analysis
+
+Enable debug logging for troubleshooting:
+
+```bash
+# Application properties
 quarkus.log.category."com.eneve.agent".level=DEBUG
-quarkus.log.category."org.hibernate.SQL".level=DEBUG
-quarkus.log.category."org.flywaydb".level=DEBUG
+
+# Or environment variable
+export QUARKUS_LOG_CATEGORY_COM_ENEVE_AGENT_LEVEL=DEBUG
 ```
 
-### Performance Tuning
-```properties
-# Increase job queue capacity
-run-fix.max-concurrent-jobs=5
-run-fix.max-queue-size=50
+Common log patterns to look for:
+- `Job xyz accepted` - Successful job submission
+- `Claude tool-use loop iteration` - AI processing progress
+- `Build validation passed` - Successful code compilation
+- `PR created` - Successful pull request generation
 
-# Adjust worker thread timeout for large repositories
-quarkus.vertx.max-worker-execute-time=30m
+### Getting Help
 
-# Database connection pool tuning
-quarkus.datasource.jdbc.max-size=20
-quarkus.datasource.jdbc.min-size=5
-```
+- **Documentation**: Check other sections of this documentation
+- **API Reference**: Use Swagger UI at `/q/swagger-ui`
+- **Health Status**: Monitor `/health` endpoint
+- **Logs**: Check application logs for detailed error messages
 
 ## Next Steps
 
-1. **Explore the API** - Use Swagger UI to test different endpoints
-2. **Set up Webhooks** - Configure automated job triggers from git platforms
-3. **Customize Rules** - Create repository-specific coding standards
-4. **Monitor Usage** - Check AI costs and job metrics via `/stats/ai-calls`
-5. **Scale Up** - Deploy to production with Docker and proper secrets management
+Once you have the basic setup working:
 
-For detailed API reference, see the [API Documentation](api.md). For architecture insights, refer to the [Architecture Overview](architecture.md).
+1. **Configure Additional Repositories**: Enable review and vector indexing
+2. **Set Up Automation Hooks**: Customize triggers for repository events
+3. **Integrate with n8n**: Set up approval workflows
+4. **Configure Teams Notifications**: Get notified of job completions
+5. **Optimize Performance**: Tune job queue and database settings
+
+Refer to the [Configuration Reference](configuration.md) for detailed settings and the [API Documentation](api.md) for endpoint specifications.
