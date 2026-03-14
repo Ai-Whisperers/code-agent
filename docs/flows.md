@@ -1,421 +1,513 @@
 # Key Business Flows
 
-This document outlines the most important workflows in the Code Agent Runner system, illustrating how different components interact to deliver automated code fixes, reviews, and documentation generation.
+This document describes the most important workflows in the Code Agent Runner system. Each flow is illustrated with sequence diagrams and includes detailed explanations of the process steps and decision points.
 
 ## Fix Job Lifecycle
 
-The core automation flow that processes JIRA issues and creates pull requests with fixes.
+The fix job workflow is the core business process, handling everything from initial job submission through final PR approval and JIRA closure.
+
+### Overview
+
+A fix job takes a JIRA issue and automatically generates code changes to resolve it, creating a pull request for human review and approval.
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant API
-    participant Queue
-    participant Agent
-    participant JIRA
-    participant Git
-    participant Claude
-    participant Tools
-    participant SCM
-    participant N8N
+    participant Client as Client/n8n
+    participant API as RunFixResource
+    participant Queue as JobQueue
+    participant Runner as AgentRunner
+    participant Claude as Claude API
+    participant Git as Git Platform
+    participant JIRA as JIRA Cloud
+    participant Teams as Teams/n8n
 
-    Client->>API: POST /run-fix (jiraKey, repoUrl)
-    API->>JIRA: Fetch issue details
-    JIRA-->>API: Issue summary & description
-    API->>Queue: Enqueue fix job
-    API-->>Client: Job ID
-
-    Queue->>Agent: Process next job
-    Agent->>Git: Clone repository
-    Agent->>JIRA: Transition to "In Progress"
+    Client->>API: POST /run-fix
+    API->>Queue: Submit job
+    Queue-->>API: Job queued
+    API-->>Client: 202 Accepted (jobId)
     
-    loop AI Tool-Use Loop
-        Agent->>Claude: Send prompt + available tools
-        Claude->>Agent: Request tool execution
-        Agent->>Tools: Execute (read_file, search_code, etc.)
-        Tools-->>Agent: Results
-        Agent->>Claude: Tool results
-        Claude->>Agent: Next tool request or completion
-        
-        alt Need to modify files
-            Claude->>Agent: write_file request
-            Agent->>Tools: Write file changes
-        end
-        
-        alt Need to run build
-            Claude->>Agent: run_command (mvn compile)
-            Agent->>Tools: Execute Maven build
-            Tools-->>Agent: Build results
-        end
+    Queue->>Runner: Execute job
+    Runner->>Git: Clone repository
+    Runner->>JIRA: Fetch issue details
+    Runner->>Claude: Initialize tool-use loop
+    
+    loop Tool-use iterations
+        Claude->>Runner: Use tools (read_file, write_file, run_command)
+        Runner->>Claude: Tool results
     end
     
-    Agent->>Git: Commit changes
-    Agent->>Git: Push feature branch
-    Agent->>SCM: Create pull request
-    SCM-->>Agent: PR URL
-    Agent->>JIRA: Update with PR link
-    Agent->>N8N: Webhook notification
-    Agent->>Queue: Job complete (awaiting approval)
+    Runner->>Runner: Validate build (mvn test)
+    Runner->>Git: Push branch & create PR
+    Runner->>JIRA: Add comment & transition
+    Runner->>Teams: Notify completion
+    
+    Note right of Runner: Job status: AWAITING_APPROVAL
+    
+    Client->>API: POST /jobs/{jobId}/approve
+    API->>Runner: Approve job
+    Runner->>Git: Merge PR
+    Runner->>JIRA: Transition to Done
+    
+    Note right of Runner: Job status: APPROVED
 ```
 
-## Pull Request Review Flow
+### Detailed Steps
 
-Automated code review triggered by git platform webhooks.
+1. **Job Submission**: Client submits job via REST API with repository URL, branch name, and JIRA key
+2. **Queue Processing**: Job enters FIFO queue, processed when slot available
+3. **Repository Setup**: Clone repo, checkout target branch, load coding rules
+4. **Context Resolution**: Fetch JIRA issue details and any Aikido vulnerability context
+5. **AI Processing**: Claude uses tools to explore code, make changes, and validate
+6. **Build Validation**: Run Maven tests to ensure changes don't break build
+7. **PR Creation**: Push branch and create pull request with detailed description
+8. **Notification**: Update JIRA with progress and notify stakeholders
+9. **Human Approval**: Job waits in AWAITING_APPROVAL status
+10. **Completion**: On approval, merge PR and transition JIRA to Done
+
+### Job States
+
+| State | Description | Next States |
+|-------|-------------|-------------|
+| `QUEUED` | Waiting in job queue | `RUNNING`, `FAILED` |
+| `RUNNING` | Active processing by agent | `AWAITING_APPROVAL`, `FAILED` |
+| `AWAITING_APPROVAL` | PR created, waiting for human review | `APPROVED`, `REJECTED` |
+| `APPROVED` | PR merged successfully | (final state) |
+| `REJECTED` | PR declined by human reviewer | (final state) |
+| `FAILED` | Job failed during processing | (final state) |
+
+## Code Review Workflow
+
+The AI-powered code review process analyzes pull requests for security, design quality, and best practices.
+
+### Overview
+
+When a PR is created or updated, the system automatically performs a comprehensive code review and posts findings as inline comments.
 
 ```mermaid
 sequenceDiagram
-    participant GitPlatform as Git Platform
-    participant Webhook
-    participant API
-    participant Queue
-    participant Agent
-    participant Claude
-    participant Tools
-    participant Memory
-    participant SCM
-    participant Linter
+    participant Webhook as Git Webhook
+    participant Resource as WebhookResource
+    participant Runner as AgentRunner
+    participant Graph as CodeGraphService
+    participant Memory as MemoryStore
+    participant Claude as Claude API
+    participant Platform as Git Platform
+    participant Feedback as CommentStore
 
-    GitPlatform->>Webhook: PR created/updated event
-    Webhook->>API: Validate signature
-    API->>Queue: Enqueue review job
+    Webhook->>Resource: PR created/updated
+    Resource->>Runner: Trigger review job
     
-    Queue->>Agent: Process review job
-    Agent->>GitPlatform: Clone repository
-    Agent->>SCM: Get PR diff
-    Agent->>Tools: Build code graph
-    Agent->>Memory: Load review context
+    Runner->>Platform: Fetch PR diff
+    Runner->>Graph: Build/update code graph
+    Runner->>Graph: Analyze impact of changes
+    Runner->>Memory: Load review preferences
     
-    opt Run Static Analysis
-        Agent->>Linter: Run Checkstyle, PMD, SpotBugs
-        Linter-->>Agent: Security/quality findings
+    Runner->>Claude: Review prompt with context
+    Note over Claude: - Diff analysis<br/>- Security review<br/>- Design patterns<br/>- Code quality<br/>- Test coverage
+    
+    Claude->>Runner: Review findings
+    
+    loop For each finding
+        Runner->>Platform: Post inline comment
+        Runner->>Feedback: Track comment for metrics
     end
     
-    Agent->>Claude: Send diff + context + rules
-    Claude->>Agent: Request code analysis
+    Runner->>Platform: Post PR summary comment
     
-    loop Review Analysis
-        Agent->>Tools: read_file, search_code
-        Tools-->>Agent: Code context
-        Agent->>Claude: File contents
-        Claude->>Agent: Review findings
-    end
-    
-    Claude-->>Agent: Final review comments
-    Agent->>SCM: Post review comments
-    Agent->>Memory: Store learned patterns
-    
-    opt Generate Diagrams
-        Agent->>Claude: Generate sequence diagrams
-        Claude-->>Agent: Mermaid diagrams
-        Agent->>SCM: Post diagram comment
-    end
-    
-    Agent->>Queue: Review complete
+    Note right of Runner: Review complete
 ```
+
+### Review Context Building
+
+Before conducting the review, the system builds rich context:
+
+1. **Code Graph Analysis**: Identify which symbols are modified and their dependencies
+2. **Impact Assessment**: Find all callers and implementations of changed code
+3. **Memory Integration**: Load team preferences and learned patterns
+4. **False Positive Suppression**: Apply auto-suppression rules from previous feedback
+
+### Review Coverage Areas
+
+The AI review focuses on these key areas:
+
+- **Security**: Injection vulnerabilities, authentication issues, data exposure
+- **Design**: SOLID principles, separation of concerns, API design
+- **Code Quality**: Naming conventions, complexity, error handling
+- **Testing**: Coverage gaps, missing edge cases, test quality
+- **Performance**: Inefficient algorithms, resource usage, caching opportunities
+- **Best Practices**: Framework conventions, idiomatic patterns
+
+## Developer Interaction Flow
+
+Developers can interact with review comments using special commands and natural language.
+
+### Overview
+
+When a developer replies to an agent review comment, the system classifies the intent and takes appropriate action.
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Webhook as Comment Webhook
+    participant Processor as CommentProcessor
+    participant Classifier as IntentClassifier
+    participant Memory as MemoryStore
+    participant Feedback as FeedbackStore
+    participant Claude as Claude API
+    participant Platform as Git Platform
+
+    Dev->>Platform: Reply to agent comment
+    Platform->>Webhook: Comment created event
+    Webhook->>Processor: Process reply
+    
+    Processor->>Classifier: Classify intent
+    
+    alt /fp or /false-positive
+        Classifier-->>Processor: FALSE_POSITIVE
+        Processor->>Feedback: Record false positive
+        Processor->>Platform: Mark comment resolved
+        Processor->>Feedback: Check auto-suppress threshold
+        alt Threshold reached
+            Processor->>Memory: Create suppression rule
+        end
+        
+    else /learn <preference>
+        Classifier-->>Processor: LEARN
+        Processor->>Memory: Store team preference
+        Processor->>Platform: Acknowledge learning
+        
+    else Fix request
+        Classifier-->>Processor: FIX_REQUEST
+        Processor->>Claude: Generate fix
+        Claude-->>Processor: Code changes
+        Processor->>Platform: Apply changes to branch
+        Processor->>Platform: Reply with fix description
+        
+    else Discussion
+        Classifier-->>Processor: DISCUSSION
+        Processor->>Claude: Generate conversational reply
+        Claude-->>Processor: Response text
+        Processor->>Platform: Post reply
+    end
+```
+
+### Supported Reply Types
+
+| Reply Pattern | Action | Example |
+|---------------|--------|---------|
+| `/fp` or `/false-positive` | Mark as false positive, auto-suppress after threshold | `/fp` |
+| `/learn <preference>` | Store team preference | `/learn Prefer streams over loops for collection processing` |
+| Natural language fix | Generate and apply code fix | `Please add null check here` |
+| Natural language discussion | Conversational reply | `Why is this approach better?` |
 
 ## Aikido Security Integration Flow
 
-Enhanced vulnerability fix workflow using Aikido Security platform integration.
+The Aikido-enhanced fix workflow provides vulnerability-specific context for more effective remediation.
+
+### Overview
+
+Starting from a JIRA ticket, the system enriches the context with vulnerability details from Aikido Security.
 
 ```mermaid
 sequenceDiagram
-    participant Client
-    participant API
-    participant JIRA
-    participant Aikido
-    participant Agent
-    participant Claude
-    participant Git
-    participant SCM
+    participant Client as Client/JIRA
+    participant API as RunFixResource
+    participant Aikido as AikidoService
+    participant JIRA as JIRAService
+    participant Runner as AgentRunner
+    participant Claude as Claude API
 
-    Client->>API: POST /aikido-fix (jiraKey)
-    API->>JIRA: Extract description context
-    JIRA-->>API: Issue details + Aikido URLs
+    Client->>API: POST /aikido-fix {jiraKey}
+    API->>Aikido: Find issue group by JIRA key
     
-    API->>Aikido: Search by JIRA key
-    alt Direct Link Found
-        Aikido-->>API: Issue group details
-    else Search by Description URLs
-        API->>Aikido: Query candidate group IDs
-        Aikido-->>API: Issue group details
+    alt Found in Aikido API
+        Aikido-->>API: Issue group ID
+    else Not found, check JIRA description
+        API->>JIRA: Fetch issue description
+        JIRA-->>API: Description with Aikido URLs
+        API->>Aikido: Extract candidate IDs
+        loop For each candidate
+            API->>Aikido: Get issue group details
+        end
     end
     
     API->>Aikido: Get vulnerability details
-    Aikido-->>API: Package, CVE, versions, changelog
+    Aikido-->>API: Package info, CVE, changelog
     
-    opt Container Image Mapping
-        API->>Aikido: Find code repo for container
-        Aikido-->>API: Repository URL
+    alt Repository URL from Aikido
+        Aikido-->>API: Code repo URL
+    else Container image reference
+        API->>Aikido: Resolve container to repo mapping
+        Aikido-->>API: Mapped repo URL
     end
     
-    API->>Agent: Enqueue with enriched context
+    API->>API: Build enriched prompt
+    Note over API: - Package name & versions<br/>- CVE severity & description<br/>- Upgrade changelog<br/>- Fix recommendations
     
-    Agent->>Git: Clone repository
-    Agent->>Claude: Send vulnerability context
-    Note over Claude: Package: log4j-core<br/>Current: 2.19.0<br/>Fixed: 2.23.1<br/>CVE: CVE-2024-XXXXX<br/>Severity: HIGH
-    
-    loop Fix Implementation
-        Claude->>Agent: Analyze dependencies
-        Agent->>Tools: read_file (pom.xml)
-        Agent->>Tools: search_code (log4j usage)
-        Agent->>Tools: write_file (update versions)
-        Agent->>Tools: run_command (mvn compile)
-    end
-    
-    Agent->>SCM: Create PR with detailed description
-    
-    opt Trigger Security Scan
-        Agent->>Aikido: Trigger CI scan
-        Aikido-->>Agent: Scan results
-    end
+    API->>Runner: Execute with enriched context
+    Runner->>Claude: Process with vulnerability details
+    Claude->>Claude: Generate targeted fix
 ```
 
-## Webhook-Triggered Automation
+### Resolution Strategies
 
-Event-driven job execution based on repository events.
+The system uses multiple strategies to resolve Aikido context:
+
+1. **Direct API Lookup**: Search Aikido for issues linked to the JIRA key
+2. **JIRA Description Parsing**: Extract Aikido URLs from ticket descriptions
+3. **Direct Issue ID**: Use provided `aikidoGroupId` parameter
+4. **Container Mapping**: Map container images to source repositories
+
+### Enriched Context
+
+The Aikido integration provides:
+
+- **Package Information**: Name, current version, recommended fix version
+- **CVE Details**: Severity score, description, affected components
+- **Changelog**: Summary of changes between versions
+- **Fix Guidance**: Aikido-specific remediation recommendations
+
+## Webhook Processing Flow
+
+The system handles various webhook events from external platforms to trigger automated actions.
+
+### JIRA Issue Assignment Flow
 
 ```mermaid
 sequenceDiagram
-    participant GitPlatform as Git Platform
-    participant Webhook
-    participant API
-    participant Rules
-    participant Queue
-    participant Agent
+    participant JIRA as JIRA Cloud
+    participant Webhook as JiraWebhookResource
+    participant Service as JiraService
+    participant Aikido as AikidoService
+    participant Queue as JobQueue
 
-    GitPlatform->>Webhook: Push to main branch
-    Webhook->>API: Validate signature
-    API->>Rules: Load automation hooks
+    JIRA->>Webhook: Issue assigned to agent
+    Webhook->>Webhook: Verify assignee is agent user
     
-    loop For Each Matching Hook
-        Rules->>Rules: Evaluate trigger condition
-        alt Condition Met
-            Rules->>Queue: Enqueue hook job
-            Note over Queue: Job type: GENERATE_DOCS<br/>Trigger: push to main<br/>Auto-commit: true
-        end
-    end
-    
-    Queue->>Agent: Process hook job
-    Agent->>GitPlatform: Clone repository
-    
-    alt Generate Documentation
-        Agent->>Claude: Analyze codebase
-        Agent->>Tools: Generate docs/*.md files
-        Agent->>Tools: publish_confluence
-        Agent->>GitPlatform: Commit docs directly
-    else Update README
-        Agent->>Claude: Update project README
-        Agent->>Tools: write_file (README.md)
-        Agent->>GitPlatform: Commit changes
-    end
-```
-
-## JIRA Synchronization Flow
-
-Bulk processing of open JIRA issues with agent labels.
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API
-    participant JIRA
-    participant Aikido
-    participant Queue
-    participant JobStore
-
-    Client->>API: POST /sync-jira
-    API->>JIRA: Search issues with agent label
-    JIRA-->>API: Open issues list
-    
-    loop For Each Issue
-        API->>JobStore: Check for active job
-        alt No Active Job
-            opt Try Aikido Enrichment
-                API->>JIRA: Extract Aikido context
-                API->>Aikido: Get vulnerability details
-                Aikido-->>API: Package/CVE/versions
-            end
-            
-            API->>Queue: Enqueue fix job
-            Note over Queue: Branch: agent/PROJ-123-fix<br/>Prompt: From JIRA or Aikido
-        else Active Job Exists
-            Note over API: Skip issue
-        end
-    end
-    
-    API-->>Client: Summary report
-    Note over Client: Found: 5 issues<br/>Queued: 2 jobs<br/>Skipped: 3 (active jobs)
-```
-
-## Documentation Generation Flow
-
-Comprehensive project documentation creation with Confluence publishing.
-
-```mermaid
-sequenceDiagram
-    participant Client
-    participant API
-    participant Queue
-    participant Agent
-    participant Claude
-    participant Tools
-    participant Git
-    participant Confluence
-
-    Client->>API: POST /generate-docs
-    API->>Queue: Enqueue docs job
-    Queue->>Agent: Process docs job
-    
-    Agent->>Git: Clone repository
-    Agent->>Claude: Initialize with docs prompt
-    
-    loop Documentation Discovery
-        Claude->>Agent: list_files (explore structure)
-        Agent->>Tools: Directory listing
-        Claude->>Agent: read_file (pom.xml, README)
-        Agent->>Tools: File contents
-        Claude->>Agent: search_code (find controllers)
-        Agent->>Tools: Code search results
-    end
-    
-    loop Generate Documentation
-        Claude->>Agent: write_file (docs/README.md)
-        Agent->>Tools: Create index page
-        Claude->>Agent: write_file (docs/architecture.md)
-        Agent->>Tools: Architecture with diagrams
-        Claude->>Agent: write_file (docs/api.md)
-        Agent->>Tools: API reference
-        Claude->>Agent: write_file (docs/data-model.md)
-        Agent->>Tools: Database schema
-    end
-    
-    Agent->>Tools: publish_confluence (README)
-    Tools->>Confluence: Create parent page
-    
-    loop Publish Sub-Pages
-        Agent->>Tools: publish_confluence (architecture)
-        Tools->>Confluence: Create child page
-        Agent->>Tools: publish_confluence (api)
-        Tools->>Confluence: Create child page
-    end
-    
-    opt Create Pull Request
-        Agent->>Git: Commit docs folder
-        Agent->>Git: Push docs branch
-        Agent->>SCM: Create PR
-    end
-```
-
-## Code Graph Building Flow
-
-AST analysis and dependency graph construction for semantic code understanding.
-
-```mermaid
-sequenceDiagram
-    participant Scheduler
-    participant CodeGraph
-    participant Git
-    participant JavaParser
-    participant Database
-    participant VoyageAI
-
-    Scheduler->>CodeGraph: Build missing graphs (cron: every 6h)
-    CodeGraph->>Database: Find repos without graphs
-    
-    loop For Each Repository
-        CodeGraph->>Git: Clone repository
-        CodeGraph->>JavaParser: Analyze source files
+    alt Valid assignment
+        Webhook->>Service: Extract JIRA context
+        Service-->>Webhook: Issue summary, description
         
-        loop For Each Java File
-            JavaParser->>JavaParser: Parse AST
-            JavaParser-->>CodeGraph: Classes, methods, fields
-            CodeGraph->>Database: Store graph nodes
-            
-            JavaParser-->>CodeGraph: Calls, extends, implements
-            CodeGraph->>Database: Store graph edges
+        alt Aikido enabled
+            Webhook->>Aikido: Resolve vulnerability context
+            Aikido-->>Webhook: Enriched prompt
+        else Standard JIRA prompt
+            Webhook->>Webhook: Use JIRA description
         end
         
-        opt Vector Indexing Enabled
-            CodeGraph->>VoyageAI: Generate embeddings
-            VoyageAI-->>CodeGraph: 1024-dim vectors
-            CodeGraph->>Database: Store code embeddings
-        end
+        Webhook->>Queue: Submit fix job
+        Queue-->>Webhook: Job queued
+        Webhook-->>JIRA: 200 OK {jobId, branch}
         
-        CodeGraph->>Git: Cleanup workspace
+    else Invalid assignment
+        Webhook-->>JIRA: 200 OK {action: ignored}
     end
 ```
+
+### Git Platform PR Webhook Flow
+
+```mermaid
+sequenceDiagram
+    participant Platform as Git Platform
+    participant Webhook as PRWebhookResource
+    participant Runner as AgentRunner
+    participant Settings as RepoSettingsStore
+
+    Platform->>Webhook: PR created/updated
+    Webhook->>Settings: Check repo review settings
+    
+    alt Review enabled
+        Webhook->>Webhook: Check skip conditions
+        Note over Webhook: - Author is agent<br/>- Title missing keyword
+        
+        alt Should review
+            Webhook->>Runner: Queue review job
+            Runner-->>Webhook: Job queued
+            Webhook-->>Platform: 200 OK {jobId}
+        else Skip review
+            Webhook-->>Platform: 200 OK {action: skipped}
+        end
+    else Review disabled
+        Webhook-->>Platform: 200 OK {action: disabled}
+    end
+```
+
+## Vector Search and Code Intelligence Flow
+
+The system builds and maintains code graphs with vector embeddings for semantic search capabilities.
+
+### Code Graph Building Flow
+
+```mermaid
+sequenceDiagram
+    participant Scheduler as CodeGraphScheduler
+    participant Builder as CodeGraphBuildService
+    participant Indexer as CodeGraphIndexer
+    participant Embedding as EmbeddingIndexer
+    participant Store as CodeGraphStore
+    participant VectorStore as EmbeddingStore
+
+    Scheduler->>Builder: Build missing graphs (cron)
+    Builder->>Builder: Clone repository
+    Builder->>Indexer: Parse source files
+    
+    loop For each source file
+        Indexer->>Indexer: Extract AST symbols
+        Note over Indexer: - Classes, methods, fields<br/>- Access modifiers<br/>- Line numbers
+        Indexer->>Store: Store nodes and edges
+    end
+    
+    alt Vector indexing enabled
+        Builder->>Embedding: Generate embeddings
+        loop For each symbol
+            Embedding->>Embedding: Extract source text
+            Embedding->>VectorStore: Generate & store embedding
+        end
+    end
+    
+    Builder->>Builder: Cleanup workspace
+    Note right of Builder: Graph ready for queries
+```
+
+### Semantic Search Flow
+
+```mermaid
+sequenceDiagram
+    participant Claude as Claude API
+    participant Tool as SemanticSearchTool
+    participant Embedding as VoyageAI
+    participant Store as EmbeddingStore
+
+    Claude->>Tool: semantic_search("payment refund logic")
+    Tool->>Embedding: Generate query embedding
+    Embedding-->>Tool: Vector representation
+    
+    Tool->>Store: Cosine similarity search
+    Store-->>Tool: Top K matching symbols
+    
+    Tool->>Tool: Format results
+    Note over Tool: - File paths<br/>- Symbol names<br/>- Source snippets<br/>- Similarity scores
+    
+    Tool-->>Claude: Search results
+```
+
+## Learning and Quality Improvement Flow
+
+The system continuously learns from developer feedback to improve review quality.
+
+### False Positive Auto-Suppression Flow
+
+```mermaid
+sequenceDiagram
+    participant Dev as Developer
+    participant Processor as CommentProcessor
+    participant Feedback as CommentFeedbackStore
+    participant Memory as MemoryStore
+    participant Future as Future Reviews
+
+    Dev->>Processor: Reply "/fp" to comment
+    Processor->>Feedback: Record false positive feedback
+    Processor->>Feedback: Count pattern occurrences
+    
+    alt Threshold reached (e.g., 3 occurrences)
+        Processor->>Memory: Create auto-suppression rule
+        Note over Memory: Pattern: "Null check on method parameter"<br/>Context: "Private helper methods"<br/>Source: "auto_suppress"
+    end
+    
+    Future->>Memory: Load suppression rules
+    Memory-->>Future: Known false positive patterns
+    Future->>Future: Inject into review prompt
+    Note over Future: "Known False Positives" section<br/>prevents similar findings
+```
+
+### Review Quality Metrics Flow
+
+```mermaid
+sequenceDiagram
+    participant Metrics as ReviewMetricsResource
+    participant Feedback as CommentFeedbackStore
+    participant Comments as CommentStore
+
+    Metrics->>Comments: Query total findings by repo
+    Comments-->>Metrics: Finding counts by category
+    
+    Metrics->>Feedback: Query feedback by repo
+    Feedback-->>Metrics: FP counts, resolution rates
+    
+    Metrics->>Metrics: Calculate quality metrics
+    Note over Metrics: - Resolution rate<br/>- False positive rate<br/>- Category breakdown<br/>- Auto-suppressed patterns
+    
+    Metrics-->>Metrics: Return quality report
+```
+
+## Job Queue and Concurrency Management
+
+The system uses a sophisticated job queue to manage concurrent processing while respecting resource limits.
+
+### Job Queue Processing Flow
+
+```mermaid
+sequenceDiagram
+    participant API as REST API
+    participant Queue as JobQueue
+    participant Runner1 as AgentRunner (Slot 1)
+    participant Runner2 as AgentRunner (Slot 2)
+    participant Runner3 as AgentRunner (Slot 3)
+
+    API->>Queue: Submit Job A
+    API->>Queue: Submit Job B
+    API->>Queue: Submit Job C
+    API->>Queue: Submit Job D
+    
+    Note over Queue: Max concurrent: 3<br/>Queue capacity: 20
+    
+    Queue->>Runner1: Execute Job A
+    Queue->>Runner2: Execute Job B  
+    Queue->>Runner3: Execute Job C
+    
+    Note over Queue: Job D waits in queue
+    
+    Runner1->>Queue: Job A completed
+    Queue->>Runner1: Execute Job D
+    
+    Note right of Queue: Jobs processed FIFO<br/>with concurrent execution
+```
+
+### Guardrails and Safety Controls
+
+Every job execution is subject to multiple safety controls:
+
+1. **Path Restrictions**: Block modifications to sensitive directories
+2. **Command Allowlist**: Only permit safe commands like `mvn`, `git diff`
+3. **Change Limits**: Cap maximum files and lines modified
+4. **Timeout Controls**: Prevent runaway jobs from consuming resources
+5. **Build Validation**: Ensure changes don't break compilation or tests
 
 ## Error Handling and Recovery
 
-Common error scenarios and recovery mechanisms.
+The system includes comprehensive error handling and recovery mechanisms.
+
+### Job Failure Recovery Flow
 
 ```mermaid
 sequenceDiagram
-    participant Agent
-    participant Tools
-    participant Git
-    participant Claude
-    participant JobStore
-    participant Notifications
+    participant Queue as JobQueue  
+    participant Runner as AgentRunner
+    participant Store as JobStore
+    participant JIRA as JIRA Cloud
+    participant Teams as Teams Notifier
 
-    Agent->>Tools: run_command (mvn compile)
-    Tools-->>Agent: Build failure
+    Runner->>Runner: Job processing fails
+    Runner->>Store: Update status to FAILED
+    Runner->>Store: Record error message
     
-    alt Retry Logic
-        Agent->>Claude: Send build error
-        Claude->>Agent: Suggest fixes
-        Agent->>Tools: Apply fixes
-        Agent->>Tools: run_command (retry build)
-        
-        alt Build Success
-            Tools-->>Agent: Success
-        else Max Retries Exceeded
-            Agent->>JobStore: Mark job failed
-            Agent->>Notifications: Send error alert
-        end
-    end
+    Runner->>JIRA: Add failure comment
+    Note over JIRA: - Error description<br/>- Troubleshooting tips<br/>- Manual intervention needed
     
-    alt Workspace Cleanup
-        Agent->>Git: Delete temp directory
-    end
+    Runner->>Teams: Send failure notification
+    Runner->>Queue: Release job slot
     
-    alt Authentication Failure
-        Agent->>JobStore: Mark job failed
-        Agent->>Notifications: Auth error alert
-        Note over Agent: Do not retry auth errors
-    end
-    
-    alt Rate Limit Hit
-        Agent->>Agent: Exponential backoff
-        Agent->>Claude: Retry after delay
-    end
+    Note right of Runner: Job archived for analysis<br/>Queue continues processing
 ```
 
-## Key Flow Characteristics
-
-### Asynchronous Processing
-- All long-running operations use job queue
-- Status polling for real-time updates
-- Webhook callbacks for completion notifications
-
-### Error Resilience  
-- Automatic retries with exponential backoff
-- Graceful degradation when external services unavailable
-- Comprehensive error logging and alerting
-
-### Multi-Tenant Security
-- Repository-scoped permissions and data isolation
-- Webhook signature verification
-- API key authentication for sensitive operations
-
-### Scalability Patterns
-- Configurable concurrency limits
-- Resource cleanup after job completion
-- Database connection pooling and indexing
-
-### Integration Points
-- **Git Platforms**: Repository cloning, PR management, webhook delivery
-- **JIRA**: Issue tracking, status transitions, progress comments  
-- **AI Services**: Claude for reasoning, Voyage AI for embeddings
-- **Security Tools**: Aikido for vulnerability context, static analyzers
-- **Collaboration**: Confluence publishing, Teams notifications, n8n workflows
+This comprehensive flow documentation provides insight into how the Code Agent Runner orchestrates complex workflows while maintaining reliability and quality. Each flow is designed with proper error handling, monitoring, and recovery mechanisms to ensure robust operation in production environments.

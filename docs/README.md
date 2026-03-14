@@ -1,76 +1,44 @@
-# Code Agent Runner
+# Code Agent Runner Documentation
 
-The Code Agent Runner is a self-hosted AI-powered automation tool that handles code fixes, dependency upgrades, pull request reviews, and documentation generation. It integrates with JIRA, multiple git platforms (Bitbucket, Azure DevOps, GitLab), and external services like Aikido Security and Confluence.
+The Code Agent Runner is a self-hosted coding agent that automates issue fixing, dependency upgrades, and AI-powered code reviews. Built with Quarkus (Java 21), it integrates with multiple git platforms (Bitbucket, Azure DevOps, GitLab), uses Claude (Anthropic) in an agentic tool-use loop to make code changes, validates with Maven, creates pull requests, and keeps JIRA and Teams in sync.
 
-## What It Does
+This comprehensive system provides automated software development workflows, from fixing vulnerabilities reported by security tools like Aikido to conducting thorough PR reviews with contextual repository exploration.
 
-- **Automated Code Fixes**: Clones repositories, analyzes JIRA tickets, applies AI-powered fixes, validates changes with Maven, and creates pull requests
-- **Vulnerability Fixes**: Integrates with Aikido Security to automatically resolve dependency vulnerabilities with enriched context
-- **Code Review**: AI-powered pull request reviews checking security, design, quality, testing, and best practices
-- **Test Generation**: Automatically generates unit tests for untested code paths
-- **Documentation Generation**: Creates comprehensive project documentation with architecture diagrams
-- **Multi-Platform Support**: Works with Bitbucket, Azure DevOps, and GitLab
-- **Semantic Code Search**: Vector-based code search using pgvector and Voyage AI embeddings
-
-## Documentation
+## Documentation Index
 
 | Document | Description |
 |----------|-------------|
-| [Architecture Overview](architecture.md) | High-level system design, components, and tech stack |
-| [API Documentation](api.md) | Complete REST API reference with endpoints and schemas |
-| [Data Model](data-model.md) | Database schema, tables, and relationships |
-| [Getting Started](getting-started.md) | Developer setup, build instructions, and project walkthrough |
+| [Architecture Overview](architecture.md) | High-level system design, component interactions, and technology stack |
+| [API Documentation](api.md) | Complete REST API reference with endpoints, request/response schemas |
+| [Data Model](data-model.md) | Database schema with tables, relationships, and constraints |
+| [Getting Started](getting-started.md) | Developer onboarding, setup, and environment configuration |
 | [Key Business Flows](flows.md) | Important workflows with sequence diagrams |
 | [Configuration Reference](configuration.md) | All configuration properties and environment variables |
 
 ## Quick Start
 
-```bash
-# Prerequisites: JDK 17+, Docker, PostgreSQL with pgvector extension
+To get the Code Agent Runner up and running:
 
-# 1. Clone and build
-git clone <repository-url>
-cd code-agent-runner
-./mvnw clean package
+1. **Prerequisites**: Java 21, PostgreSQL 14+, Maven 3.8+
+2. **Build**: `mvn -B package -DskipTests`
+3. **Configure**: Set required environment variables (see [Configuration Reference](configuration.md))
+4. **Run**: `mvn quarkus:dev` (development) or `java -jar target/quarkus-app/quarkus-run.jar` (production)
 
-# 2. Set up database
-docker run -d --name postgres-pgvector \
-  -e POSTGRES_DB=code_agent \
-  -e POSTGRES_USER=code_agent \
-  -e POSTGRES_PASSWORD=yourpassword \
-  -p 5432:5432 \
-  pgvector/pgvector:pg17
-
-# 3. Configure environment variables
-export ANTHROPIC_API_KEY="your-api-key"
-export DATABASE_PASSWORD="yourpassword"
-export JIRA_BASE_URL="https://yourcompany.atlassian.net"
-export JIRA_USER="your-email"
-export JIRA_API_TOKEN="your-token"
-
-# 4. Run in development mode
-./mvnw quarkus:dev
-
-# 5. Access Swagger UI
-open http://localhost:8080/q/swagger-ui
-```
-
-The application will start on port 8080 and automatically run database migrations. See the [Getting Started guide](getting-started.md) for detailed setup instructions.
+The server will start on `http://localhost:8080` with Swagger UI available at `http://localhost:8080/q/swagger-ui`.
 
 ## Key Features
 
-- **Multi-Language Support**: Java (Maven), .NET, Node.js projects
-- **Security Integration**: Built-in linting with Checkstyle, PMD, SpotBugs, ESLint
-- **Scalable Architecture**: Async job processing with configurable concurrency
-- **Enterprise Integration**: JIRA workflows, Microsoft Teams notifications, n8n webhooks
-- **Code Intelligence**: AST analysis, dependency graphs, semantic search
-- **Compliance**: Configurable guardrails and blocked paths for security
+- **Automated Issue Fixing**: Queue jobs from JIRA tickets with automatic prompt resolution
+- **Security Integration**: Deep integration with Aikido Security for vulnerability remediation
+- **AI Code Reviews**: Comprehensive PR analysis covering security, design, quality, and testing
+- **Multi-Platform Support**: Works with Bitbucket Cloud, Azure DevOps, and GitLab
+- **Code Intelligence**: Built-in code graph analysis and semantic search across repositories
+- **Learning System**: Adapts to team preferences through review memory and feedback
+- **Approval Workflows**: Human-in-the-loop approval via n8n integration
 
-## Technology Stack
+## Getting Help
 
-- **Framework**: Quarkus 3.17.8 (Java 17)
-- **Database**: PostgreSQL with pgvector extension
-- **AI**: Anthropic Claude with tool use
-- **Security**: Aikido Security integration
-- **Documentation**: Confluence Cloud publishing
-- **Git Platforms**: Bitbucket, Azure DevOps, GitLab support
+- Review the [API Documentation](api.md) for endpoint specifications
+- Check the [Configuration Reference](configuration.md) for environment variables
+- Follow the [Getting Started](getting-started.md) guide for detailed setup instructions
+- Examine the [Key Business Flows](flows.md) to understand system workflows

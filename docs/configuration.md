@@ -1,322 +1,534 @@
 # Configuration Reference
 
-The Code Agent Runner is configured through environment variables and application properties. This document provides a comprehensive reference of all available configuration options.
+The Code Agent Runner is configured entirely through environment variables and application properties. This document provides a comprehensive reference of all available configuration options, organized by functional area.
 
-## Required Configuration
+## Core AI Configuration
 
-### AI Integration
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `anthropic.api.key` | `ANTHROPIC_API_KEY` | Anthropic Claude API key | - | ✅ |
-| `anthropic.model` | `ANTHROPIC_MODEL` | Claude model to use | `claude-sonnet-4-20250514` | ✅ |
-| `anthropic.max-tokens` | `ANTHROPIC_MAX_TOKENS` | Max output tokens per request | `8192` | - |
+### Anthropic Claude API
 
-### Database
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `quarkus.datasource.jdbc.url` | `DATABASE_URL` | PostgreSQL connection URL | `jdbc:postgresql://localhost:5432/code_agent` | ✅ |
-| `quarkus.datasource.username` | `DATABASE_USER` | Database username | `code_agent` | ✅ |
-| `quarkus.datasource.password` | `DATABASE_PASSWORD` | Database password | - | ✅ |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `ANTHROPIC_API_KEY` | - | ✅ | Anthropic API key for Claude access |
+| `ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | ❌ | Claude model identifier |
+| `ANTHROPIC_MAX_TOKENS` | `8192` | ❌ | Maximum tokens per API call |
 
-### JIRA Integration
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `jira.base.url` | `JIRA_BASE_URL` | JIRA Cloud base URL | `https://eneve.atlassian.net` | ✅ |
-| `jira.user` | `JIRA_USER` | JIRA username/email | - | ✅ |
-| `jira.api.token` | `JIRA_API_TOKEN` | JIRA API token | - | ✅ |
+**Cost Estimation (USD per million tokens):**
 
-### Git Platform
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `git.platform` | `GIT_PLATFORM` | Git platform: `bitbucket`, `azuredevops`, `gitlab` | `bitbucket` | ✅ |
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ANTHROPIC_PRICING_INPUT` | `3.0` | Input token cost |
+| `ANTHROPIC_PRICING_OUTPUT` | `15.0` | Output token cost |
+| `ANTHROPIC_PRICING_CACHE_WRITE` | `3.75` | Cache creation cost |
+| `ANTHROPIC_PRICING_CACHE_READ` | `0.30` | Cache read cost |
+
+**Example:**
+```bash
+ANTHROPIC_API_KEY=sk-ant-api03-xyz123
+ANTHROPIC_MODEL=claude-sonnet-4-20250514
+ANTHROPIC_MAX_TOKENS=8192
+```
+
+### Voyage AI Embeddings
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `VOYAGE_API_KEY` | - | ❌ | Voyage AI API key for vector embeddings |
+| `VOYAGE_MODEL` | `voyage-code-3` | ❌ | Embedding model identifier |
+| `VOYAGE_BATCH_SIZE` | `128` | ❌ | Max texts per API call |
+| `EMBEDDING_MAX_SOURCE_CHARS` | `16000` | ❌ | Max source code chars per embedding |
+
+**Example:**
+```bash
+VOYAGE_API_KEY=pa-xyz123
+VOYAGE_MODEL=voyage-code-3
+VOYAGE_BATCH_SIZE=128
+```
+
+## Database Configuration
+
+### PostgreSQL Connection
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `DATABASE_URL` | `jdbc:postgresql://localhost:5432/code_agent` | ❌ | JDBC connection URL |
+| `DATABASE_USER` | `code_agent` | ❌ | Database username |
+| `DATABASE_PASSWORD` | - | ✅ | Database password |
+
+**Example:**
+```bash
+DATABASE_URL=jdbc:postgresql://localhost:5432/code_agent
+DATABASE_USER=code_agent
+DATABASE_PASSWORD=secure_password_here
+```
+
+**Production Example (AWS RDS):**
+```bash
+DATABASE_URL=jdbc:postgresql://mydb.cluster-xyz.us-west-2.rds.amazonaws.com:5432/code_agent
+DATABASE_USER=code_agent
+DATABASE_PASSWORD=complex_secure_password
+```
+
+## JIRA Cloud Integration
+
+### Authentication & Connection
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `JIRA_BASE_URL` | - | ✅ | JIRA Cloud instance URL |
+| `JIRA_USER` | - | ✅ | JIRA user email address |
+| `JIRA_API_TOKEN` | - | ✅ | Atlassian API token |
+
+### Workflow Transitions
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `JIRA_TRANSITION_IN_REVIEW` | - | ❌ | Transition ID for "In Review" |
+| `JIRA_TRANSITION_DONE` | - | ❌ | Transition ID for "Done" |
+| `JIRA_TRANSITION_REJECTED` | - | ❌ | Transition ID for rejected |
+| `JIRA_DEFAULT_WORKLOG` | `30m` | ❌ | Default time logged per fix |
+
+### Agent Configuration
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `JIRA_AGENT_ASSIGNEE` | - | ❌ | Agent user display name/email/account ID |
+| `JIRA_AGENT_LABEL` | `WALL-E` | ❌ | Label used by `/sync-jira` |
+| `JIRA_AGENT_DEFAULT_REPO_URL` | - | ❌ | Fallback repo URL when not resolvable |
+
+**Example:**
+```bash
+JIRA_BASE_URL=https://mycompany.atlassian.net
+JIRA_USER=code.agent@mycompany.com
+JIRA_API_TOKEN=ATATT3xFFGF0UB1nqJn...
+JIRA_AGENT_ASSIGNEE=Code Agent
+JIRA_AGENT_LABEL=WALL-E
+JIRA_DEFAULT_WORKLOG=45m
+```
 
 ## Git Platform Configuration
 
+### Platform Selection
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `GIT_PLATFORM` | `bitbucket` | ❌ | Platform: `bitbucket`, `azuredevops`, or `gitlab` |
+
+### Git Operations
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `GIT_USERNAME` | `${BITBUCKET_USER}` | ❌ | Git clone/push username |
+| `GIT_PASSWORD` | `${BITBUCKET_APP_PASSWORD}` | ❌ | Git clone/push password |
+| `GIT_AUTHOR_NAME` | `code-agent` | ❌ | Git commit author name |
+| `GIT_AUTHOR_EMAIL` | - | ❌ | Git commit author email |
+
 ### Bitbucket Cloud
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `bitbucket.base.url` | `BITBUCKET_BASE_URL` | Bitbucket API base URL | `https://api.bitbucket.org/2.0` | - |
-| `bitbucket.workspace` | `BITBUCKET_WORKSPACE` | Bitbucket workspace name | - | ✅ |
-| `bitbucket.user` | `BITBUCKET_USER` | Bitbucket username | - | ✅ |
-| `bitbucket.app.password` | `BITBUCKET_APP_PASSWORD` | Bitbucket app password | - | ✅ |
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `BITBUCKET_BASE_URL` | `https://api.bitbucket.org/2.0` | ❌ | Bitbucket Cloud API base URL |
+| `BITBUCKET_WORKSPACE` | - | ✅ | Bitbucket workspace slug |
+| `BITBUCKET_USER` | - | ✅ | Bitbucket username |
+| `BITBUCKET_APP_PASSWORD` | - | ✅ | Bitbucket App Password |
+
+**Example:**
+```bash
+GIT_PLATFORM=bitbucket
+BITBUCKET_WORKSPACE=mycompany
+BITBUCKET_USER=code-agent-user
+BITBUCKET_APP_PASSWORD=ATCTT3xFFGF0...
+GIT_AUTHOR_EMAIL=code.agent@mycompany.com
+```
 
 ### Azure DevOps
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `azuredevops.base.url` | `AZUREDEVOPS_BASE_URL` | Azure DevOps organization URL | `https://dev.azure.com` | ✅ |
-| `azuredevops.pat` | `AZUREDEVOPS_PAT` | Personal Access Token | - | ✅ |
-| `azuredevops.agent.user` | `AZUREDEVOPS_AGENT_USER` | Agent user display name | - | ✅ |
 
-### GitLab Cloud
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `gitlab.base.url` | `GITLAB_BASE_URL` | GitLab API base URL | `https://gitlab.com/api/v4` | ✅ |
-| `gitlab.token` | `GITLAB_TOKEN` | GitLab access token | - | ✅ |
-| `gitlab.agent.user` | `GITLAB_AGENT_USER` | Agent user display name | - | ✅ |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `AZUREDEVOPS_BASE_URL` | `https://dev.azure.com` | ❌ | Azure DevOps base URL |
+| `AZUREDEVOPS_PAT` | - | ✅ | Personal Access Token |
+| `AZUREDEVOPS_AGENT_USER` | - | ❌ | Agent user display name |
 
-## Security Configuration
+**Example:**
+```bash
+GIT_PLATFORM=azuredevops
+AZUREDEVOPS_PAT=abc123xyz...
+AZUREDEVOPS_AGENT_USER=Code Agent
+```
 
-### API Security
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `api.key` | `API_KEY` | Shared API key for REST endpoints | - | - |
+### GitLab
 
-### Webhook Security
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `webhook.secret.bitbucket` | `WEBHOOK_SECRET_BITBUCKET` | HMAC-SHA256 secret for Bitbucket webhooks | - | - |
-| `webhook.secret.azuredevops` | `WEBHOOK_SECRET_AZUREDEVOPS` | HMAC-SHA256 secret for Azure DevOps webhooks | - | - |
-| `webhook.secret.gitlab` | `WEBHOOK_SECRET_GITLAB` | Token for GitLab webhook authentication | - | - |
-| `webhook.secret.jira` | `WEBHOOK_SECRET_JIRA` | HMAC-SHA256 secret for JIRA webhooks | - | - |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `GITLAB_BASE_URL` | `https://gitlab.com/api/v4` | ❌ | GitLab API base URL |
+| `GITLAB_TOKEN` | - | ✅ | GitLab access token |
+| `GITLAB_AGENT_USER` | - | ❌ | Agent user display name |
 
-### Agent Guardrails
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `run-fix.blocked-paths` | `RUN_FIX_BLOCKED_PATHS` | Comma-separated blocked paths | `src/main/security,src/main/billing,.github,.env` | - |
-| `run-fix.allowed-commands` | `RUN_FIX_ALLOWED_COMMANDS` | Comma-separated allowed shell commands | `mvn,git diff,git status,git log,ls,find,cat,grep,dotnet,npm,npx` | - |
-| `run-fix.max-files-changed` | `RUN_FIX_MAX_FILES_CHANGED` | Maximum files changed per job | `10` | - |
-| `run-fix.max-lines-changed` | `RUN_FIX_MAX_LINES_CHANGED` | Maximum lines changed per job | `500` | - |
-| `run-fix.max-loop-iterations` | `RUN_FIX_MAX_LOOP_ITERATIONS` | Maximum AI tool-use iterations | `150` | - |
-| `run-fix.job-timeout-minutes` | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Job execution timeout | `30` | - |
-
-## AI Configuration
-
-### Cost Estimation (USD per million tokens)
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `anthropic.pricing.input-per-million` | `ANTHROPIC_PRICING_INPUT` | Input token cost | `3.0` | - |
-| `anthropic.pricing.output-per-million` | `ANTHROPIC_PRICING_OUTPUT` | Output token cost | `15.0` | - |
-| `anthropic.pricing.cache-write-per-million` | `ANTHROPIC_PRICING_CACHE_WRITE` | Cache write cost | `3.75` | - |
-| `anthropic.pricing.cache-read-per-million` | `ANTHROPIC_PRICING_CACHE_READ` | Cache read cost | `0.30` | - |
-
-### Semantic Search
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `voyage.api.key` | `VOYAGE_API_KEY` | Voyage AI embeddings API key | - | - |
-| `voyage.model` | `VOYAGE_MODEL` | Voyage AI model | `voyage-code-3` | - |
-| `voyage.batch-size` | `VOYAGE_BATCH_SIZE` | Batch size for embeddings | `128` | - |
-| `embedding.max-source-chars` | `EMBEDDING_MAX_SOURCE_CHARS` | Max source chars per embedding | `16000` | - |
-
-## JIRA Workflow Configuration
-
-### Issue Management
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `jira.transition.in-review` | `JIRA_TRANSITION_IN_REVIEW` | Transition ID for "In Review" status | - | - |
-| `jira.transition.done` | `JIRA_TRANSITION_DONE` | Transition ID for "Done" status | - | - |
-| `jira.transition.rejected` | `JIRA_TRANSITION_REJECTED` | Transition ID for "Rejected" status | - | - |
-| `jira.default.worklog` | `JIRA_DEFAULT_WORKLOG` | Default time spent per job | `30m` | - |
-
-### Agent Integration
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `jira.agent.assignee` | `JIRA_AGENT_ASSIGNEE` | Default assignee for agent jobs | - | - |
-| `jira.agent.label` | `JIRA_AGENT_LABEL` | Label for agent-handled issues | `WALL-E` | - |
-| `jira.agent.default-repo-url` | `JIRA_AGENT_DEFAULT_REPO_URL` | Default repository URL for sync jobs | - | - |
-
-## Job Queue Configuration
-
-### Capacity Management
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `run-fix.max-concurrent-jobs` | `RUN_FIX_MAX_CONCURRENT_JOBS` | Maximum concurrent jobs | `3` | - |
-| `run-fix.max-queue-size` | `RUN_FIX_MAX_QUEUE_SIZE` | Maximum queued jobs | `20` | - |
-
-### Specialized Job Types
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `generate-tests.max-loop-iterations` | `GENERATE_TESTS_MAX_LOOP_ITERATIONS` | Max iterations for test generation | `500` | - |
-| `generate-tests.job-timeout-minutes` | `GENERATE_TESTS_JOB_TIMEOUT_MINUTES` | Test generation timeout | `60` | - |
-| `generate-docs.max-loop-iterations` | `GENERATE_DOCS_MAX_LOOP_ITERATIONS` | Max iterations for doc generation | `200` | - |
-
-## Pull Request Configuration
-
-### Review Behavior
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `review.webhook.skip-authors` | `REVIEW_WEBHOOK_SKIP_AUTHORS` | Authors to skip in PR reviews | `code-agent` | - |
-| `review.webhook.require-title-keyword` | - | Required keyword in PR title | `-` | - |
-| `review.pr-summary.enabled` | `REVIEW_PR_SUMMARY_ENABLED` | Enable PR summary comments | `true` | - |
-| `review.sequence-diagrams.enabled` | `REVIEW_SEQUENCE_DIAGRAMS_ENABLED` | Generate Mermaid diagrams | `true` | - |
+**Example:**
+```bash
+GIT_PLATFORM=gitlab
+GITLAB_BASE_URL=https://gitlab.mycompany.com/api/v4
+GITLAB_TOKEN=glpat-xyz123...
+GITLAB_AGENT_USER=Code Agent
+```
 
 ## External Integrations
 
-### Notifications
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `teams.webhook.url` | `TEAMS_WEBHOOK_URL` | Microsoft Teams webhook URL | - | - |
-| `n8n.webhook.url` | `N8N_WEBHOOK_URL` | n8n workflow webhook URL | - | - |
-
 ### Aikido Security
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `aikido.base.url` | `AIKIDO_BASE_URL` | Aikido platform base URL | `https://app.aikido.dev` | - |
-| `aikido.client.id` | `AIKIDO_CLIENT_ID` | Aikido OAuth client ID | - | - |
-| `aikido.client.secret` | `AIKIDO_CLIENT_SECRET` | Aikido OAuth client secret | - | - |
-| `aikido.ci.api.secret` | `AIKIDO_CI_API_SECRET` | Aikido CI API secret | - | - |
 
-### Confluence Publishing
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `confluence.base.url` | `CONFLUENCE_BASE_URL` | Confluence Cloud base URL | - | - |
-| `confluence.user` | `CONFLUENCE_USER` | Confluence username | - | - |
-| `confluence.api.token` | `CONFLUENCE_API_TOKEN` | Confluence API token | - | - |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `AIKIDO_BASE_URL` | `https://app.aikido.dev` | ❌ | Aikido API base URL |
+| `AIKIDO_CLIENT_ID` | - | ❌ | Aikido OAuth2 client ID |
+| `AIKIDO_CLIENT_SECRET` | - | ❌ | Aikido OAuth2 client secret |
+| `AIKIDO_CI_API_SECRET` | - | ❌ | Aikido CI integration token |
 
-## Coding Rules Configuration
+**Example:**
+```bash
+AIKIDO_CLIENT_ID=aikido_client_xyz
+AIKIDO_CLIENT_SECRET=AIK_SECRET_abc123
+AIKIDO_CI_API_SECRET=AIK_CI_def456
+```
 
-### Rules Repository
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `rules.repo.url` | `RULES_REPO_URL` | Git repository with shared coding rules | - | - |
-| `rules.repo.cache.dir` | `RULES_REPO_CACHE_DIR` | Local cache directory for rules | `/tmp/cursor-rules-cache` | - |
-| `rules.auto-read-target-repo` | `RULES_AUTO_READ_TARGET_REPO` | Auto-read target repo for context | `true` | - |
+### Notifications
 
-## Linting & Static Analysis
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `TEAMS_WEBHOOK_URL` | - | ❌ | Microsoft Teams incoming webhook URL |
+| `N8N_WEBHOOK_URL` | - | ❌ | Default n8n webhook URL for notifications |
 
-### Tool Configuration
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `linter.enabled` | `LINTER_ENABLED` | Enable static analysis | `true` | - |
-| `linter.checkstyle.enabled` | `LINTER_CHECKSTYLE_ENABLED` | Enable Checkstyle | `true` | - |
-| `linter.pmd.enabled` | `LINTER_PMD_ENABLED` | Enable PMD | `true` | - |
-| `linter.spotbugs.enabled` | `LINTER_SPOTBUGS_ENABLED` | Enable SpotBugs | `true` | - |
-| `linter.eslint.enabled` | `LINTER_ESLINT_ENABLED` | Enable ESLint | `true` | - |
-| `linter.dotnet-format.enabled` | `LINTER_DOTNET_FORMAT_ENABLED` | Enable .NET Format | `true` | - |
+**Example:**
+```bash
+TEAMS_WEBHOOK_URL=https://mycompany.webhook.office.com/webhookb2/abc123
+N8N_WEBHOOK_URL=https://n8n.mycompany.com/webhook/code-agent
+```
+
+### Confluence Cloud
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `CONFLUENCE_BASE_URL` | - | ❌ | Confluence Cloud base URL |
+| `CONFLUENCE_USER` | - | ❌ | Confluence user email |
+| `CONFLUENCE_API_TOKEN` | - | ❌ | Atlassian API token for Confluence |
+
+**Example:**
+```bash
+CONFLUENCE_BASE_URL=https://mycompany.atlassian.net/wiki
+CONFLUENCE_USER=code.agent@mycompany.com
+CONFLUENCE_API_TOKEN=ATATT3xFFGF0...
+```
+
+## Coding Rules & Standards
+
+### Cursor Rules Integration
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `RULES_REPO_URL` | - | ❌ | Default shared Cursor rules repository |
+| `RULES_REPO_CACHE_DIR` | `/tmp/cursor-rules-cache` | ❌ | Local cache for rules repository |
+| `RULES_AUTO_READ_TARGET_REPO` | `true` | ❌ | Auto-load `.cursor/rules` from target repo |
+
+**Example:**
+```bash
+RULES_REPO_URL=https://bitbucket.org/mycompany/cursor-rules.git
+RULES_REPO_CACHE_DIR=/var/cache/cursor-rules
+RULES_AUTO_READ_TARGET_REPO=true
+```
+
+## Security Configuration
+
+### API Protection
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `API_KEY` | - | ❌ | Shared API key for REST endpoints |
+
+**Example:**
+```bash
+API_KEY=secure-random-api-key-here
+```
+
+### Webhook Security
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `WEBHOOK_SECRET_BITBUCKET` | - | ❌ | HMAC-SHA256 secret for Bitbucket webhooks |
+| `WEBHOOK_SECRET_AZUREDEVOPS` | - | ❌ | Secret for Azure DevOps webhook verification |
+| `WEBHOOK_SECRET_GITLAB` | - | ❌ | Secret for GitLab webhook verification |
+| `WEBHOOK_SECRET_JIRA` | - | ❌ | Secret for JIRA webhook verification |
+
+**Example:**
+```bash
+WEBHOOK_SECRET_BITBUCKET=bitbucket-webhook-secret-123
+WEBHOOK_SECRET_AZUREDEVOPS=ado-webhook-secret-456
+WEBHOOK_SECRET_GITLAB=gitlab-webhook-secret-789
+WEBHOOK_SECRET_JIRA=jira-webhook-secret-abc
+```
+
+### Guardrails
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `RUN_FIX_BLOCKED_PATHS` | `src/main/security,src/main/billing,.github,.env` | ❌ | Comma-separated blocked paths |
+| `RUN_FIX_ALLOWED_COMMANDS` | `mvn,git diff,git status,git log,ls,find,cat,grep,dotnet,npm,npx` | ❌ | Comma-separated allowed command prefixes |
+| `RUN_FIX_MAX_FILES_CHANGED` | `10` | ❌ | Maximum files the agent may change |
+| `RUN_FIX_MAX_LINES_CHANGED` | `500` | ❌ | Maximum lines the agent may change |
+| `RUN_FIX_MAX_LOOP_ITERATIONS` | `150` | ❌ | Maximum agent loop iterations |
+| `RUN_FIX_JOB_TIMEOUT_MINUTES` | `30` | ❌ | Overall job timeout in minutes |
+
+**Example:**
+```bash
+RUN_FIX_BLOCKED_PATHS=src/main/security,src/main/billing,src/main/payment,.env,.github
+RUN_FIX_ALLOWED_COMMANDS=mvn,gradle,git diff,git status,ls,find,cat
+RUN_FIX_MAX_FILES_CHANGED=5
+RUN_FIX_MAX_LINES_CHANGED=250
+```
+
+## Job Processing Configuration
+
+### Job Queue Settings
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `RUN_FIX_MAX_CONCURRENT_JOBS` | `3` | ❌ | Maximum jobs running in parallel |
+| `RUN_FIX_MAX_QUEUE_SIZE` | `20` | ❌ | Maximum jobs waiting in queue |
+
+### Job Type Specific Settings
+
+#### Test Generation
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `GENERATE_TESTS_MAX_LOOP_ITERATIONS` | `500` | ❌ | Max iterations for test generation |
+| `GENERATE_TESTS_JOB_TIMEOUT_MINUTES` | `60` | ❌ | Test generation timeout |
+
+#### Documentation Generation
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `GENERATE_DOCS_MAX_LOOP_ITERATIONS` | `200` | ❌ | Max iterations for docs generation |
+
+**Example:**
+```bash
+RUN_FIX_MAX_CONCURRENT_JOBS=5
+RUN_FIX_MAX_QUEUE_SIZE=30
+GENERATE_TESTS_JOB_TIMEOUT_MINUTES=90
+```
+
+## Code Review Configuration
+
+### PR Review Behavior
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `REVIEW_WEBHOOK_SKIP_AUTHORS` | `code-agent` | ❌ | Comma-separated authors to skip |
+| `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | - | ❌ | Only review PRs with this keyword in title |
+| `REVIEW_PR_SUMMARY_ENABLED` | `true` | ❌ | Generate PR summary & walkthrough |
+| `REVIEW_SEQUENCE_DIAGRAMS_ENABLED` | `true` | ❌ | Include Mermaid diagrams in reviews |
+
+### False Positive Handling
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `REVIEW_FP_AUTO_SUPPRESS_THRESHOLD` | `3` | ❌ | `/fp` marks needed for auto-suppression |
+
+**Example:**
+```bash
+REVIEW_WEBHOOK_SKIP_AUTHORS=code-agent,automated-bot,dependabot
+REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD=READY
+REVIEW_PR_SUMMARY_ENABLED=true
+REVIEW_FP_AUTO_SUPPRESS_THRESHOLD=5
+```
+
+## Static Analysis Configuration
+
+### Linter Integration
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `LINTER_ENABLED` | `true` | ❌ | Enable linter integration |
+| `LINTER_CHECKSTYLE_ENABLED` | `true` | ❌ | Enable Checkstyle |
+| `LINTER_PMD_ENABLED` | `true` | ❌ | Enable PMD |
+| `LINTER_SPOTBUGS_ENABLED` | `true` | ❌ | Enable SpotBugs |
+| `LINTER_ESLINT_ENABLED` | `true` | ❌ | Enable ESLint |
+| `LINTER_DOTNET_FORMAT_ENABLED` | `true` | ❌ | Enable dotnet format |
 
 ### Linter Behavior
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `linter.max-fix-iterations` | `LINTER_MAX_FIX_ITERATIONS` | Max attempts to fix linting issues | `2` | - |
-| `linter.fail-on-new-issues` | `LINTER_FAIL_ON_NEW_ISSUES` | Fail build on new issues | `false` | - |
-| `linter.timeout-minutes` | `LINTER_TIMEOUT_MINUTES` | Linting timeout | `10` | - |
 
-## Git Configuration
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `LINTER_MAX_FIX_ITERATIONS` | `2` | ❌ | Max iterations for auto-fixing linter issues |
+| `LINTER_FAIL_ON_NEW_ISSUES` | `false` | ❌ | Fail build on new linter issues |
+| `LINTER_TIMEOUT_MINUTES` | `10` | ❌ | Linter execution timeout |
 
-### Repository Access
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `git.username` | `GIT_USERNAME` | Git username for cloning | Uses platform-specific user | - |
-| `git.password` | `GIT_PASSWORD` | Git password/token | Uses platform-specific password | - |
-| `git.author.name` | `GIT_AUTHOR_NAME` | Git commit author name | `code-agent` | - |
-| `git.author.email` | `GIT_AUTHOR_EMAIL` | Git commit author email | - | - |
+**Example:**
+```bash
+LINTER_ENABLED=true
+LINTER_CHECKSTYLE_ENABLED=true
+LINTER_PMD_ENABLED=false
+LINTER_MAX_FIX_ITERATIONS=3
+LINTER_TIMEOUT_MINUTES=15
+```
+
+## Tools Configuration
+
+### Documentation Lookup
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `TOOLS_FETCH_URL_ENABLED` | `true` | ❌ | Enable fetch_url tool |
+| `TOOLS_FETCH_URL_TIMEOUT_SECONDS` | `15` | ❌ | HTTP request timeout |
+| `TOOLS_FETCH_URL_ALLOWED_DOMAINS` | - | ❌ | Comma-separated allowed domains |
+
+**Example:**
+```bash
+TOOLS_FETCH_URL_ENABLED=true
+TOOLS_FETCH_URL_TIMEOUT_SECONDS=20
+TOOLS_FETCH_URL_ALLOWED_DOMAINS=docs.spring.io,quarkus.io,developer.mozilla.org
+```
 
 ## Code Graph Configuration
 
-### Scheduling
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `code-graph.scheduler.enabled` | `CODE_GRAPH_SCHEDULER_ENABLED` | Enable periodic graph building | `true` | - |
-| `code-graph.scheduler.default-branch` | `CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH` | Default branch to analyze | `main` | - |
-| `code-graph.scheduler.clone-timeout-minutes` | `CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT` | Repository clone timeout | `10` | - |
+### Background Processing
 
-## Documentation Tools
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `CODE_GRAPH_SCHEDULER_ENABLED` | `true` | ❌ | Enable background graph pre-building |
+| `CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH` | `main` | ❌ | Default branch for graph builds |
+| `CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT` | `10` | ❌ | Clone timeout in minutes |
 
-### URL Fetching
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `tools.fetch-url.enabled` | `TOOLS_FETCH_URL_ENABLED` | Enable fetch_url tool | `true` | - |
-| `tools.fetch-url.timeout-seconds` | `TOOLS_FETCH_URL_TIMEOUT` | HTTP request timeout | `15` | - |
-| `tools.fetch-url.allowed-domains` | `TOOLS_FETCH_URL_ALLOWED_DOMAINS` | Allowed domains (comma-separated) | - | - |
+**Example:**
+```bash
+CODE_GRAPH_SCHEDULER_ENABLED=true
+CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH=develop
+CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT=15
+```
 
-## Quarkus Framework Configuration
+## Maven/Nexus Configuration
 
-### Application Server
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `quarkus.http.port` | - | HTTP server port | `8080` | - |
-| `quarkus.log.level` | - | Global log level | `INFO` | - |
-| `quarkus.log.category."com.eneve.agent".level` | - | Application log level | `DEBUG` | - |
+### Private Repository Support
 
-### Database Connection Pool
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `quarkus.datasource.jdbc.max-size` | - | Maximum database connections | `20` | - |
-| `quarkus.datasource.jdbc.min-size` | - | Minimum database connections | `5` | - |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `NEXUS_URL` | - | ❌ | Nexus repository URL |
+| `NEXUS_USERNAME` | - | ❌ | Nexus username |
+| `NEXUS_PASSWORD` | - | ❌ | Nexus password |
 
-### Worker Threads
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `quarkus.vertx.max-worker-execute-time` | - | Worker thread timeout | `15m` | - |
+**Example:**
+```bash
+NEXUS_URL=https://nexus.mycompany.com/repository/maven-public/
+NEXUS_USERNAME=code-agent
+NEXUS_PASSWORD=nexus-secure-password
+```
 
-### OpenAPI Documentation
-| Property | Environment Variable | Description | Default | Required |
-|----------|---------------------|-------------|---------|----------|
-| `quarkus.smallrye-openapi.info-title` | - | API documentation title | `Code Agent Runner API` | - |
-| `quarkus.smallrye-openapi.info-version` | - | API version | `1.0.0` | - |
-| `quarkus.swagger-ui.always-include` | - | Include Swagger UI in production | `true` | - |
-| `quarkus.swagger-ui.path` | - | Swagger UI path | `/q/swagger-ui` | - |
+## Application Server Configuration
 
-## Docker Configuration
+### Quarkus Settings
 
-### Container Build
-| Property | Description | Default |
-|----------|-------------|---------|
-| `docker.image.name` | Docker image name | `julesenergy/code-agent-runner` |
-| `docker.image.prefix` | Registry prefix | `450019303360.dkr.ecr.eu-central-1.amazonaws.com` |
-| `docker.image.tag` | Image tag | `${project.version}` |
-| `docker.exposePort` | Container port mapping | `8183:8183` |
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `QUARKUS_HTTP_PORT` | `8080` | ❌ | HTTP server port |
+| `QUARKUS_LOG_LEVEL` | `INFO` | ❌ | Global log level |
+| `QUARKUS_LOG_CATEGORY_COM_ENEVE_AGENT_LEVEL` | `DEBUG` | ❌ | Application log level |
 
-## Configuration Examples
+### Vertx Configuration
+
+| Variable | Default | Required | Description |
+|----------|---------|----------|-------------|
+| `QUARKUS_VERTX_MAX_WORKER_EXECUTE_TIME` | `15m` | ❌ | Max worker thread execution time |
+
+**Example:**
+```bash
+QUARKUS_HTTP_PORT=8080
+QUARKUS_LOG_LEVEL=INFO
+QUARKUS_LOG_CATEGORY_COM_ENEVE_AGENT_LEVEL=DEBUG
+QUARKUS_VERTX_MAX_WORKER_EXECUTE_TIME=20m
+```
+
+## Environment-Specific Examples
 
 ### Development Environment
+
 ```bash
-# .env file for development
-ANTHROPIC_API_KEY=sk-ant-...
-DATABASE_PASSWORD=devpassword
-JIRA_BASE_URL=https://company.atlassian.net
-JIRA_USER=dev@company.com
-JIRA_API_TOKEN=ATATT...
-BITBUCKET_WORKSPACE=mycompany
-BITBUCKET_USER=devuser
-BITBUCKET_APP_PASSWORD=ATB...
-API_KEY=dev-api-key
+# Core
+ANTHROPIC_API_KEY=sk-ant-api03-dev-key
+DATABASE_PASSWORD=dev_password
+
+# JIRA
+JIRA_BASE_URL=https://mycompany-dev.atlassian.net
+JIRA_USER=dev-agent@mycompany.com
+JIRA_API_TOKEN=DEV_TOKEN_HERE
+
+# Bitbucket
+BITBUCKET_WORKSPACE=mycompany-dev
+BITBUCKET_USER=dev-code-agent
+BITBUCKET_APP_PASSWORD=DEV_APP_PASSWORD
+
+# Relaxed limits for development
+RUN_FIX_MAX_FILES_CHANGED=20
+RUN_FIX_MAX_LINES_CHANGED=1000
+LINTER_ENABLED=false
 ```
 
 ### Production Environment
-```bash
-# Environment variables for production deployment
-ANTHROPIC_API_KEY=sk-ant-production-key
-DATABASE_URL=jdbc:postgresql://prod-db:5432/code_agent
-DATABASE_PASSWORD=secure-prod-password
-JIRA_BASE_URL=https://company.atlassian.net
-JIRA_USER=agent@company.com
-JIRA_API_TOKEN=production-token
-BITBUCKET_WORKSPACE=company-prod
-BITBUCKET_USER=code-agent
-BITBUCKET_APP_PASSWORD=production-app-password
-API_KEY=secure-production-api-key
-WEBHOOK_SECRET_BITBUCKET=webhook-signing-secret
-WEBHOOK_SECRET_JIRA=jira-webhook-secret
-TEAMS_WEBHOOK_URL=https://company.webhook.office.com/...
-AIKIDO_CLIENT_ID=production-client-id
-AIKIDO_CLIENT_SECRET=production-client-secret
-CONFLUENCE_BASE_URL=https://company.atlassian.net/wiki
-CONFLUENCE_USER=docs@company.com
-CONFLUENCE_API_TOKEN=confluence-api-token
-VOYAGE_API_KEY=voyage-production-key
-```
 
-### High-Volume Configuration
-```properties
-# application.properties for high-volume deployments
-run-fix.max-concurrent-jobs=10
-run-fix.max-queue-size=100
-quarkus.datasource.jdbc.max-size=50
-quarkus.datasource.jdbc.min-size=10
-quarkus.vertx.max-worker-execute-time=30m
-anthropic.max-tokens=4096
-voyage.batch-size=256
+```bash
+# Core (use Secrets Manager)
+ANTHROPIC_API_KEY=${SECRET:ANTHROPIC_API_KEY}
+DATABASE_PASSWORD=${SECRET:DATABASE_PASSWORD}
+
+# Security
+API_KEY=${SECRET:API_KEY}
+WEBHOOK_SECRET_BITBUCKET=${SECRET:WEBHOOK_SECRET_BITBUCKET}
+
+# Production URLs
+JIRA_BASE_URL=https://mycompany.atlassian.net
+BITBUCKET_WORKSPACE=mycompany
+
+# Production limits
+RUN_FIX_MAX_CONCURRENT_JOBS=5
+RUN_FIX_MAX_QUEUE_SIZE=50
+RUN_FIX_MAX_FILES_CHANGED=10
+RUN_FIX_MAX_LINES_CHANGED=500
+RUN_FIX_JOB_TIMEOUT_MINUTES=45
+
+# Monitoring
+QUARKUS_LOG_LEVEL=WARN
+QUARKUS_LOG_CATEGORY_COM_ENEVE_AGENT_LEVEL=INFO
 ```
 
 ## Configuration Validation
 
-The application validates configuration at startup and logs warnings for:
-- Missing required configuration
-- Invalid API credentials
-- Unreachable external services
-- Malformed URLs or secrets
+### Required Configurations
 
-Use the health check endpoint (`/health`) to verify configuration:
-```bash
-curl http://localhost:8080/health
-```
+The following configurations are required for basic operation:
+
+1. **ANTHROPIC_API_KEY**: Claude API access
+2. **DATABASE_PASSWORD**: PostgreSQL connection
+3. **JIRA_BASE_URL, JIRA_USER, JIRA_API_TOKEN**: JIRA integration
+4. **Git Platform Credentials**: Platform-specific authentication
+
+### Optional but Recommended
+
+1. **API_KEY**: Protect REST endpoints in production
+2. **WEBHOOK_SECRET_***: Secure webhook endpoints
+3. **VOYAGE_API_KEY**: Enable semantic search
+4. **Guardrails**: Set appropriate limits for your environment
+
+### Validation Checklist
+
+- [ ] All required environment variables are set
+- [ ] Database connection can be established
+- [ ] API keys are valid and have necessary permissions
+- [ ] Webhook secrets match configured values in external systems
+- [ ] Guardrail limits are appropriate for your use case
+- [ ] Log levels are suitable for your environment
+
+## Security Best Practices
+
+1. **Use Secrets Management**: Store sensitive values in AWS Secrets Manager, Azure Key Vault, or similar
+2. **Rotate Credentials**: Regularly rotate API keys and tokens
+3. **Least Privilege**: Grant minimum necessary permissions to service accounts
+4. **Network Security**: Deploy in private subnets with proper security groups
+5. **Audit Logging**: Enable appropriate log levels for security monitoring
+6. **Webhook Verification**: Always set webhook secrets in production
+7. **API Protection**: Use API keys to protect REST endpoints
+
+This configuration reference provides all the details needed to properly configure the Code Agent Runner for your environment. Always validate configurations in a development environment before deploying to production.
