@@ -28,15 +28,19 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
        ┌────────────┼────────┐       │
        ▼            ▼        ▼       ▼
   Clone repo  Resolve   Load     Compute diff
-  (BB/ADO)    prompt    rules    against target
-              (JIRA/    (Cursor   branch
+  (BB/ADO/    prompt    rules    against target
+   GitLab)    (JIRA/    (Cursor   branch
                Aikido)   rules)       │
        │            │        │       ▼
-       └────────────┼────────┘  Claude review
-                    ▼           (security, design,
-           Claude tool-use      quality, tests,
-           loop (read/write/    performance)
-           run/list)                 │
+       └────────────┼────────┘  Index code graph
+                    ▼           + impact analysis
+           Claude tool-use           │
+           loop (read/write/         ▼
+           run/list)            Claude review
+                    │           (security, design,
+                    │           quality, tests,
+                    │           performance)
+                    │                │
                     │                ▼
                     ▼           Post inline
            mvn test / build     comments on PR
@@ -104,7 +108,22 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PUT | `/settings/repos/{workspace}/{repoSlug}` | Create or update repository settings |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/enable` | Enable automated review for a repo |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/enable` | Enable semantic vector indexing for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/disable` | Disable semantic vector indexing for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
+
+### Code Graph
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/graph/build-missing` | Build code graphs for all repos that lack one |
+| POST | `/graph/rebuild/{workspace}/{repoSlug}` | Rebuild the code graph for a single repository |
+
+### Review Quality Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/metrics/review-quality/{workspace}/{repoSlug}` | Resolution rate, false-positive rate, FP breakdown by category, auto-suppressed pattern count |
 
 ### AI Statistics
 
@@ -121,9 +140,11 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 |--------|------|-------------|
 | POST | `/webhooks/jira` | JIRA Cloud — auto-triggers jobs on issue assignment |
 | POST | `/webhooks/bitbucket/pull-request` | Bitbucket — auto-review on PR create/update |
-| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix/learn/fp when developer replies to agent comment |
 | POST | `/webhooks/azuredevops/pull-request` | Azure DevOps — auto-review on PR create/update |
-| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix/learn/fp when developer replies to agent comment |
+| POST | `/webhooks/gitlab/merge-request` | GitLab — auto-review on MR create/update |
+| POST | `/webhooks/gitlab/merge-request-comment` | GitLab — reply/fix/learn/fp when developer replies to agent note |
 
 All submission endpoints queue jobs instead of rejecting them. Jobs are processed FIFO up to `RUN_FIX_MAX_CONCURRENT_JOBS` in parallel. A 429 is only returned when the queue itself is full (default capacity: 20). Poll `/status/{jobId}` to see queue position.
 
@@ -272,7 +293,36 @@ Receives Bitbucket Cloud webhook payloads for `pullrequest:created` and `pullreq
 
 ### POST /webhooks/bitbucket/pull-request-comment (conversational reply)
 
-Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent (fix request vs. discussion) and triggers the appropriate job. Supports a `/learn` command to store team preferences for future reviews.
+Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent and triggers the appropriate action:
+
+| Reply | Action |
+|-------|--------|
+| `/fp` or `/false-positive` | Mark as false positive, close thread, trigger auto-suppression if threshold reached |
+| `/learn <preference>` | Store team preference in review memory |
+| Fix request (natural language) | Modify code and push to branch |
+| Discussion (natural language) | Reply conversationally in the same thread |
+
+### GET /metrics/review-quality/{workspace}/{repoSlug}
+
+Returns review quality metrics for a repository:
+
+```json
+{
+  "workspace": "my-workspace",
+  "repoSlug": "my-repo",
+  "totalFindings": 142,
+  "resolvedByDeveloper": 98,
+  "resolutionRate": 0.69,
+  "falsePositives": 12,
+  "fpRate": 0.085,
+  "fpByCategory": {
+    "Code Quality": 7,
+    "Best Practices": 4,
+    "Security": 1
+  },
+  "autoSuppressedPatterns": 2
+}
+```
 
 ### POST /webhooks/azuredevops/pull-request (auto-review)
 
@@ -406,6 +456,8 @@ All config via environment variables (or `application.properties` for local dev)
 |----------|-------------|---------|
 | `REVIEW_WEBHOOK_SKIP_AUTHORS` | Comma-separated PR authors to skip (avoid self-review) | `code-agent` |
 | `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | Only review PRs whose title contains this keyword | (optional) |
+| `REVIEW_FP_AUTO_SUPPRESS_THRESHOLD` | Number of `/fp` marks on the same pattern before auto-suppression creates a memory entry | `3` |
+| `REVIEW_PR_SUMMARY_ENABLED` | Generate a PR summary & walkthrough comment before the detailed review | `true` |
 
 ### Job Queue & Guardrails
 
@@ -419,6 +471,25 @@ All config via environment variables (or `application.properties` for local dev)
 | `RUN_FIX_MAX_LINES_CHANGED` | Max lines the agent may change | `500` |
 | `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
+
+### Voyage AI (Semantic Search)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOYAGE_API_KEY` | Voyage AI API key (sign up at [dash.voyageai.com](https://dash.voyageai.com)) | (optional) |
+| `VOYAGE_MODEL` | Voyage embedding model | `voyage-code-3` |
+| `VOYAGE_BATCH_SIZE` | Max texts per API call | `128` |
+| `EMBEDDING_MAX_SOURCE_CHARS` | Max source code characters per symbol embedding | `16000` |
+
+Vector indexing is controlled per-repo via `repo_settings.vector_enabled` (default: `false`). The Voyage API key must be set for semantic search to function. Without it, the feature is silently disabled.
+
+### Code Graph
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CODE_GRAPH_SCHEDULER_ENABLED` | Enable background graph pre-building | `true` |
+| `CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH` | Default branch to clone for graph builds | `main` |
+| `CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT` | Clone timeout in minutes for scheduled builds | `10` |
 
 ### Linter / SAST
 
@@ -464,9 +535,12 @@ export BITBUCKET_USER=your-bb-user
 export BITBUCKET_APP_PASSWORD=your-app-password
 export BITBUCKET_WORKSPACE=your-workspace
 export DATABASE_PASSWORD=your-db-password
+export VOYAGE_API_KEY=pa-...              # optional, for semantic search
 
 mvn quarkus:dev
 ```
+
+**Note:** Semantic search requires pgvector installed in your local PostgreSQL. See [Semantic search — local setup](#semantic-search-cross-repo-vector-search) for instructions.
 
 The server starts on `http://localhost:8080`. Swagger UI is available at `http://localhost:8080/q/swagger-ui`.
 
@@ -543,6 +617,7 @@ aws secretsmanager create-secret \
   --region eu-central-1 \
   --secret-string '{
     "ANTHROPIC_API_KEY": "sk-ant-...",
+    "VOYAGE_API_KEY": "pa-...",
     "JIRA_API_TOKEN": "ATATT3x...",
     "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
     "DATABASE_PASSWORD": "...",
@@ -734,7 +809,33 @@ Rules are prepended to the system prompt in order: shared rules, repo rules, inl
 
 ## AI Code Review
 
-The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps webhooks.
+The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps/GitLab webhooks.
+
+### PR Summary & Walkthrough
+
+When a PR is reviewed, the agent first generates a CodeRabbit-style summary comment with:
+
+- **High-level summary** — 2-3 sentences describing the purpose and impact of the PR
+- **Walkthrough table** — per-file breakdown of what changed and why
+
+This comment is posted before the detailed code review begins, so developers get an immediate overview of the PR while the full review runs. On re-reviews (new commits pushed), the summary comment is updated in-place rather than duplicated.
+
+**Example output:**
+
+> ## PR Summary
+>
+> ### Walkthrough
+> Adds a new caching layer for the user service that reduces database round-trips for frequently accessed profiles. The implementation uses Caffeine as the in-memory cache with configurable TTL and size limits.
+>
+> ### Changes
+> | File | Summary |
+> |------|---------|
+> | `src/main/java/UserCacheService.java` | New Caffeine-based cache service with TTL and eviction support |
+> | `src/main/java/UserService.java` | Updated to delegate reads through the cache layer |
+> | `pom.xml` | Added `com.github.ben-manes.caffeine` dependency |
+> | `src/test/java/UserCacheServiceTest.java` | Unit tests for cache hit, miss, and eviction scenarios |
+
+Disable per-environment with `REVIEW_PR_SUMMARY_ENABLED=false`.
 
 ### What it reviews
 
@@ -745,16 +846,118 @@ The agent performs automated code reviews on pull requests, triggered either via
 - **Performance** — N+1 queries, unnecessary allocations, algorithm complexity
 - **Best practices** — framework conventions, idiomatic patterns
 
+### Contextual repo exploration
+
+Before generating findings, the agent proactively explores the cloned repository for context. It uses five tools:
+
+- **`search_code`** — grep-based code search over the full repo (e.g. find all callers of a changed method, locate interface implementations). Accepts a `pattern` (required), optional directory `path`, and optional file-type `include` glob (e.g. `*.java`).
+- **`query_code_graph`** — query the per-repo code graph to find callers, implementations, or dependents of a specific symbol. See [Code graph](#code-graph-impact-analysis) below.
+- **`semantic_search`** — search across all vector-indexed repositories by meaning. Useful for finding library implementations, shared utilities, or similar patterns in other repos. See [Semantic search](#semantic-search-cross-repo-vector-search) below.
+- **`read_file`** — read the full contents of any file in the repo (interfaces, base classes, configuration).
+- **`list_files`** — directory listing up to 5 levels deep, configurable via an optional `depth` parameter (default 3, max 5).
+
+This prevents false positives that arise from reviewing a diff without its wider context — the same capability BugBot uses to browse the whole repository.
+
+### Code graph (impact analysis)
+
+The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+
+**How it works:**
+
+1. On the first review of a repository, a full index is built from all `.java` and `.cs` files in the workspace
+2. On subsequent reviews, only the files touched in the diff are re-indexed (typically 5–20 files)
+3. The agent queries the graph to find code that depends on the changed symbols and injects this as context
+4. During the review tool-use loop, the agent can query the graph on-demand via `query_code_graph`
+
+**Available tools during review:**
+
+- **`query_code_graph`** — find callers, implementations, or dependents of a specific symbol. Parameters: `symbol` (e.g. `MyClass.myMethod`), `relation` (`callers`, `implementations`, or `dependents`)
+
+**Background pre-building:** A scheduler runs every 6 hours to pre-build graphs for repos that don't have one yet, so the first review isn't slowed down by a full index. This can also be triggered on demand via `POST /graph/build-missing`.
+
+**Rebuild a single repo:**
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
+```
+
+**Supported languages:** Java (full AST via JavaParser), C# (regex-based — classes, interfaces, structs, enums, methods, fields, inheritance, using directives, method calls). Non-supported files are silently skipped.
+
+### Semantic search (cross-repo vector search)
+
+The agent can search across all indexed repositories by meaning using vector embeddings, powered by Voyage AI and pgvector. This lets Claude find library implementations, shared utilities, base classes, or similar patterns in other repos during reviews — even when the exact terms don't appear in the code.
+
+**How it works:**
+
+1. When vector indexing is enabled for a repo, the agent extracts class and method source code and generates vector embeddings via Voyage AI (`voyage-code-3`)
+2. Embeddings are stored in PostgreSQL using pgvector (1024-dimensional vectors with IVFFlat indexing)
+3. During reviews, Claude can invoke `semantic_search` with a natural language query (e.g. "payment refund handling logic")
+4. The query is embedded and matched against all vector-indexed repos using cosine similarity
+5. Claude receives the top matching code snippets with file paths, repo names, and line numbers
+
+**Enable vector indexing for a repo:**
+
+```bash
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+```
+
+Then rebuild the graph to generate embeddings:
+
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/shared-lib
+```
+
+Vector indexing is opt-in per repo (default: disabled). Start by enabling it on shared libraries that other repos depend on.
+
+**Available tools during review:**
+
+- **`semantic_search`** — search across all vector-indexed repos by meaning. Parameters: `query` (required, natural language), `repo` (optional, restrict to one repo), `top_k` (optional, default 10, max 25)
+
+**Local setup — pgvector:**
+
+pgvector must be installed in your PostgreSQL instance. On macOS with Homebrew:
+
+```bash
+# Check your PostgreSQL version
+brew list | grep postgres
+
+# Build and install pgvector for your version (e.g. postgresql@14)
+cd /tmp
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+export PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config
+make
+make install
+
+# Verify
+ls /opt/homebrew/share/postgresql@14/extension/vector.control
+```
+
+On AWS RDS for PostgreSQL, pgvector is available natively on versions 14.7+, 15.2+, and later — no manual installation needed.
+
 ### Review memory
 
 The agent learns team preferences over time. When a developer replies to a review comment with `/learn <preference>`, the agent stores it and respects it in future reviews of that repository. Memories can also be managed via the `/memory` REST endpoints.
 
+### False-positive feedback
+
+When a developer replies to a review comment with `/fp` (or `/false-positive`), the agent:
+
+1. Records the finding as a false positive in the `comment_feedback` table
+2. Marks the comment as resolved and closes the thread on the platform
+3. Posts an in-thread confirmation reply
+4. Checks whether this pattern has now hit the auto-suppress threshold (default: 3 occurrences). If so, a `review_memory` entry is automatically created, suppressing that pattern in all future reviews
+
+False-positive patterns are injected into every subsequent review prompt as a **"Known False Positives"** section, reducing noise before a finding is even generated.
+
+Track false-positive rates and resolution rates per repo at `GET /metrics/review-quality/{workspace}/{repoSlug}`.
+
 ### Comment interaction
 
 When a developer replies to an agent review comment:
-1. The agent classifies the intent as either a **fix request** or a **discussion**
-2. For fix requests, the agent modifies the code and pushes the change
-3. For discussions, the agent replies conversationally in the same thread
+1. `/fp` or `/false-positive` — marks the finding as a false positive (see above)
+2. `/learn <preference>` — stores a team preference for future reviews
+3. Natural-language fix request — the agent modifies the code and pushes the change
+4. Natural-language discussion — the agent replies conversationally in the same thread
 
 ### Repo settings
 
@@ -770,15 +973,26 @@ curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/disable
 curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
 ```
 
+**Enable/disable vector indexing:** Turn semantic vector indexing on or off per repo. When enabled, embeddings are generated during graph builds and the repo becomes searchable via `semantic_search`. Default: disabled.
+
+```bash
+# Enable vector indexing for a shared library
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+
+# Disable
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/disable
+```
+
 **Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
 
-**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{IMPACT_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
 
 ```bash
 curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
   -H 'Content-Type: application/json' \
   -d '{
     "reviewEnabled": true,
+    "vectorEnabled": false,
     "ruleNames": ["java-conventions", "security-standards"],
     "reviewPrompt": "You are reviewing a pull request for {{PR_TITLE}}.\n\n{{MEMORY_SECTION}}\n\nFocus only on security and performance issues.\n\n## Diff\n```\n{{DIFF}}\n```"
   }'
@@ -901,10 +1115,16 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 
 | Table | Purpose |
 |-------|---------|
-| `agent_comments` | Maps comment IDs to agent findings for reply tracking |
+| `agent_comments` | Maps comment IDs to agent findings for reply tracking and resolution |
 | `ai_calls` | AI call metrics (tokens, cost, duration) per job |
-| `review_memory` | Team preferences learned during PR reviews |
-| `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
+| `review_memory` | Team preferences learned during PR reviews (via `/learn` and auto-suppression) |
+| `repo_settings` | Per-repo configuration (review enabled, vector enabled, rule names, custom prompt) |
+| `jobs` | Active job queue with status, PR URL, and diff stats |
+| `job_history` | Archived completed jobs |
+| `comment_feedback` | Developer feedback on individual findings (`/fp` marks); powers FP rate metrics and auto-suppression |
+| `code_graph_nodes` | Code graph symbols (classes, methods, fields, enums) per repo |
+| `code_graph_edges` | Code graph relationships (calls, extends, implements, imports) per repo |
+| `code_embeddings` | Vector embeddings for semantic code search (pgvector, 1024-dim) per repo |
 
 ## Project Structure
 
@@ -913,24 +1133,38 @@ src/main/java/com/eneve/agent/
 ├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr)
 ├── MemoryResource.java          # REST endpoints (/memory)
 ├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
+├── CodeGraphResource.java       # REST endpoints (/graph/build-missing, /graph/rebuild)
 ├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
+├── ReviewMetricsResource.java   # REST endpoints (/metrics/review-quality)
 ├── agent/
 │   ├── AgentRunner.java         # Job orchestrator (fix + review)
-│   ├── AgentPromptBuilder.java  # System prompt construction
+│   ├── AgentPromptBuilder.java  # System prompt construction (context, memory, FP sections)
 │   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude
+│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, query_code_graph, semantic_search, list_files, run_command)
 │   ├── BuildValidator.java      # Maven build validation
+│   ├── FindingResolver.java     # Determines if past findings were addressed in new commits
 │   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
 │   ├── ReviewCommentProcessor.java # Turns PR comments into fix instructions
 │   ├── LearningExtractor.java   # Extracts learnable patterns from interactions
 │   ├── JobQueue.java            # Concurrent job queue
-│   ├── JobStore.java            # In-memory job store
-│   ├── CommentStore.java        # Tracks agent comments for reply detection
+│   ├── JobStore.java            # In-memory + PostgreSQL job store
+│   ├── CommentStore.java        # Tracks agent comments for reply detection and resolution metrics
+│   ├── PrSummaryGenerator.java  # PR description & walkthrough generation (single Claude call)
+│   ├── CommentFeedbackStore.java # False-positive feedback persistence (PostgreSQL)
+│   ├── CommentFeedbackEntry.java # False-positive feedback record
 │   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)
 │   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
 │   ├── RepoSettings.java        # Per-repo settings record
 │   ├── RepoSettingsStore.java   # Repo settings persistence (PostgreSQL)
-│   └── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
+│   ├── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
+│   ├── CodeGraphStore.java      # Code graph persistence (nodes + edges in PostgreSQL)
+│   ├── CodeGraphIndexer.java    # JavaParser (Java) + regex (C#) AST indexer
+│   ├── CodeGraphQueryService.java # Impact analysis prompt builder from graph
+│   ├── CodeGraphBuildService.java # Clone-and-index logic for background/on-demand builds
+│   ├── CodeGraphScheduler.java  # Scheduled pre-building of missing code graphs
+│   ├── VoyageEmbeddingService.java # Voyage AI embeddings HTTP client (batching, document/query types)
+│   ├── EmbeddingStore.java      # Vector embedding persistence (pgvector cosine search)
+│   └── EmbeddingIndexer.java    # Extracts symbol source code and generates embeddings
 ├── aikido/
 │   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
 │   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
@@ -969,11 +1203,13 @@ src/main/java/com/eneve/agent/
 │   └── MdcRule.java
 ├── scm/
 │   ├── GitPlatformService.java          # SCM abstraction interface
-│   ├── GitPlatformProducer.java         # CDI producer (selects BB or ADO)
+│   ├── GitPlatformProducer.java         # CDI producer (selects BB, ADO, or GitLab)
 │   ├── bitbucket/
 │   │   └── BitbucketPlatformService.java
-│   └── azuredevops/
-│       └── AzureDevOpsPlatformService.java
+│   ├── azuredevops/
+│   │   └── AzureDevOpsPlatformService.java
+│   └── gitlab/
+│       └── GitLabPlatformService.java
 ├── security/
 │   ├── ApiKeyFilter.java                # API key authentication filter
 │   └── WebhookSignatureFilter.java      # HMAC-SHA256 webhook verification
@@ -982,15 +1218,20 @@ src/main/java/com/eneve/agent/
 │   ├── ToolExecutor.java
 │   ├── ToolRegistry.java
 │   ├── ReadFileTool.java
+│   ├── SearchCodeTool.java              # grep-based code search for review context
+│   ├── QueryCodeGraphTool.java          # On-demand code graph queries during review
+│   ├── SemanticSearchTool.java          # Cross-repo semantic search via pgvector
 │   ├── WriteFileTool.java
 │   ├── RunCommandTool.java
 │   └── ListFilesTool.java
 ├── webhooks/
 │   ├── JiraWebhookResource.java
 │   ├── BitbucketWebhookResource.java
-│   ├── BitbucketCommentWebhookResource.java
+│   ├── BitbucketCommentWebhookResource.java   # /learn, /fp, fix, reply
 │   ├── AzureDevOpsWebhookResource.java
-│   └── AzureDevOpsCommentWebhookResource.java
+│   ├── AzureDevOpsCommentWebhookResource.java
+│   ├── GitLabWebhookResource.java
+│   └── GitLabCommentWebhookResource.java      # /learn, /fp, fix, reply
 └── workspace/
     └── WorkspaceContext.java
 ```

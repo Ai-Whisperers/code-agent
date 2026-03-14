@@ -4,6 +4,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.eneve.agent.diff.DiffParser;
+import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 
 import com.eneve.agent.scm.AgentComment;
@@ -13,7 +15,11 @@ import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
+import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
+import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
@@ -55,6 +61,17 @@ public class AgentRunner {
     @Inject CommentStore commentStore;
     @Inject LinterService linterService;
     @Inject LearningExtractor learningExtractor;
+    @Inject JobStore jobStore;
+    @Inject FindingResolver findingResolver;
+    @Inject CodeGraphStore codeGraphStore;
+    @Inject CodeGraphIndexer codeGraphIndexer;
+    @Inject EmbeddingIndexer embeddingIndexer;
+    @Inject RepoSettingsStore repoSettingsStore;
+    @Inject CodeGraphQueryService codeGraphQueryService;
+    @Inject PrSummaryGenerator prSummaryGenerator;
+    @Inject CoverageReporter coverageReporter;
+    @Inject ConfluenceService confluenceService;
+    @Inject DocsEmbeddingService docsEmbeddingService;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -74,11 +91,24 @@ public class AgentRunner {
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
+    @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
+    int generateTestsMaxIterations;
+
+    @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
+    long generateTestsTimeoutMinutes;
+
+    @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
+    boolean prSummaryEnabled;
+
+    @ConfigProperty(name = "review.sequence-diagrams.enabled", defaultValue = "true")
+    boolean sequenceDiagramsEnabled;
+
     // ─── Run-Fix (implement a JIRA ticket) ──────────────────────────────
 
     public void execute(JobRecord job) {
         RunFixRequest request = job.getRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -191,6 +221,7 @@ public class AgentRunner {
             job.setSummary(summary);
             job.setPrUrl(prUrl);
             job.setPrId(prId);
+            jobStore.update(job);
 
             safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
             safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
@@ -212,6 +243,7 @@ public class AgentRunner {
     public void executeReview(JobRecord job) {
         ReviewPrRequest request = job.getReviewRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -259,17 +291,35 @@ public class AgentRunner {
                 existingAgentComments = Collections.emptyList();
             }
 
+            // If the webhook told us the current HEAD SHA, check whether we already reviewed it.
+            // This avoids re-running the LLM when a non-commit MR update fires (title, labels, etc.).
+            // Bitbucket sends 12-char short SHAs; stored SHAs are always the full 40-char rev-parse output.
+            // Use a prefix match so both short and full SHAs compare correctly.
+            String lastReviewedSha = ReviewCommentProcessor.extractLastReviewedSha(existingAgentComments);
+            if (request.headCommitSha() != null && shaAlreadyReviewed(request.headCommitSha(), lastReviewedSha)) {
+                LOG.infof("Review: PR #%s already reviewed at commit %s — skipping",
+                        request.prId(), lastReviewedSha);
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("Already reviewed at " + lastReviewedSha + " — no new commits.");
+                jobStore.update(job);
+                return;
+            }
+
             String diff;
             try {
                 workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
 
-                String lastReviewedSha = ReviewCommentProcessor.extractLastReviewedSha(existingAgentComments);
                 if (lastReviewedSha != null && workspace.objectExists(lastReviewedSha)) {
                     LOG.infof("Review: incremental diff from previously reviewed commit %s", lastReviewedSha);
                     diff = workspace.getDiffFromCommit(lastReviewedSha);
                     if (diff == null || diff.isBlank()) {
-                        LOG.info("Review: incremental diff is empty, falling back to full diff");
-                        diff = workspace.getDiff(targetBranch);
+                        // No new commits since the last review — nothing to do.
+                        LOG.infof("Review: PR #%s has no new changes since %s — skipping",
+                                request.prId(), lastReviewedSha);
+                        job.setStatus(JobStatus.SUCCESS);
+                        job.setSummary("No new changes since last review at " + lastReviewedSha + ".");
+                        jobStore.update(job);
+                        return;
                     }
                 } else {
                     diff = workspace.getDiff(targetBranch);
@@ -292,6 +342,93 @@ public class AgentRunner {
                 headSha = null;
             }
 
+            // ── Resolution pass: auto-resolve findings addressed by new commits ──
+            int resolvedCount = 0;
+            if (lastReviewedSha != null) {
+                try {
+                    List<OpenFinding> openFindings = commentStore.findOpenInlineComments(
+                            request.prId(), coords.organization(), coords.repository());
+                    if (!openFindings.isEmpty()) {
+                        List<ParsedDiffFile> incrementalParsed = DiffParser.parse(diff);
+                        List<Long> resolvedIds = findingResolver.resolveAddressedFindings(
+                                openFindings, incrementalParsed, workspace, job.getJobId());
+                        for (long resolvedId : resolvedIds) {
+                            try {
+                                platformService.replyToComment(
+                                        coords.organization(), coords.project(), coords.repository(),
+                                        request.prId(), resolvedId,
+                                        "This issue appears to have been addressed in the latest commits.");
+                                platformService.resolveComment(
+                                        coords.organization(), coords.project(), coords.repository(),
+                                        request.prId(), resolvedId);
+                            } catch (Exception e) {
+                                LOG.warnf("Failed to resolve comment %d on platform (non-fatal): %s",
+                                        resolvedId, e.getMessage());
+                            }
+                            commentStore.markResolved(resolvedId);
+                        }
+                        resolvedCount = resolvedIds.size();
+                        if (resolvedCount > 0) {
+                            LOG.infof("Auto-resolved %d previously flagged finding(s) on PR #%s",
+                                    resolvedCount, request.prId());
+                        }
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("Finding resolution pass failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
+            // ── Code graph: index and query impact surface ──
+            String impactSection = "";
+            try {
+                List<String> changedFiles = DiffParser.parse(diff).stream()
+                        .map(ParsedDiffFile::path).toList();
+                if (codeGraphStore.hasGraph(coords.organization(), coords.repository())) {
+                    codeGraphIndexer.indexIncremental(workspace,
+                            coords.organization(), coords.repository(), changedFiles);
+                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                        embeddingIndexer.indexIncremental(workspace,
+                                coords.organization(), coords.repository(), changedFiles);
+                    }
+                } else {
+                    codeGraphIndexer.indexFull(workspace,
+                            coords.organization(), coords.repository());
+                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                        embeddingIndexer.indexFull(workspace,
+                                coords.organization(), coords.repository());
+                    }
+                }
+                impactSection = codeGraphQueryService.buildImpactSection(
+                        coords.organization(), coords.repository(), changedFiles);
+            } catch (Exception e) {
+                LOG.warnf("Code graph indexing/query failed (non-fatal): %s", e.getMessage());
+            }
+
+            workspace.putMetadata("workspace", coords.organization());
+            workspace.putMetadata("repoSlug", coords.repository());
+
+            // ── PR Summary / Walkthrough (posted early so devs see it while review runs) ──
+            if (prSummaryEnabled) {
+                try {
+                    List<ParsedDiffFile> summaryFiles = DiffParser.parse(diff);
+                    List<String> changedFilePaths = summaryFiles.stream()
+                            .map(ParsedDiffFile::path).toList();
+                    String diagramContext = null;
+                    if (sequenceDiagramsEnabled && !impactSection.isBlank()) {
+                        diagramContext = codeGraphQueryService.buildDiagramContext(
+                                coords.organization(), coords.repository(), changedFilePaths);
+                    }
+                    String summaryBody = prSummaryGenerator.generate(
+                            prTitle, targetBranch, summaryFiles, job.getJobId(), diagramContext);
+                    if (summaryBody != null) {
+                        postOrUpdatePrSummary(coords, request.prId(), existingAgentComments,
+                                summaryBody, job.getJobId());
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
                         "PR review for #" + request.prId()));
@@ -299,7 +436,7 @@ public class AgentRunner {
 
             ReviewPromptResult promptResult = promptBuilder.buildReviewPrompt(
                     request, prTitle, targetBranch, diff, existingAgentComments, workspace,
-                    coords.organization(), coords.repository());
+                    coords.organization(), coords.repository(), impactSection);
 
             String reviewOutput;
             try {
@@ -315,11 +452,13 @@ public class AgentRunner {
             }
 
             String reviewSummary = reviewProcessor.postReviewComments(reviewOutput, coords, request.prId(),
-                    existingAgentComments, headSha, job.getJobId(), promptResult.commentableLines());
+                    existingAgentComments, headSha, job.getJobId(), promptResult.commentableLines(),
+                    resolvedCount);
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(reviewSummary);
             job.setPrUrl(prInfo.getOrDefault("prUrl", ""));
+            jobStore.archive(job);
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentSuccess(request.jiraKey(),
@@ -342,6 +481,7 @@ public class AgentRunner {
     public void executeFixPr(JobRecord job) {
         FixPrRequest request = job.getFixPrRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         RepoCoordinates coords;
         try {
@@ -490,6 +630,7 @@ public class AgentRunner {
             job.setSummary(summary);
             job.setPrUrl(prUrl);
             job.setPrId(newPrId);
+            jobStore.update(job);
 
             safeComment(() -> platformService.addPrComment(
                     coords.organization(), coords.project(), coords.repository(), request.prId(),
@@ -517,6 +658,7 @@ public class AgentRunner {
         ReplyCommentRequest request = job.getReplyRequest();
         job.setStatus(JobStatus.RUNNING);
         job.setPrId(request.prId());
+        jobStore.update(job);
 
         Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
         if (ctxOpt.isEmpty()) {
@@ -610,6 +752,7 @@ public class AgentRunner {
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary("Replied to comment thread on PR #" + request.prId());
+            jobStore.archive(job);
             LOG.infof("Reply job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
@@ -624,6 +767,7 @@ public class AgentRunner {
         ReplyCommentRequest request = job.getReplyRequest();
         job.setStatus(JobStatus.RUNNING);
         job.setPrId(request.prId());
+        jobStore.update(job);
 
         Optional<CommentContext> ctxOpt = commentStore.find(request.parentCommentId());
         if (ctxOpt.isEmpty()) {
@@ -760,11 +904,174 @@ public class AgentRunner {
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(summary);
+            jobStore.archive(job);
             LOG.infof("FixComment job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
         } catch (Exception e) {
             failFixComment(job, request, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    // ─── Generate Unit Tests ─────────────────────────────────────────────
+
+    public void executeGenerateTests(JobRecord job) {
+        GenerateTestsRequest request = job.getGenerateTestsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failGenerateTests(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String testBranch = request.branchName();
+            LOG.infof("GenerateTests: cloning %s/%s (branch: %s)", coords.organization(), coords.repository(), testBranch);
+            try {
+                workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
+                        testBranch, generateTestsTimeoutMinutes);
+            } catch (Exception e) {
+                failGenerateTests(job, "Clone/branch failed: " + e.getMessage());
+                return;
+            }
+
+            configureGitIfNeeded(workspace);
+
+            // ── Baseline coverage (before agent writes any tests) ──
+            CoverageSnapshot baselineCoverage = null;
+            if (coverageReporter.isJacocoPresent(workspace)) {
+                try {
+                    LOG.info("GenerateTests: measuring baseline coverage...");
+                    baselineCoverage = coverageReporter.measureCoverage(workspace);
+                    if (baselineCoverage != null) {
+                        LOG.infof("GenerateTests: baseline — lines %.1f%%, branches %.1f%%",
+                                baselineCoverage.lineRate(), baselineCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("Baseline coverage measurement failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentStarted(request.jiraKey(), testBranch));
+            }
+
+            String systemPrompt = promptBuilder.buildGenerateTestsPrompt(request, workspace, baselineCoverage);
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace,
+                        generateTestsMaxIterations, job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                failGenerateTests(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            // ── Validate build + measure post-generation coverage ──
+            CoverageSnapshot afterCoverage = null;
+            if (coverageReporter.isJacocoPresent(workspace)) {
+                // Running JaCoCo also validates the tests (throws if they fail)
+                try {
+                    LOG.info("GenerateTests: measuring post-generation coverage...");
+                    afterCoverage = coverageReporter.measureCoverage(workspace);
+                    if (afterCoverage != null) {
+                        LOG.infof("GenerateTests: after — lines %.1f%%, branches %.1f%%",
+                                afterCoverage.lineRate(), afterCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    failGenerateTests(job, "Build validation failed (generated tests did not pass): " + e.getMessage());
+                    return;
+                }
+            } else {
+                // No JaCoCo: fall back to plain build validation
+                try {
+                    buildValidator.validate(workspace);
+                } catch (Exception e) {
+                    failGenerateTests(job, "Build validation failed (generated tests did not pass): " + e.getMessage());
+                    return;
+                }
+            }
+
+            // ── Build coverage section for commit msg and PR description ──
+            String coverageSummary = "";
+            if (afterCoverage != null) {
+                coverageSummary = "\n\n" + afterCoverage.formatMarkdownComparison(baselineCoverage);
+            }
+
+            boolean hasChanges;
+            try {
+                String commitMsg = "test: generate unit tests"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? " for " + request.jiraKey() : "")
+                        + "\n\n" + summary;
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                failGenerateTests(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                failGenerateTests(job, "Agent completed but made no file changes. Claude summary: " + summary);
+                return;
+            }
+
+            try {
+                workspace.push(testBranch, generateTestsTimeoutMinutes);
+            } catch (Exception e) {
+                failGenerateTests(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            DiffStats stats = countChanges(workspace);
+            job.setFilesChanged(stats.filesChanged);
+            job.setLinesChanged(stats.linesChanged);
+
+            String prUrl;
+            String prId;
+            try {
+                String title = "test: generate unit tests"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? " (" + request.jiraKey() + ")" : "");
+                String description = "**Automated unit test generation by Code Agent**\n\n"
+                        + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                                ? "JIRA: " + request.jiraKey() + "\n\n" : "")
+                        + summary
+                        + coverageSummary;
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
+                        testBranch, request.targetBranchOrDefault(),
+                        title, description);
+                prUrl = prResult[0];
+                prId = prResult[1];
+            } catch (Exception e) {
+                failGenerateTests(job, "Create PR failed: " + e.getMessage());
+                return;
+            }
+
+            job.setStatus(JobStatus.AWAITING_APPROVAL);
+            job.setSummary(summary);
+            job.setPrUrl(prUrl);
+            job.setPrId(prId);
+            jobStore.update(job);
+
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
+            }
+
+            RunResult result = buildGenerateTestsResult(job, true);
+            teamsNotifier.sendNotification(result);
+            n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+
+            LOG.infof("GenerateTests job %s completed. PR: %s", job.getJobId(), prUrl);
+
+        } catch (Exception e) {
+            failGenerateTests(job, "Unexpected error: " + e.getMessage());
         }
     }
 
@@ -778,6 +1085,7 @@ public class AgentRunner {
         try {
             platformService.mergePullRequest(coords.organization(), coords.project(), coords.repository(), job.getPrId());
             job.setStatus(JobStatus.SUCCESS);
+            jobStore.archive(job);
             if (jiraKey != null && !jiraKey.isBlank()) {
                 safeJira(() -> jiraService.commentMerged(jiraKey));
                 safeJira(() -> jiraService.transitionToDone(jiraKey));
@@ -802,6 +1110,7 @@ public class AgentRunner {
 
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage("Rejected: " + (reason != null ? reason : "No reason provided"));
+        jobStore.archive(job);
         if (jiraKey != null && !jiraKey.isBlank()) {
             safeJira(() -> jiraService.commentRejected(jiraKey, reason));
             safeJira(() -> jiraService.transitionToRejected(jiraKey));
@@ -930,11 +1239,161 @@ public class AgentRunner {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultN8nWebhookUrl;
     }
 
+    // ─── Generate Docs ───────────────────────────────────────────────────
+
+    public void executeGenerateDocs(JobRecord job) {
+        GenerateDocsRequest request = job.getGenerateDocsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        LOG.infof("GenerateDocs job %s starting for %s", job.getJobId(), request.repoUrl());
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            fail(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        String ws = coords.organization();
+        String repoSlug = coords.repository();
+
+        RepoSettings settings = repoSettingsStore.find(ws, repoSlug)
+                .orElse(RepoSettings.defaults(ws, repoSlug));
+
+        if (!settings.docsEnabled()) {
+            fail(job, "Documentation generation is disabled for " + ws + "/" + repoSlug);
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String targetBranch = request.targetBranchOrDefault();
+
+            if (request.commitDirect()) {
+                try {
+                    workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone failed: " + e.getMessage());
+                    return;
+                }
+            } else {
+                try {
+                    workspace.cloneAndCreateBranch(authUrl, targetBranch,
+                            request.branchName(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    fail(job, "Clone/branch failed: " + e.getMessage());
+                    return;
+                }
+            }
+
+            configureGitIfNeeded(workspace);
+
+            workspace.putMetadata("workspace", ws);
+            workspace.putMetadata("repoSlug", repoSlug);
+
+            boolean confluenceActive = false;
+            String confluenceSpaceKey = settings.confluenceSpaceKey();
+            String confluenceParentPageId = settings.confluenceParentPageId();
+
+            if (confluenceService.isEnabled() && confluenceSpaceKey != null && !confluenceSpaceKey.isBlank()) {
+                Boolean override = request.publishConfluence();
+                if (override == null || override) {
+                    confluenceActive = true;
+                    workspace.putMetadata("confluenceSpaceKey", confluenceSpaceKey);
+                    if (confluenceParentPageId != null && !confluenceParentPageId.isBlank()) {
+                        workspace.putMetadata("confluenceParentPageId", confluenceParentPageId);
+                    }
+                }
+            }
+
+            String systemPrompt = promptBuilder.buildGenerateDocsPrompt(
+                    request, workspace, settings, confluenceActive, confluenceSpaceKey);
+
+            var tools = confluenceActive
+                    ? ToolDefinitions.docsGeneration()
+                    : ToolDefinitions.docsGenerationNoConfluence();
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace, tools,
+                        "Please generate comprehensive documentation for this repository. "
+                                + "Start by exploring the project structure, then create all doc files.",
+                        job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                fail(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            try {
+                docsEmbeddingService.indexDocs(workspace, ws, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Doc embedding failed (non-fatal): %s", e.getMessage());
+            }
+
+            String pushBranch = request.commitDirect() ? targetBranch : request.branchName();
+            String commitMsg = "docs: generate project documentation";
+
+            boolean hasChanges;
+            try {
+                hasChanges = workspace.commitAll(commitMsg);
+            } catch (Exception e) {
+                fail(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("Documentation generation completed with no new files.");
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: no changes made", job.getJobId());
+                return;
+            }
+
+            try {
+                workspace.push(pushBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                fail(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            if (request.commitDirect()) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary(summary);
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: committed to %s", job.getJobId(), pushBranch);
+            } else {
+                try {
+                    String title = "docs: generate project documentation";
+                    String description = "**Automated documentation generated by code-agent**\n\n" + summary;
+                    String[] prResult = platformService.createPullRequest(
+                            coords.organization(), coords.project(), coords.repository(),
+                            request.branchName(), targetBranch,
+                            title, description);
+                    job.setStatus(JobStatus.AWAITING_APPROVAL);
+                    job.setSummary(summary);
+                    job.setPrUrl(prResult[0]);
+                    job.setPrId(prResult[1]);
+                    jobStore.update(job);
+                    LOG.infof("GenerateDocs job %s completed: PR %s created", job.getJobId(), prResult[0]);
+                } catch (Exception e) {
+                    fail(job, "Create PR failed: " + e.getMessage());
+                }
+            }
+
+        } catch (Exception e) {
+            fail(job, "Unexpected error in doc generation: " + e.getMessage());
+        }
+    }
+
     // ─── Execute Hook ────────────────────────────────────────────────────
 
     public void executeHook(JobRecord job) {
         HookJobRequest request = job.getHookRequest();
         job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
 
         LOG.infof("Hook job %s starting: hook='%s' repo=%s/%s target=%s commitDirect=%s",
                 job.getJobId(), request.hookName(), request.workspace(), request.repoSlug(),
@@ -1004,6 +1463,7 @@ public class AgentRunner {
             if (!hasChanges) {
                 job.setStatus(JobStatus.SUCCESS);
                 job.setSummary("Hook '" + request.hookName() + "' completed with no changes needed.");
+                jobStore.archive(job);
                 LOG.infof("Hook job %s completed: no changes made", job.getJobId());
                 return;
             }
@@ -1018,6 +1478,7 @@ public class AgentRunner {
             if (request.commitDirect()) {
                 job.setStatus(JobStatus.SUCCESS);
                 job.setSummary(summary);
+                jobStore.archive(job);
                 LOG.infof("Hook job %s completed: committed directly to %s", job.getJobId(), pushBranch);
             } else {
                 try {
@@ -1031,6 +1492,7 @@ public class AgentRunner {
                     job.setSummary(summary);
                     job.setPrUrl(prResult[0]);
                     job.setPrId(prResult[1]);
+                    jobStore.update(job);
                     LOG.infof("Hook job %s completed: PR %s created", job.getJobId(), prResult[0]);
                 } catch (Exception e) {
                     fail(job, "Create PR failed: " + e.getMessage());
@@ -1048,6 +1510,7 @@ public class AgentRunner {
         LOG.errorf("Job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.archive(job);
 
         RunFixRequest request = job.getRequest();
         safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
@@ -1057,10 +1520,24 @@ public class AgentRunner {
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
+    /**
+     * Returns true when the webhook-supplied SHA (which may be a short prefix, e.g. Bitbucket's
+     * 12-char hash) matches the full SHA stored in the reviewed-up-to comment marker.
+     */
+    private static boolean shaAlreadyReviewed(String webhookSha, String storedSha) {
+        if (webhookSha == null || storedSha == null) return false;
+        if (webhookSha.equals(storedSha)) return true;
+        // Short SHA from webhook is a prefix of the stored full SHA
+        if (webhookSha.length() < storedSha.length()) return storedSha.startsWith(webhookSha);
+        // Stored SHA is somehow shorter (unusual but safe to handle)
+        return webhookSha.startsWith(storedSha);
+    }
+
     private void failReview(JobRecord job, String message) {
         LOG.errorf("Review job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.archive(job);
 
         ReviewPrRequest request = job.getReviewRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
@@ -1076,6 +1553,7 @@ public class AgentRunner {
         LOG.errorf("Fix-PR job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.archive(job);
 
         FixPrRequest request = job.getFixPrRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
@@ -1087,16 +1565,34 @@ public class AgentRunner {
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
+    private void failGenerateTests(JobRecord job, String message) {
+        LOG.errorf("GenerateTests job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+
+        GenerateTestsRequest request = job.getGenerateTestsRequest();
+        if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+        }
+
+        RunResult result = buildGenerateTestsResult(job, false);
+        teamsNotifier.sendNotification(result);
+        n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+    }
+
     private void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.archive(job);
     }
 
     private void failFixComment(JobRecord job, ReplyCommentRequest request, String message) {
         LOG.errorf("FixComment job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
+        jobStore.archive(job);
 
         try {
             RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());
@@ -1129,6 +1625,16 @@ public class AgentRunner {
                 0, 0);
     }
 
+    private RunResult buildGenerateTestsResult(JobRecord job, boolean success) {
+        GenerateTestsRequest req = job.getGenerateTestsRequest();
+        return new RunResult(
+                job.getJobId(), success,
+                req.jiraKey() != null ? req.jiraKey() : "",
+                req.branchName(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged());
+    }
+
     private RunResult buildFixPrResult(JobRecord job, boolean success) {
         FixPrRequest req = job.getFixPrRequest();
         return new RunResult(
@@ -1140,6 +1646,41 @@ public class AgentRunner {
     }
 
     // ─── Utilities ──────────────────────────────────────────────────────
+
+    /**
+     * Post a new PR walkthrough comment or update the existing one in-place.
+     * Looks for a previously posted comment tracked under the {@code __pr_summary__}
+     * marker in CommentStore. Falls back to creating a new comment on update failure.
+     */
+    private void postOrUpdatePrSummary(RepoCoordinates coords, String prId,
+                                       List<AgentComment> existingComments,
+                                       String body, String jobId) {
+        String org = coords.organization();
+        String project = coords.project();
+        String repo = coords.repository();
+
+        var existingId = commentStore.findPrSummaryCommentId(prId, org, repo);
+        if (existingId.isPresent()) {
+            long commentId = existingId.get();
+            try {
+                platformService.updatePrComment(org, project, repo, prId, commentId, body);
+                commentStore.savePrSummaryComment(commentId, prId, org, project, repo, jobId);
+                LOG.infof("Updated PR summary comment %d on PR #%s", commentId, prId);
+                return;
+            } catch (Exception e) {
+                LOG.warnf("Failed to update PR summary comment %d (may have been deleted): %s",
+                        commentId, e.getMessage());
+            }
+        }
+
+        safeComment(() -> {
+            long newId = platformService.addPrComment(org, project, repo, prId, body);
+            if (newId > 0) {
+                commentStore.savePrSummaryComment(newId, prId, org, project, repo, jobId);
+                LOG.infof("Created PR summary comment %d on PR #%s", newId, prId);
+            }
+        });
+    }
 
     private void safeJira(Runnable action) {
         try {

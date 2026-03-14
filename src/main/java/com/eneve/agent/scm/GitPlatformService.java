@@ -39,6 +39,12 @@ public interface GitPlatformService {
     long addPrComment(String org, String project, String repo, String prId, String body);
 
     /**
+     * Update the body of an existing general comment (used to edit the review summary in-place).
+     */
+    void updatePrComment(String org, String project, String repo, String prId,
+                         long commentId, String body);
+
+    /**
      * Add an inline comment on a specific file and line in a pull request.
      * @return the platform comment ID
      */
@@ -67,4 +73,11 @@ public interface GitPlatformService {
      * Fetch all comments authored by the agent on a pull request.
      */
     List<AgentComment> getAgentPrComments(String org, String project, String repo, String prId);
+
+    /**
+     * Resolve (close) a comment thread on a pull request.
+     * Platform-specific: Bitbucket sets comment state to "resolved",
+     * GitLab resolves the discussion, Azure DevOps sets the thread status to "Fixed".
+     */
+    void resolveComment(String org, String project, String repo, String prId, long commentId);
 }

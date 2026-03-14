@@ -144,6 +144,19 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     @Override
+    public void updatePrComment(String org, String project, String repo, String prId,
+                                long commentId, String commentBody) {
+        String projectPath = encodedProjectPath(org, repo);
+        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+                + "/notes/" + commentId;
+        String body = """
+                { "body": "%s" }
+                """.formatted(escapeJson(commentBody));
+        putAndReturn(url, body, "update note #" + commentId + " on MR !" + prId);
+        LOG.infof("Updated review note %d on MR !%s in %s/%s", commentId, prId, org, repo);
+    }
+
+    @Override
     public long addInlinePrComment(String org, String project, String repo, String prId,
                                    String filePath, int line, String commentBody) {
         String projectPath = encodedProjectPath(org, repo);
@@ -364,11 +377,27 @@ public class GitLabPlatformService implements GitPlatformService {
         return comments;
     }
 
+    @Override
+    public void resolveComment(String org, String project, String repo, String prId, long noteId) {
+        String projectPath = encodedProjectPath(org, repo);
+        String discussionId = resolveDiscussionId(projectPath, prId, noteId);
+        if (discussionId == null) {
+            LOG.warnf("Could not resolve discussion for note %d on MR !%s — skipping resolve", noteId, prId);
+            return;
+        }
+
+        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+                + "/discussions/" + discussionId + "?resolved=true";
+        putAndReturn(url, "{}", "resolve discussion for note #" + noteId + " on MR !" + prId);
+        LOG.infof("Resolved discussion %s (note %d) on MR !%s in %s/%s",
+                discussionId, noteId, prId, org, repo);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     /**
      * Find the discussion ID that contains the given note ID.
-     * Used to post replies into the correct discussion thread.
+     * Used to post replies into the correct discussion thread and to resolve discussions.
      */
     private String resolveDiscussionId(String projectPath, String prId, long noteId) {
         String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId

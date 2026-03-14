@@ -12,6 +12,8 @@ import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.rules.CursorRulesLoader;
@@ -33,6 +35,7 @@ public class AgentPromptBuilder {
     @Inject CursorRulesLoader rulesLoader;
     @Inject GuardrailConfig guardrails;
     @Inject MemoryStore memoryStore;
+    @Inject CommentFeedbackStore feedbackStore;
     @Inject RepoSettingsStore repoSettingsStore;
 
     @ConfigProperty(name = "rules.repo.url", defaultValue = "")
@@ -67,6 +70,16 @@ public class AgentPromptBuilder {
                                                 List<AgentComment> existingComments,
                                                 WorkspaceContext workspace,
                                                 String bbWorkspace, String repoSlug) {
+        return buildReviewPrompt(request, prTitle, targetBranch, diff, existingComments,
+                workspace, bbWorkspace, repoSlug, "");
+    }
+
+    public ReviewPromptResult buildReviewPrompt(ReviewPrRequest request, String prTitle,
+                                                String targetBranch, String diff,
+                                                List<AgentComment> existingComments,
+                                                WorkspaceContext workspace,
+                                                String bbWorkspace, String repoSlug,
+                                                String impactSection) {
 
         RepoSettings settings = loadRepoSettings(bbWorkspace, repoSlug);
 
@@ -78,6 +91,7 @@ public class AgentPromptBuilder {
 
         String previousCommentsSection = buildPreviousCommentsSection(existingComments);
         String memorySection = buildMemorySection(bbWorkspace, repoSlug);
+        String falsePositiveSection = buildFalsePositiveSection(bbWorkspace, repoSlug);
 
         List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
 
@@ -93,11 +107,11 @@ public class AgentPromptBuilder {
             LOG.infof("Using custom review prompt for %s/%s", bbWorkspace, repoSlug);
             reviewInstructions = applyPlaceholders(settings.reviewPrompt(),
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+                    falsePositiveSection, impactSection, diffTruncated, annotatedDiff);
         } else {
             reviewInstructions = buildDefaultReviewInstructions(
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+                    falsePositiveSection, impactSection, diffTruncated, annotatedDiff);
         }
 
         String guardrailText = """
@@ -169,6 +183,86 @@ public class AgentPromptBuilder {
                 request.extraRules(), guardrailText, fixInstructions);
     }
 
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace) {
+        return buildGenerateTestsPrompt(request, workspace, null);
+    }
+
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace,
+                                           CoverageReporter.CoverageSnapshot baseline) {
+        String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String targetFilesSection;
+        if (request.targetFiles() != null && !request.targetFiles().isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Focus ONLY on generating tests for these specific source files/packages:\n");
+            for (String f : request.targetFiles()) {
+                sb.append("  - ").append(f).append("\n");
+            }
+            targetFilesSection = sb.toString();
+        } else if (baseline != null) {
+            targetFilesSection = """
+                    Scan `src/main/java` to find classes that currently have low or no test coverage. \
+                    Use the coverage baseline below to identify the highest-impact targets. \
+                    Prioritize service classes, utility classes, and classes with non-trivial business logic. \
+                    Skip generated code (e.g. Panache entities, mappers).
+                    """;
+        } else {
+            targetFilesSection = """
+                    Scan `src/main/java` to find classes that currently have no corresponding test file \
+                    in `src/test/java`. Prioritize service classes, utility classes, and classes with \
+                    non-trivial business logic. Skip generated code (e.g. Panache entities, mappers).
+                    """;
+        }
+
+        String coverageSection = baseline != null
+                ? "\n" + baseline.formatForPrompt() + "\n"
+                : "";
+
+        String generateTestsInstructions = """
+                You are generating unit tests for a Java project.
+                Your ONLY goal is to write new or improved test files. Do NOT modify any production source code.
+                %s
+                ## Discovery (do this FIRST)
+                1. Read `pom.xml` or `build.gradle` to identify the test framework and mocking library in use \
+                (e.g. JUnit 5, Mockito, AssertJ, Quarkus test extensions, Spring Boot Test).
+                2. List and read a sample of existing test files under `src/test/java` to understand the \
+                project's testing conventions, base classes, and annotation patterns.
+                3. Note the package structure so you place new test files in the correct mirrored package.
+
+                ## Scope
+                %s
+                ## Test Writing Rules
+                - Place each test file at the mirrored path in `src/test/java/...`.
+                - Use the same test framework and assertion library already used in the project.
+                - Prefer plain `@ExtendWith(MockitoExtension.class)` unit tests unless the class requires \
+                a full container (`@QuarkusTest`).
+                - For each class under test, cover:
+                  - Happy path (typical valid inputs)
+                  - Edge cases (null inputs, empty collections, boundary values)
+                  - Error paths (exceptions, invalid state)
+                - Use descriptive `@DisplayName` or method name patterns already present in the project.
+                - Mock all external dependencies (repositories, services, HTTP clients) with Mockito.
+                - Do NOT add `@Disabled` tests or tests that always pass trivially.
+                - If a test file already exists for a class, ADD missing test cases rather than replacing the file.
+
+                ## After Writing Tests
+                - Run `mvn test` (or `gradle test` if there is no `pom.xml`) to verify the tests compile and pass.
+                - If tests fail, read the error output carefully, fix the failures, and re-run.
+                - Repeat until all tests pass.
+                - Provide a summary listing which test files were created or modified and the number of test \
+                cases added for each.
+                """.formatted(coverageSection, targetFilesSection);
+
+        String guardrailText = buildTestGenerationGuardrailText();
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, generateTestsInstructions);
+    }
+
     public String buildReplyPrompt(CommentContext ctx, List<ThreadComment> thread,
                                    String latestHumanMessage) {
         String threadSection = formatThreadSection(thread);
@@ -193,7 +287,7 @@ public class AgentPromptBuilder {
                 - If they ask for clarification, explain your reasoning in more detail with code references.
                 - If they disagree, consider their argument carefully. Acknowledge if they make a valid point.
                 - If they provide additional context that changes your assessment, say so explicitly.
-                - You can use `read_file` and `list_files` to examine the code for additional context.
+                - You can use `read_file`, `list_files`, and `fetch_url` to examine the code or look up official documentation for additional context.
                 - Keep your response focused and conversational — this is a thread reply, not a full review.
                 - Do NOT output JSON. Write your response in natural language (markdown is fine).
                 - Your final message will be posted directly as a Bitbucket comment, so make it clean.
@@ -246,6 +340,118 @@ public class AgentPromptBuilder {
         );
     }
 
+    public String buildGenerateDocsPrompt(GenerateDocsRequest request, WorkspaceContext workspace,
+                                          RepoSettings settings, boolean confluenceActive,
+                                          String confluenceSpaceKey) {
+        String rulesRepoUrl = resolveRulesRepoUrl(null);
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        String confluenceSection = "";
+        if (confluenceActive) {
+            confluenceSection = """
+
+                    ## Confluence Publishing
+                    After writing each documentation file, publish it to Confluence using the `publish_confluence` tool.
+                    - Use the document title as the Confluence page title (e.g. "Architecture Overview", "API Documentation").
+                    - Pass the full Markdown content as `markdown_content` — it will be converted automatically.
+                    - The space key and parent page are pre-configured; you do not need to supply them.
+                    - If a page with the same title already exists, it will be updated.
+                    """;
+        }
+
+        String docsInstructions = """
+                You are generating comprehensive documentation for a software project.
+                Your goal is to explore the entire codebase and produce high-quality Markdown documentation
+                in the `docs/` folder at the repository root.
+
+                ## Discovery (do this FIRST)
+                1. Use `list_files` to understand the overall project structure (src layout, config files, build system).
+                2. Read `pom.xml` or `build.gradle` to identify the tech stack, frameworks, and dependencies.
+                3. Read `application.properties` / `application.yml` or `.env` for configuration reference.
+                4. Read key source files: controllers/endpoints, services, models/entities, database migrations.
+                5. Use `search_code` and `query_code_graph` to understand class hierarchies and call chains.
+                6. Use `semantic_search` to find related patterns if vector indexing is available.
+
+                ## Documentation to Generate
+
+                Create the following files using `write_file`. Each file should be well-structured Markdown
+                with Mermaid diagrams where they add value.
+
+                ### 1. `docs/README.md` — Index
+                - Brief project summary (1-2 paragraphs).
+                - Table of contents linking to all other doc files.
+                - Quick start command (how to build and run).
+
+                ### 2. `docs/architecture.md` — Architecture Overview
+                - High-level system design: what the project does, how components interact.
+                - Tech stack summary (frameworks, databases, external services).
+                - Use `flowchart` Mermaid diagrams for component maps.
+                - Use `classDiagram` for key class relationships.
+                - Cover deployment topology if evident from config.
+
+                ### 3. `docs/api.md` — API Documentation
+                - List all REST endpoints grouped by controller/tag.
+                - For each endpoint: HTTP method, path, description, request body schema, response schema, error codes.
+                - Read the controller classes and OpenAPI annotations to extract this.
+                - Include authentication requirements if present.
+
+                ### 4. `docs/data-model.md` — Data Model
+                - Document all database tables, their columns, types, and constraints.
+                - Derive from Flyway migration files (`src/main/resources/db/migration/`).
+                - Use `erDiagram` Mermaid diagrams for entity relationships.
+                - Note important indexes and unique constraints.
+
+                ### 5. `docs/getting-started.md` — Developer Onboarding
+                - Prerequisites (JDK version, Docker, database, etc.).
+                - Step-by-step environment setup.
+                - How to build, run, and test the project.
+                - Project structure walkthrough (what each top-level directory contains).
+                - Key configuration that must be set before first run.
+
+                ### 6. `docs/flows.md` — Key Business Flows
+                - Document the most important workflows as `sequenceDiagram` Mermaid diagrams.
+                - Cover: the main job lifecycle, webhook processing, external integrations.
+                - Each flow should have a brief text description followed by the diagram.
+
+                ### 7. `docs/configuration.md` — Configuration Reference
+                - List ALL configuration properties and environment variables.
+                - Group by feature area (e.g. "Database", "Authentication", "External Services").
+                - For each: property name, env var name, description, default value, whether required.
+                - Read `application.properties` and `.env` files as sources.
+                %s
+                ## Writing Guidelines
+                - **Depth**: Moderate — cover packages and key classes, skip private internals.
+                - **Audience**: Mixed — both internal developers and external API consumers.
+                - Use clear language and avoid jargon without explanation.
+                - Every Mermaid diagram must be in a fenced code block with the `mermaid` language tag.
+                - Keep diagrams focused — no more than ~15 nodes per diagram. Split large diagrams.
+                - Use tables for structured data (endpoints, config properties, DB columns).
+                - Cross-reference between docs using relative links (e.g. `[see API docs](api.md)`).
+
+                ## Process
+                1. Explore the codebase thoroughly before writing any documentation.
+                2. Write each doc file using `write_file`.
+                3. After writing all files, provide a summary of what was generated.
+                """.formatted(confluenceSection);
+
+        String guardrailText = """
+                You MUST follow these rules without exception:
+                - Do NOT modify files under these paths: %s
+                - Only write files under the `docs/` directory. Do NOT modify source code.
+                - Only run allowed commands: %s
+                - Never read or write files outside the repository root.
+                """.formatted(
+                String.join(", ", guardrails.getBlockedPaths()),
+                String.join(", ", guardrails.getAllowedCommands())
+        );
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, docsInstructions);
+    }
+
     // ─── Private helpers ────────────────────────────────────────────────
 
     private RepoSettings loadRepoSettings(String workspace, String repoSlug) {
@@ -274,6 +480,7 @@ public class AgentPromptBuilder {
 
     private String applyPlaceholders(String template, String prTitle, String targetBranch,
                                      String previousComments, String memorySection,
+                                     String falsePositiveSection, String impactSection,
                                      boolean diffTruncated, String annotatedDiff) {
         String diffNote = diffTruncated
                 ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n"
@@ -283,6 +490,8 @@ public class AgentPromptBuilder {
                 .replace("{{TARGET_BRANCH}}", targetBranch != null ? targetBranch : "")
                 .replace("{{PREVIOUS_COMMENTS}}", previousComments != null ? previousComments : "")
                 .replace("{{MEMORY_SECTION}}", memorySection != null ? memorySection : "")
+                .replace("{{FALSE_POSITIVE_SECTION}}", falsePositiveSection != null ? falsePositiveSection : "")
+                .replace("{{IMPACT_SECTION}}", impactSection != null ? impactSection : "")
                 .replace("{{DIFF_NOTE}}", diffNote)
                 .replace("{{DIFF}}", annotatedDiff != null ? annotatedDiff : "");
     }
@@ -290,6 +499,8 @@ public class AgentPromptBuilder {
     private String buildDefaultReviewInstructions(String prTitle, String targetBranch,
                                                   String previousCommentsSection,
                                                   String memorySection,
+                                                  String falsePositiveSection,
+                                                  String impactSection,
                                                   boolean diffTruncated,
                                                   String annotatedDiff) {
         return """
@@ -301,6 +512,20 @@ public class AgentPromptBuilder {
                 - **Target branch**: %s
                 %s
                 %s
+                %s
+                %s
+                ## Context Gathering (do this FIRST)
+                Before writing any findings, explore the repository for context relevant to the changed code:
+                - Use `search_code` to find callers, implementations, or usages of changed classes, methods, or interfaces.
+                - Use `query_code_graph` to find callers, implementations, or dependents of a specific symbol.
+                - Use `read_file` to examine interfaces, base classes, utility files, or configuration referenced in the diff.
+                - Use `list_files` to understand the module and package structure around changed files.
+                - Look at test files for changed modules to understand expected behaviour and existing coverage.
+                - Use `fetch_url` to look up official framework or library documentation when the changed code uses specific APIs, annotations, or patterns you want to verify (e.g. Quarkus, Spring, React, or any third-party library docs). Prefer official documentation sites.
+                - Only gather context that is directly relevant to the changed code — do not explore unrelated areas.
+
+                This context will help you avoid false positives and produce more precise, actionable findings.
+
                 ## Review Categories
                 Analyze the diff and provide findings organized in these categories:
 
@@ -377,7 +602,7 @@ public class AgentPromptBuilder {
                 - **summary**: 2-4 sentence overall assessment
                 %s
                 ## Instructions
-                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
+                - Use `search_code`, `query_code_graph`, `read_file`, `list_files`, and `fetch_url` to gather context before finalising findings (see Context Gathering above).
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
                 - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
@@ -395,6 +620,8 @@ public class AgentPromptBuilder {
                 targetBranch,
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
                 memorySection,
+                falsePositiveSection,
+                impactSection != null ? impactSection : "",
                 previousCommentsSection,
                 diffTruncated ? "(truncated — some files omitted)\n" : "",
                 annotatedDiff
@@ -403,6 +630,26 @@ public class AgentPromptBuilder {
 
     private String resolveRulesRepoUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;
+    }
+
+    /**
+     * Guardrails for unit test generation: no file/line count cap (the agent may need to
+     * create many test files), but production code is fully off-limits.
+     */
+    private String buildTestGenerationGuardrailText() {
+        return """
+                You MUST follow these rules without exception:
+                - Do NOT modify files under these paths: %s
+                - Do NOT modify ANY file under src/main/java — only write or update files under src/test/java.
+                - Only run allowed commands: %s
+                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - If tests fail, report the failure and do NOT proceed
+                - Stop as soon as all requested tests have been written and pass.
+                - Never read or write files outside the repository root.
+                """.formatted(
+                String.join(", ", guardrails.getBlockedPaths()),
+                String.join(", ", guardrails.getAllowedCommands())
+        );
     }
 
     private String buildWritableGuardrailText(String stopCondition) {
@@ -498,6 +745,61 @@ public class AgentPromptBuilder {
 
         LOG.debugf("Injected %d memories (%d chars) into review prompt for %s/%s",
                 memories.size(), sb.length(), workspace, repoSlug);
+        return sb.toString();
+    }
+
+    /**
+     * Builds a prompt section listing finding patterns the team has marked as false positives.
+     * Injected into the review prompt so the agent avoids repeating noise.
+     * Capped at ~1500 chars to stay within token budget.
+     */
+    private String buildFalsePositiveSection(String workspace, String repoSlug) {
+        List<CommentFeedbackEntry> fps;
+        try {
+            fps = feedbackStore.findFalsePositives(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Failed to load false positives for %s/%s (non-fatal): %s",
+                    workspace, repoSlug, e.getMessage());
+            return "";
+        }
+
+        if (fps.isEmpty()) {
+            return "";
+        }
+
+        // Collect unique patterns, preserving insertion order
+        java.util.LinkedHashSet<String> patterns = new java.util.LinkedHashSet<>();
+        for (CommentFeedbackEntry fp : fps) {
+            if (fp.pattern() != null && !fp.pattern().isBlank()) {
+                patterns.add(fp.pattern());
+            }
+        }
+        if (patterns.isEmpty()) {
+            return "";
+        }
+
+        final int maxChars = 1500;
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Known False Positives (flagged by this team)\n");
+        sb.append("The following finding patterns have been marked as false positives by this team. ");
+        sb.append("Do NOT report findings matching these patterns unless there is a clear, genuine issue:\n\n");
+
+        int headerLen = sb.length();
+        for (String pattern : patterns) {
+            String bullet = "- " + pattern + "\n";
+            if (sb.length() + bullet.length() > maxChars) {
+                sb.append("- ... (additional patterns truncated)\n");
+                break;
+            }
+            sb.append(bullet);
+        }
+        sb.append("\n");
+
+        if (sb.length() <= headerLen + 1) {
+            return "";
+        }
+
+        LOG.debugf("Injected %d FP patterns into review prompt for %s/%s", patterns.size(), workspace, repoSlug);
         return sb.toString();
     }
 }

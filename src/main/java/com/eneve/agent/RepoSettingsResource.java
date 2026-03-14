@@ -92,17 +92,24 @@ public class RepoSettingsResource {
             UpsertRepoSettingsRequest request) {
 
         boolean enabled = request.reviewEnabled() != null ? request.reviewEnabled() : true;
+        boolean vectorEnabled = request.vectorEnabled() != null ? request.vectorEnabled() : false;
+        boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
+        String confluenceSpaceKey = request.confluenceSpaceKey();
+        String confluenceParentPageId = request.confluenceParentPageId();
 
-        settingsStore.upsert(workspace, repoSlug, enabled, ruleNames, prompt, disabledHooks);
+        settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled,
+                ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
 
         return Response.ok(Map.of(
                 "action", "saved",
                 "workspace", workspace,
                 "repoSlug", repoSlug,
-                "reviewEnabled", enabled
+                "reviewEnabled", enabled,
+                "vectorEnabled", vectorEnabled,
+                "docsEnabled", docsEnabled
         )).build();
     }
 
@@ -159,6 +166,112 @@ public class RepoSettingsResource {
         return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/vector/enable")
+    @Operation(
+            operationId = "enableRepoVector",
+            summary = "Enable vector indexing for a repository",
+            description = "Turns on semantic vector indexing for the specified repository. "
+                    + "Embeddings will be generated on the next scheduled or manual graph build."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Vector indexing enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableVector(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setVectorEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "vector_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/vector/disable")
+    @Operation(
+            operationId = "disableRepoVector",
+            summary = "Disable vector indexing for a repository",
+            description = "Turns off semantic vector indexing for the specified repository. "
+                    + "Existing embeddings are retained but no new ones will be generated."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Vector indexing disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableVector(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setVectorEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "vector_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/docs/enable")
+    @Operation(
+            operationId = "enableRepoDocs",
+            summary = "Enable documentation generation for a repository",
+            description = "Turns on automated documentation generation for the specified repository."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Docs generation enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableDocs(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setDocsEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "docs_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/docs/disable")
+    @Operation(
+            operationId = "disableRepoDocs",
+            summary = "Disable documentation generation for a repository",
+            description = "Turns off automated documentation generation for the specified repository."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Docs generation disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableDocs(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setDocsEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
     @DELETE
     @Path("/{workspace}/{repoSlug}")
     @Operation(
@@ -187,8 +300,12 @@ public class RepoSettingsResource {
 
     public record UpsertRepoSettingsRequest(
             Boolean reviewEnabled,
+            Boolean vectorEnabled,
+            Boolean docsEnabled,
             List<String> ruleNames,
             String reviewPrompt,
-            List<String> disabledHooks
+            List<String> disabledHooks,
+            String confluenceSpaceKey,
+            String confluenceParentPageId
     ) {}
 }
