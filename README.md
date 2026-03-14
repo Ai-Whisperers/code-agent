@@ -106,6 +106,12 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
 
+### Review Quality Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/metrics/review-quality/{workspace}/{repoSlug}` | Resolution rate, false-positive rate, FP breakdown by category, auto-suppressed pattern count |
+
 ### AI Statistics
 
 | Method | Path | Description |
@@ -121,9 +127,11 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 |--------|------|-------------|
 | POST | `/webhooks/jira` | JIRA Cloud — auto-triggers jobs on issue assignment |
 | POST | `/webhooks/bitbucket/pull-request` | Bitbucket — auto-review on PR create/update |
-| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix/learn/fp when developer replies to agent comment |
 | POST | `/webhooks/azuredevops/pull-request` | Azure DevOps — auto-review on PR create/update |
-| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix/learn/fp when developer replies to agent comment |
+| POST | `/webhooks/gitlab/merge-request` | GitLab — auto-review on MR create/update |
+| POST | `/webhooks/gitlab/merge-request-comment` | GitLab — reply/fix/learn/fp when developer replies to agent note |
 
 All submission endpoints queue jobs instead of rejecting them. Jobs are processed FIFO up to `RUN_FIX_MAX_CONCURRENT_JOBS` in parallel. A 429 is only returned when the queue itself is full (default capacity: 20). Poll `/status/{jobId}` to see queue position.
 
@@ -272,7 +280,36 @@ Receives Bitbucket Cloud webhook payloads for `pullrequest:created` and `pullreq
 
 ### POST /webhooks/bitbucket/pull-request-comment (conversational reply)
 
-Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent (fix request vs. discussion) and triggers the appropriate job. Supports a `/learn` command to store team preferences for future reviews.
+Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent and triggers the appropriate action:
+
+| Reply | Action |
+|-------|--------|
+| `/fp` or `/false-positive` | Mark as false positive, close thread, trigger auto-suppression if threshold reached |
+| `/learn <preference>` | Store team preference in review memory |
+| Fix request (natural language) | Modify code and push to branch |
+| Discussion (natural language) | Reply conversationally in the same thread |
+
+### GET /metrics/review-quality/{workspace}/{repoSlug}
+
+Returns review quality metrics for a repository:
+
+```json
+{
+  "workspace": "my-workspace",
+  "repoSlug": "my-repo",
+  "totalFindings": 142,
+  "resolvedByDeveloper": 98,
+  "resolutionRate": 0.69,
+  "falsePositives": 12,
+  "fpRate": 0.085,
+  "fpByCategory": {
+    "Code Quality": 7,
+    "Best Practices": 4,
+    "Security": 1
+  },
+  "autoSuppressedPatterns": 2
+}
+```
 
 ### POST /webhooks/azuredevops/pull-request (auto-review)
 
@@ -406,6 +443,7 @@ All config via environment variables (or `application.properties` for local dev)
 |----------|-------------|---------|
 | `REVIEW_WEBHOOK_SKIP_AUTHORS` | Comma-separated PR authors to skip (avoid self-review) | `code-agent` |
 | `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | Only review PRs whose title contains this keyword | (optional) |
+| `REVIEW_FP_AUTO_SUPPRESS_THRESHOLD` | Number of `/fp` marks on the same pattern before auto-suppression creates a memory entry | `3` |
 
 ### Job Queue & Guardrails
 
@@ -745,16 +783,40 @@ The agent performs automated code reviews on pull requests, triggered either via
 - **Performance** — N+1 queries, unnecessary allocations, algorithm complexity
 - **Best practices** — framework conventions, idiomatic patterns
 
+### Contextual repo exploration
+
+Before generating findings, the agent proactively explores the cloned repository for context. It uses three tools:
+
+- **`search_code`** — grep-based code search over the full repo (e.g. find all callers of a changed method, locate interface implementations). Accepts a `pattern` (required), optional directory `path`, and optional file-type `include` glob (e.g. `*.java`).
+- **`read_file`** — read the full contents of any file in the repo (interfaces, base classes, configuration).
+- **`list_files`** — directory listing up to 5 levels deep, configurable via an optional `depth` parameter (default 3, max 5).
+
+This prevents false positives that arise from reviewing a diff without its wider context — the same capability BugBot uses to browse the whole repository.
+
 ### Review memory
 
 The agent learns team preferences over time. When a developer replies to a review comment with `/learn <preference>`, the agent stores it and respects it in future reviews of that repository. Memories can also be managed via the `/memory` REST endpoints.
 
+### False-positive feedback
+
+When a developer replies to a review comment with `/fp` (or `/false-positive`), the agent:
+
+1. Records the finding as a false positive in the `comment_feedback` table
+2. Marks the comment as resolved and closes the thread on the platform
+3. Posts an in-thread confirmation reply
+4. Checks whether this pattern has now hit the auto-suppress threshold (default: 3 occurrences). If so, a `review_memory` entry is automatically created, suppressing that pattern in all future reviews
+
+False-positive patterns are injected into every subsequent review prompt as a **"Known False Positives"** section, reducing noise before a finding is even generated.
+
+Track false-positive rates and resolution rates per repo at `GET /metrics/review-quality/{workspace}/{repoSlug}`.
+
 ### Comment interaction
 
 When a developer replies to an agent review comment:
-1. The agent classifies the intent as either a **fix request** or a **discussion**
-2. For fix requests, the agent modifies the code and pushes the change
-3. For discussions, the agent replies conversationally in the same thread
+1. `/fp` or `/false-positive` — marks the finding as a false positive (see above)
+2. `/learn <preference>` — stores a team preference for future reviews
+3. Natural-language fix request — the agent modifies the code and pushes the change
+4. Natural-language discussion — the agent replies conversationally in the same thread
 
 ### Repo settings
 
@@ -772,7 +834,7 @@ curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
 
 **Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
 
-**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
 
 ```bash
 curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
@@ -901,10 +963,13 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 
 | Table | Purpose |
 |-------|---------|
-| `agent_comments` | Maps comment IDs to agent findings for reply tracking |
+| `agent_comments` | Maps comment IDs to agent findings for reply tracking and resolution |
 | `ai_calls` | AI call metrics (tokens, cost, duration) per job |
-| `review_memory` | Team preferences learned during PR reviews |
+| `review_memory` | Team preferences learned during PR reviews (via `/learn` and auto-suppression) |
 | `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
+| `jobs` | Active job queue with status, PR URL, and diff stats |
+| `job_history` | Archived completed jobs |
+| `comment_feedback` | Developer feedback on individual findings (`/fp` marks); powers FP rate metrics and auto-suppression |
 
 ## Project Structure
 
@@ -914,18 +979,22 @@ src/main/java/com/eneve/agent/
 ├── MemoryResource.java          # REST endpoints (/memory)
 ├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
 ├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
+├── ReviewMetricsResource.java   # REST endpoints (/metrics/review-quality)
 ├── agent/
 │   ├── AgentRunner.java         # Job orchestrator (fix + review)
-│   ├── AgentPromptBuilder.java  # System prompt construction
+│   ├── AgentPromptBuilder.java  # System prompt construction (context, memory, FP sections)
 │   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude
+│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, list_files, run_command)
 │   ├── BuildValidator.java      # Maven build validation
+│   ├── FindingResolver.java     # Determines if past findings were addressed in new commits
 │   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
 │   ├── ReviewCommentProcessor.java # Turns PR comments into fix instructions
 │   ├── LearningExtractor.java   # Extracts learnable patterns from interactions
 │   ├── JobQueue.java            # Concurrent job queue
-│   ├── JobStore.java            # In-memory job store
-│   ├── CommentStore.java        # Tracks agent comments for reply detection
+│   ├── JobStore.java            # In-memory + PostgreSQL job store
+│   ├── CommentStore.java        # Tracks agent comments for reply detection and resolution metrics
+│   ├── CommentFeedbackStore.java # False-positive feedback persistence (PostgreSQL)
+│   ├── CommentFeedbackEntry.java # False-positive feedback record
 │   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)
 │   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
 │   ├── RepoSettings.java        # Per-repo settings record
@@ -969,11 +1038,13 @@ src/main/java/com/eneve/agent/
 │   └── MdcRule.java
 ├── scm/
 │   ├── GitPlatformService.java          # SCM abstraction interface
-│   ├── GitPlatformProducer.java         # CDI producer (selects BB or ADO)
+│   ├── GitPlatformProducer.java         # CDI producer (selects BB, ADO, or GitLab)
 │   ├── bitbucket/
 │   │   └── BitbucketPlatformService.java
-│   └── azuredevops/
-│       └── AzureDevOpsPlatformService.java
+│   ├── azuredevops/
+│   │   └── AzureDevOpsPlatformService.java
+│   └── gitlab/
+│       └── GitLabPlatformService.java
 ├── security/
 │   ├── ApiKeyFilter.java                # API key authentication filter
 │   └── WebhookSignatureFilter.java      # HMAC-SHA256 webhook verification
@@ -982,15 +1053,18 @@ src/main/java/com/eneve/agent/
 │   ├── ToolExecutor.java
 │   ├── ToolRegistry.java
 │   ├── ReadFileTool.java
+│   ├── SearchCodeTool.java              # grep-based code search for review context
 │   ├── WriteFileTool.java
 │   ├── RunCommandTool.java
 │   └── ListFilesTool.java
 ├── webhooks/
 │   ├── JiraWebhookResource.java
 │   ├── BitbucketWebhookResource.java
-│   ├── BitbucketCommentWebhookResource.java
+│   ├── BitbucketCommentWebhookResource.java   # /learn, /fp, fix, reply
 │   ├── AzureDevOpsWebhookResource.java
-│   └── AzureDevOpsCommentWebhookResource.java
+│   ├── AzureDevOpsCommentWebhookResource.java
+│   ├── GitLabWebhookResource.java
+│   └── GitLabCommentWebhookResource.java      # /learn, /fp, fix, reply
 └── workspace/
     └── WorkspaceContext.java
 ```

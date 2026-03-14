@@ -136,6 +136,43 @@ public class CommentStore {
         return results;
     }
 
+    /** Total inline findings (not summaries) posted for a repo across all PRs. */
+    public long countTotalFindings(String workspace, String repoSlug) {
+        String sql = """
+                SELECT COUNT(*) FROM agent_comments
+                WHERE workspace = ? AND repo_slug = ?
+                  AND file_path NOT IN ('', '__summary__')
+                  AND line_number > 0
+                """;
+        return countQuery(sql, workspace, repoSlug);
+    }
+
+    /** Findings that were marked resolved (addressed by dev or FP). */
+    public long countResolvedFindings(String workspace, String repoSlug) {
+        String sql = """
+                SELECT COUNT(*) FROM agent_comments
+                WHERE workspace = ? AND repo_slug = ?
+                  AND file_path NOT IN ('', '__summary__')
+                  AND line_number > 0
+                  AND resolved = true
+                """;
+        return countQuery(sql, workspace, repoSlug);
+    }
+
+    private long countQuery(String sql, String workspace, String repoSlug) {
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Count query failed for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+        return 0;
+    }
+
     public void markResolved(long commentId) {
         String sql = "UPDATE agent_comments SET resolved = true WHERE comment_id = ?";
         try (Connection conn = dataSource.getConnection();

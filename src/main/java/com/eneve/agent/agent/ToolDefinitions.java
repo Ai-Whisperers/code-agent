@@ -26,6 +26,7 @@ public final class ToolDefinitions {
     public static List<ToolUnion> readOnly() {
         return List.of(
                 ToolUnion.ofTool(readFile()),
+                ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(listFiles())
         );
@@ -84,15 +85,45 @@ public final class ToolDefinitions {
                 .build();
     }
 
+    private static Tool searchCode() {
+        return Tool.builder()
+                .name("search_code")
+                .description("Search for a pattern in the repository using grep. "
+                        + "Use this to find callers, usages, or related code beyond what the diff shows.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("pattern", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The grep pattern to search for (supports basic regex)"
+                                )))
+                                .putAdditionalProperty("path", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Relative directory path to scope the search (default: repository root)"
+                                )))
+                                .putAdditionalProperty("include", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Glob pattern to restrict file types, e.g. '*.java' or '*.ts'"
+                                )))
+                                .build())
+                        .addRequired("pattern")
+                        .build())
+                .build();
+    }
+
     private static Tool listFiles() {
         return Tool.builder()
                 .name("list_files")
-                .description("List files and directories (up to 3 levels deep) in the given directory.")
+                .description("List files and directories in the given directory. "
+                        + "Supports up to 5 levels deep (default 3).")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("directory", JsonValue.from(Map.of(
                                         "type", "string",
                                         "description", "Relative path to the directory (default: repository root)"
+                                )))
+                                .putAdditionalProperty("depth", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "How many levels deep to traverse (1-5, default 3)"
                                 )))
                                 .build())
                         .build())

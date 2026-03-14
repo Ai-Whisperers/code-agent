@@ -1,10 +1,13 @@
 package com.eneve.agent.webhooks;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.CommentContext;
+import com.eneve.agent.agent.CommentFeedbackEntry;
+import com.eneve.agent.agent.CommentFeedbackStore;
 import com.eneve.agent.agent.CommentIntent;
 import com.eneve.agent.agent.CommentStore;
 import com.eneve.agent.agent.IntentClassifier;
@@ -57,6 +60,7 @@ public class GitLabCommentWebhookResource {
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject CommentStore commentStore;
+    @Inject CommentFeedbackStore feedbackStore;
     @Inject IntentClassifier intentClassifier;
     @Inject MemoryStore memoryStore;
     @Inject RepoSettingsStore repoSettingsStore;
@@ -64,6 +68,9 @@ public class GitLabCommentWebhookResource {
 
     @ConfigProperty(name = "gitlab.agent.user", defaultValue = "")
     String agentUser;
+
+    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
+    int fpAutoSuppressThreshold;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -187,6 +194,14 @@ public class GitLabCommentWebhookResource {
                         inReplyToId, noteAuthor);
             }
 
+            // Fast path: /fp or /false-positive marks the finding as a false positive
+            String lowerNote = noteBody.toLowerCase(Locale.ROOT);
+            if (lowerNote.equals("/fp") || lowerNote.equals("/false-positive")
+                    || lowerNote.startsWith("/fp ") || lowerNote.startsWith("/false-positive ")) {
+                return handleFalsePositiveCommand(namespace, repoSlug, mrIid,
+                        inReplyToId, noteAuthor);
+            }
+
             // Classify intent: is this a fix request or a discussion?
             String originalFinding = commentStore.find(inReplyToId)
                     .map(CommentContext::findingText).orElse(null);
@@ -262,6 +277,62 @@ public class GitLabCommentWebhookResource {
                 "namespace", namespace,
                 "repoSlug", repoSlug
         )).build();
+    }
+
+    private Response handleFalsePositiveCommand(String namespace, String repoSlug,
+                                                  String mrIid, long parentNoteId,
+                                                  String author) {
+        CommentContext ctx = commentStore.find(parentNoteId).orElse(null);
+        if (ctx == null) {
+            LOG.warnf("/fp: could not find CommentContext for note %d", parentNoteId);
+            return ok("ignored", "Could not find original finding for note " + parentNoteId);
+        }
+
+        CommentFeedbackEntry feedback = CommentFeedbackEntry.falsePositive(
+                parentNoteId, mrIid, namespace, repoSlug,
+                ctx.category(), ctx.findingText(), author);
+        feedbackStore.save(feedback);
+
+        commentStore.markResolved(parentNoteId);
+
+        try {
+            platformService.resolveComment(namespace, "", repoSlug, mrIid, parentNoteId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to resolve note %d on platform (non-fatal): %s", parentNoteId, e.getMessage());
+        }
+
+        try {
+            platformService.replyToComment(namespace, "", repoSlug, mrIid, parentNoteId,
+                    "Got it \u2014 marked as false positive. I'll be more careful about this pattern in future reviews.");
+        } catch (Exception e) {
+            LOG.warnf("Failed to post /fp confirmation reply (non-fatal): %s", e.getMessage());
+        }
+
+        checkAndAutoSuppress(namespace, repoSlug, feedback.pattern(), author);
+
+        LOG.infof("/fp from %s on %s/%s MR !%s, note %d: %s",
+                author, namespace, repoSlug, mrIid, parentNoteId,
+                ctx.findingText() != null ? ctx.findingText().substring(0, Math.min(80, ctx.findingText().length())) : "");
+
+        return Response.ok(Map.of(
+                "action", "false_positive_recorded",
+                "noteId", parentNoteId,
+                "namespace", namespace,
+                "repoSlug", repoSlug
+        )).build();
+    }
+
+    private void checkAndAutoSuppress(String workspace, String repoSlug, String pattern, String author) {
+        if (pattern == null || pattern.isBlank()) return;
+        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, fpAutoSuppressThreshold);
+        if (!recurring.contains(pattern)) return;
+
+        String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;
+        if (!memoryStore.exists(workspace, repoSlug, memoryText)) {
+            MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, memoryText, "auto-suppress");
+            memoryStore.save(entry);
+            LOG.infof("Auto-suppressed recurring FP pattern for %s/%s: %s", workspace, repoSlug, pattern);
+        }
     }
 
     private static Response ok(String action, String reason) {

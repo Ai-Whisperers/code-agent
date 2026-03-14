@@ -33,6 +33,7 @@ public class AgentPromptBuilder {
     @Inject CursorRulesLoader rulesLoader;
     @Inject GuardrailConfig guardrails;
     @Inject MemoryStore memoryStore;
+    @Inject CommentFeedbackStore feedbackStore;
     @Inject RepoSettingsStore repoSettingsStore;
 
     @ConfigProperty(name = "rules.repo.url", defaultValue = "")
@@ -78,6 +79,7 @@ public class AgentPromptBuilder {
 
         String previousCommentsSection = buildPreviousCommentsSection(existingComments);
         String memorySection = buildMemorySection(bbWorkspace, repoSlug);
+        String falsePositiveSection = buildFalsePositiveSection(bbWorkspace, repoSlug);
 
         List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
 
@@ -93,11 +95,11 @@ public class AgentPromptBuilder {
             LOG.infof("Using custom review prompt for %s/%s", bbWorkspace, repoSlug);
             reviewInstructions = applyPlaceholders(settings.reviewPrompt(),
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+                    falsePositiveSection, diffTruncated, annotatedDiff);
         } else {
             reviewInstructions = buildDefaultReviewInstructions(
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+                    falsePositiveSection, diffTruncated, annotatedDiff);
         }
 
         String guardrailText = """
@@ -274,6 +276,7 @@ public class AgentPromptBuilder {
 
     private String applyPlaceholders(String template, String prTitle, String targetBranch,
                                      String previousComments, String memorySection,
+                                     String falsePositiveSection,
                                      boolean diffTruncated, String annotatedDiff) {
         String diffNote = diffTruncated
                 ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n"
@@ -283,6 +286,7 @@ public class AgentPromptBuilder {
                 .replace("{{TARGET_BRANCH}}", targetBranch != null ? targetBranch : "")
                 .replace("{{PREVIOUS_COMMENTS}}", previousComments != null ? previousComments : "")
                 .replace("{{MEMORY_SECTION}}", memorySection != null ? memorySection : "")
+                .replace("{{FALSE_POSITIVE_SECTION}}", falsePositiveSection != null ? falsePositiveSection : "")
                 .replace("{{DIFF_NOTE}}", diffNote)
                 .replace("{{DIFF}}", annotatedDiff != null ? annotatedDiff : "");
     }
@@ -290,6 +294,7 @@ public class AgentPromptBuilder {
     private String buildDefaultReviewInstructions(String prTitle, String targetBranch,
                                                   String previousCommentsSection,
                                                   String memorySection,
+                                                  String falsePositiveSection,
                                                   boolean diffTruncated,
                                                   String annotatedDiff) {
         return """
@@ -301,6 +306,17 @@ public class AgentPromptBuilder {
                 - **Target branch**: %s
                 %s
                 %s
+                %s
+                ## Context Gathering (do this FIRST)
+                Before writing any findings, explore the repository for context relevant to the changed code:
+                - Use `search_code` to find callers, implementations, or usages of changed classes, methods, or interfaces.
+                - Use `read_file` to examine interfaces, base classes, utility files, or configuration referenced in the diff.
+                - Use `list_files` to understand the module and package structure around changed files.
+                - Look at test files for changed modules to understand expected behaviour and existing coverage.
+                - Only gather context that is directly relevant to the changed code — do not explore unrelated areas.
+
+                This context will help you avoid false positives and produce more precise, actionable findings.
+
                 ## Review Categories
                 Analyze the diff and provide findings organized in these categories:
 
@@ -377,7 +393,7 @@ public class AgentPromptBuilder {
                 - **summary**: 2-4 sentence overall assessment
                 %s
                 ## Instructions
-                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
+                - Use `search_code`, `read_file`, and `list_files` to gather context before finalising findings (see Context Gathering above).
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
                 - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
@@ -395,6 +411,7 @@ public class AgentPromptBuilder {
                 targetBranch,
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
                 memorySection,
+                falsePositiveSection,
                 previousCommentsSection,
                 diffTruncated ? "(truncated — some files omitted)\n" : "",
                 annotatedDiff
@@ -498,6 +515,61 @@ public class AgentPromptBuilder {
 
         LOG.debugf("Injected %d memories (%d chars) into review prompt for %s/%s",
                 memories.size(), sb.length(), workspace, repoSlug);
+        return sb.toString();
+    }
+
+    /**
+     * Builds a prompt section listing finding patterns the team has marked as false positives.
+     * Injected into the review prompt so the agent avoids repeating noise.
+     * Capped at ~1500 chars to stay within token budget.
+     */
+    private String buildFalsePositiveSection(String workspace, String repoSlug) {
+        List<CommentFeedbackEntry> fps;
+        try {
+            fps = feedbackStore.findFalsePositives(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Failed to load false positives for %s/%s (non-fatal): %s",
+                    workspace, repoSlug, e.getMessage());
+            return "";
+        }
+
+        if (fps.isEmpty()) {
+            return "";
+        }
+
+        // Collect unique patterns, preserving insertion order
+        java.util.LinkedHashSet<String> patterns = new java.util.LinkedHashSet<>();
+        for (CommentFeedbackEntry fp : fps) {
+            if (fp.pattern() != null && !fp.pattern().isBlank()) {
+                patterns.add(fp.pattern());
+            }
+        }
+        if (patterns.isEmpty()) {
+            return "";
+        }
+
+        final int maxChars = 1500;
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Known False Positives (flagged by this team)\n");
+        sb.append("The following finding patterns have been marked as false positives by this team. ");
+        sb.append("Do NOT report findings matching these patterns unless there is a clear, genuine issue:\n\n");
+
+        int headerLen = sb.length();
+        for (String pattern : patterns) {
+            String bullet = "- " + pattern + "\n";
+            if (sb.length() + bullet.length() > maxChars) {
+                sb.append("- ... (additional patterns truncated)\n");
+                break;
+            }
+            sb.append(bullet);
+        }
+        sb.append("\n");
+
+        if (sb.length() <= headerLen + 1) {
+            return "";
+        }
+
+        LOG.debugf("Injected %d FP patterns into review prompt for %s/%s", patterns.size(), workspace, repoSlug);
         return sb.toString();
     }
 }

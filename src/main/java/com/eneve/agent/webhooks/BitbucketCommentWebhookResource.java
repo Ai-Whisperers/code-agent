@@ -1,10 +1,13 @@
 package com.eneve.agent.webhooks;
 
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.CommentContext;
+import com.eneve.agent.agent.CommentFeedbackEntry;
+import com.eneve.agent.agent.CommentFeedbackStore;
 import com.eneve.agent.agent.CommentIntent;
 import com.eneve.agent.agent.CommentStore;
 import com.eneve.agent.agent.IntentClassifier;
@@ -52,6 +55,7 @@ public class BitbucketCommentWebhookResource {
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject CommentStore commentStore;
+    @Inject CommentFeedbackStore feedbackStore;
     @Inject IntentClassifier intentClassifier;
     @Inject MemoryStore memoryStore;
     @Inject RepoSettingsStore repoSettingsStore;
@@ -59,6 +63,9 @@ public class BitbucketCommentWebhookResource {
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
+
+    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
+    int fpAutoSuppressThreshold;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -157,6 +164,18 @@ public class BitbucketCommentWebhookResource {
                         parentCommentId, commentAuthor);
             }
 
+            // Fast path: /fp or /false-positive marks the finding as a false positive
+            String lowerText = commentText.toLowerCase(Locale.ROOT);
+            if (lowerText.equals("/fp") || lowerText.equals("/false-positive")
+                    || lowerText.startsWith("/fp ") || lowerText.startsWith("/false-positive ")) {
+                String[] parts = repoFullName.split("/", 2);
+                if (parts.length != 2) {
+                    return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
+                }
+                return handleFalsePositiveCommand(parts[0], parts[1], repoUrl, prId,
+                        parentCommentId, commentAuthor);
+            }
+
             // Classify intent: is this a fix request or a discussion?
             String originalFinding = commentStore.find(parentCommentId)
                     .map(CommentContext::findingText).orElse(null);
@@ -233,6 +252,62 @@ public class BitbucketCommentWebhookResource {
                 "workspace", workspace,
                 "repoSlug", repoSlug
         )).build();
+    }
+
+    private Response handleFalsePositiveCommand(String workspace, String repoSlug,
+                                                  String repoUrl, String prId,
+                                                  long parentCommentId, String author) {
+        CommentContext ctx = commentStore.find(parentCommentId).orElse(null);
+        if (ctx == null) {
+            LOG.warnf("/fp: could not find CommentContext for comment %d", parentCommentId);
+            return ok("ignored", "Could not find original finding for comment " + parentCommentId);
+        }
+
+        CommentFeedbackEntry feedback = CommentFeedbackEntry.falsePositive(
+                parentCommentId, prId, workspace, repoSlug,
+                ctx.category(), ctx.findingText(), author);
+        feedbackStore.save(feedback);
+
+        commentStore.markResolved(parentCommentId);
+
+        try {
+            platformService.resolveComment(workspace, "", repoSlug, prId, parentCommentId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to resolve comment %d on platform (non-fatal): %s", parentCommentId, e.getMessage());
+        }
+
+        try {
+            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
+                    "Got it \u2014 marked as false positive. I'll be more careful about this pattern in future reviews.");
+        } catch (Exception e) {
+            LOG.warnf("Failed to post /fp confirmation reply (non-fatal): %s", e.getMessage());
+        }
+
+        checkAndAutoSuppress(workspace, repoSlug, feedback.pattern(), author);
+
+        LOG.infof("/fp from %s on %s/%s PR #%s, comment %d: %s",
+                author, workspace, repoSlug, prId, parentCommentId,
+                ctx.findingText() != null ? ctx.findingText().substring(0, Math.min(80, ctx.findingText().length())) : "");
+
+        return Response.ok(Map.of(
+                "action", "false_positive_recorded",
+                "commentId", parentCommentId,
+                "workspace", workspace,
+                "repoSlug", repoSlug
+        )).build();
+    }
+
+    private void checkAndAutoSuppress(String workspace, String repoSlug, String pattern, String author) {
+        if (pattern == null || pattern.isBlank()) return;
+        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, fpAutoSuppressThreshold);
+        if (!recurring.contains(pattern)) return;
+
+        String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;
+        if (!memoryStore.exists(workspace, repoSlug, memoryText)) {
+            MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, memoryText, "auto-suppress");
+            memoryStore.save(entry);
+            LOG.infof("Auto-suppressed recurring FP pattern for %s/%s: %s", workspace, repoSlug, pattern);
+        }
     }
 
     private static Response ok(String action, String reason) {
