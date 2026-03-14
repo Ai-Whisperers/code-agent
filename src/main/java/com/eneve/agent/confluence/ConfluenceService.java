@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
+import java.util.zip.Deflater;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -31,7 +32,7 @@ public class ConfluenceService {
 
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final String MERMAID_INK_BASE = "https://mermaid.ink/img/base64:";
+    private static final String MERMAID_INK_BASE = "https://mermaid.ink/img/pako:";
 
     @ConfigProperty(name = "confluence.base.url", defaultValue = "")
     String baseUrl;
@@ -155,11 +156,27 @@ public class ConfluenceService {
 
     /**
      * Renders a Mermaid diagram to PNG via the mermaid.ink public service.
+     * Uses the pako (zlib deflate) encoding format expected by mermaid.ink.
      */
     byte[] renderMermaidToPng(String mermaidCode) throws Exception {
+        String json = "{\"code\":" + MAPPER.writeValueAsString(mermaidCode)
+                + ",\"mermaid\":{\"theme\":\"default\"}}";
+
+        Deflater deflater = new Deflater(9);
+        deflater.setInput(json.getBytes(StandardCharsets.UTF_8));
+        deflater.finish();
+
+        ByteArrayOutputStream compressed = new ByteArrayOutputStream();
+        byte[] buf = new byte[4096];
+        while (!deflater.finished()) {
+            int count = deflater.deflate(buf);
+            compressed.write(buf, 0, count);
+        }
+        deflater.end();
+
         String encoded = Base64.getUrlEncoder().withoutPadding()
-                .encodeToString(mermaidCode.getBytes(StandardCharsets.UTF_8));
-        String url = MERMAID_INK_BASE + encoded;
+                .encodeToString(compressed.toByteArray());
+        String url = MERMAID_INK_BASE + encoded + "?type=png&bgColor=!white";
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
