@@ -394,6 +394,27 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         return comments;
     }
 
+    @Override
+    public void resolveComment(String org, String project, String repo, String prId, long commentId) {
+        int threadId = resolveThreadId(org, project, repo, prId, commentId);
+        if (threadId <= 0) {
+            LOG.warnf("Could not resolve thread for comment %d on PR #%s — skipping resolve",
+                    commentId, prId);
+            return;
+        }
+
+        String url = repoApiUrl(org, project, repo)
+                + "/pullrequests/" + prId + "/threads/" + threadId + "?" + API_VERSION;
+        String body = """
+                {
+                  "status": 2
+                }
+                """;
+        patchAndReturn(url, body, "resolve thread #" + threadId + " on PR #" + prId);
+        LOG.infof("Resolved thread %d (comment %d) on PR #%s in %s/%s/%s",
+                threadId, commentId, prId, org, project, repo);
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
     private int resolveThreadId(String org, String project, String repo,

@@ -45,7 +45,8 @@ public class ReviewCommentProcessor {
     public String postReviewComments(String reviewOutput, RepoCoordinates coords, String prId,
                                      List<AgentComment> existingComments, String headSha,
                                      String reviewJobId,
-                                     Map<String, TreeSet<Integer>> commentableLines) {
+                                     Map<String, TreeSet<Integer>> commentableLines,
+                                     int resolvedCount) {
         String org = coords.organization();
         String project = coords.project();
         String repo = coords.repository();
@@ -156,6 +157,10 @@ public class ReviewCommentProcessor {
             }
             overallComment.append("\n\n---\n_").append(inlineCount)
                     .append(" inline comment(s) posted on specific lines.");
+            if (resolvedCount > 0) {
+                overallComment.append(" ").append(resolvedCount)
+                        .append(" issue(s) auto-resolved from previous review.");
+            }
             if (skippedCount > 0) {
                 overallComment.append(" ").append(skippedCount)
                         .append(" duplicate(s) skipped from previous review.");

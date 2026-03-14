@@ -337,6 +337,19 @@ public class BitbucketPlatformService implements GitPlatformService {
         return comments;
     }
 
+    @Override
+    public void resolveComment(String org, String project, String repo, String prId, long commentId) {
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + prId + "/comments/" + commentId;
+        String body = """
+                {
+                  "resolution": { "type": "resolved" }
+                }
+                """;
+        putAndReturn(path, body, "resolve comment #" + commentId + " on PR #" + prId);
+        LOG.infof("Resolved comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
+    }
+
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {

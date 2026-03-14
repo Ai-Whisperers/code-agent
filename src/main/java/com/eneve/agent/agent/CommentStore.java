@@ -4,6 +4,8 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 import io.agroal.api.AgroalDataSource;
@@ -95,6 +97,54 @@ public class CommentStore {
         } catch (SQLException e) {
             LOG.errorf("Failed to check agent comment %d: %s", commentId, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * Return all unresolved inline findings the agent posted on this PR.
+     * Excludes summary comments and file-level-only comments (line = 0).
+     */
+    public List<OpenFinding> findOpenInlineComments(String prId, String org, String repo) {
+        String sql = """
+                SELECT comment_id, file_path, line_number, finding_text, severity
+                FROM agent_comments
+                WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
+                  AND resolved = false
+                  AND file_path NOT IN ('', '__summary__')
+                  AND line_number > 0
+                """;
+        List<OpenFinding> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, prId);
+            ps.setString(2, org);
+            ps.setString(3, repo);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new OpenFinding(
+                            rs.getLong("comment_id"),
+                            rs.getString("file_path"),
+                            rs.getInt("line_number"),
+                            rs.getString("finding_text"),
+                            rs.getString("severity")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query open inline comments for PR #%s: %s", prId, e.getMessage());
+        }
+        return results;
+    }
+
+    public void markResolved(long commentId) {
+        String sql = "UPDATE agent_comments SET resolved = true WHERE comment_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, commentId);
+            ps.executeUpdate();
+            LOG.debugf("Marked agent comment %d as resolved", commentId);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to mark comment %d as resolved: %s", commentId, e.getMessage());
         }
     }
 

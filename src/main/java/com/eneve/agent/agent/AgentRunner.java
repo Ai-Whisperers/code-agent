@@ -4,6 +4,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import com.eneve.agent.diff.DiffParser;
+import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 
 import com.eneve.agent.scm.AgentComment;
@@ -56,6 +58,7 @@ public class AgentRunner {
     @Inject LinterService linterService;
     @Inject LearningExtractor learningExtractor;
     @Inject JobStore jobStore;
+    @Inject FindingResolver findingResolver;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -314,6 +317,42 @@ public class AgentRunner {
                 headSha = null;
             }
 
+            // ── Resolution pass: auto-resolve findings addressed by new commits ──
+            int resolvedCount = 0;
+            if (lastReviewedSha != null) {
+                try {
+                    List<OpenFinding> openFindings = commentStore.findOpenInlineComments(
+                            request.prId(), coords.organization(), coords.repository());
+                    if (!openFindings.isEmpty()) {
+                        List<ParsedDiffFile> incrementalParsed = DiffParser.parse(diff);
+                        List<Long> resolvedIds = findingResolver.resolveAddressedFindings(
+                                openFindings, incrementalParsed, workspace, job.getJobId());
+                        for (long resolvedId : resolvedIds) {
+                            try {
+                                platformService.replyToComment(
+                                        coords.organization(), coords.project(), coords.repository(),
+                                        request.prId(), resolvedId,
+                                        "This issue appears to have been addressed in the latest commits.");
+                                platformService.resolveComment(
+                                        coords.organization(), coords.project(), coords.repository(),
+                                        request.prId(), resolvedId);
+                            } catch (Exception e) {
+                                LOG.warnf("Failed to resolve comment %d on platform (non-fatal): %s",
+                                        resolvedId, e.getMessage());
+                            }
+                            commentStore.markResolved(resolvedId);
+                        }
+                        resolvedCount = resolvedIds.size();
+                        if (resolvedCount > 0) {
+                            LOG.infof("Auto-resolved %d previously flagged finding(s) on PR #%s",
+                                    resolvedCount, request.prId());
+                        }
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("Finding resolution pass failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
                         "PR review for #" + request.prId()));
@@ -337,7 +376,8 @@ public class AgentRunner {
             }
 
             String reviewSummary = reviewProcessor.postReviewComments(reviewOutput, coords, request.prId(),
-                    existingAgentComments, headSha, job.getJobId(), promptResult.commentableLines());
+                    existingAgentComments, headSha, job.getJobId(), promptResult.commentableLines(),
+                    resolvedCount);
 
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(reviewSummary);

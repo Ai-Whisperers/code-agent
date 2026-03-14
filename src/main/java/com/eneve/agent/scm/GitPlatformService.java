@@ -73,4 +73,11 @@ public interface GitPlatformService {
      * Fetch all comments authored by the agent on a pull request.
      */
     List<AgentComment> getAgentPrComments(String org, String project, String repo, String prId);
+
+    /**
+     * Resolve (close) a comment thread on a pull request.
+     * Platform-specific: Bitbucket sets comment state to "resolved",
+     * GitLab resolves the discussion, Azure DevOps sets the thread status to "Fixed".
+     */
+    void resolveComment(String org, String project, String repo, String prId, long commentId);
 }
