@@ -455,6 +455,7 @@ All config via environment variables (or `application.properties` for local dev)
 | `REVIEW_WEBHOOK_SKIP_AUTHORS` | Comma-separated PR authors to skip (avoid self-review) | `code-agent` |
 | `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | Only review PRs whose title contains this keyword | (optional) |
 | `REVIEW_FP_AUTO_SUPPRESS_THRESHOLD` | Number of `/fp` marks on the same pattern before auto-suppression creates a memory entry | `3` |
+| `REVIEW_PR_SUMMARY_ENABLED` | Generate a PR summary & walkthrough comment before the detailed review | `true` |
 
 ### Job Queue & Guardrails
 
@@ -791,7 +792,33 @@ Rules are prepended to the system prompt in order: shared rules, repo rules, inl
 
 ## AI Code Review
 
-The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps webhooks.
+The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps/GitLab webhooks.
+
+### PR Summary & Walkthrough
+
+When a PR is reviewed, the agent first generates a CodeRabbit-style summary comment with:
+
+- **High-level summary** — 2-3 sentences describing the purpose and impact of the PR
+- **Walkthrough table** — per-file breakdown of what changed and why
+
+This comment is posted before the detailed code review begins, so developers get an immediate overview of the PR while the full review runs. On re-reviews (new commits pushed), the summary comment is updated in-place rather than duplicated.
+
+**Example output:**
+
+> ## PR Summary
+>
+> ### Walkthrough
+> Adds a new caching layer for the user service that reduces database round-trips for frequently accessed profiles. The implementation uses Caffeine as the in-memory cache with configurable TTL and size limits.
+>
+> ### Changes
+> | File | Summary |
+> |------|---------|
+> | `src/main/java/UserCacheService.java` | New Caffeine-based cache service with TTL and eviction support |
+> | `src/main/java/UserService.java` | Updated to delegate reads through the cache layer |
+> | `pom.xml` | Added `com.github.ben-manes.caffeine` dependency |
+> | `src/test/java/UserCacheServiceTest.java` | Unit tests for cache hit, miss, and eviction scenarios |
+
+Disable per-environment with `REVIEW_PR_SUMMARY_ENABLED=false`.
 
 ### What it reviews
 
@@ -1040,6 +1067,7 @@ src/main/java/com/eneve/agent/
 │   ├── JobQueue.java            # Concurrent job queue
 │   ├── JobStore.java            # In-memory + PostgreSQL job store
 │   ├── CommentStore.java        # Tracks agent comments for reply detection and resolution metrics
+│   ├── PrSummaryGenerator.java  # PR description & walkthrough generation (single Claude call)
 │   ├── CommentFeedbackStore.java # False-positive feedback persistence (PostgreSQL)
 │   ├── CommentFeedbackEntry.java # False-positive feedback record
 │   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)

@@ -62,6 +62,7 @@ public class AgentRunner {
     @Inject CodeGraphStore codeGraphStore;
     @Inject CodeGraphIndexer codeGraphIndexer;
     @Inject CodeGraphQueryService codeGraphQueryService;
+    @Inject PrSummaryGenerator prSummaryGenerator;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -80,6 +81,9 @@ public class AgentRunner {
 
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
+
+    @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
+    boolean prSummaryEnabled;
 
     // ─── Run-Fix (implement a JIRA ticket) ──────────────────────────────
 
@@ -376,6 +380,21 @@ public class AgentRunner {
 
             workspace.putMetadata("workspace", coords.organization());
             workspace.putMetadata("repoSlug", coords.repository());
+
+            // ── PR Summary / Walkthrough (posted early so devs see it while review runs) ──
+            if (prSummaryEnabled) {
+                try {
+                    List<ParsedDiffFile> summaryFiles = DiffParser.parse(diff);
+                    String summaryBody = prSummaryGenerator.generate(
+                            prTitle, targetBranch, summaryFiles, job.getJobId());
+                    if (summaryBody != null) {
+                        postOrUpdatePrSummary(coords, request.prId(), existingAgentComments,
+                                summaryBody, job.getJobId());
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
+                }
+            }
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
@@ -1257,6 +1276,41 @@ public class AgentRunner {
     }
 
     // ─── Utilities ──────────────────────────────────────────────────────
+
+    /**
+     * Post a new PR walkthrough comment or update the existing one in-place.
+     * Looks for a previously posted comment tracked under the {@code __pr_summary__}
+     * marker in CommentStore. Falls back to creating a new comment on update failure.
+     */
+    private void postOrUpdatePrSummary(RepoCoordinates coords, String prId,
+                                       List<AgentComment> existingComments,
+                                       String body, String jobId) {
+        String org = coords.organization();
+        String project = coords.project();
+        String repo = coords.repository();
+
+        var existingId = commentStore.findPrSummaryCommentId(prId, org, repo);
+        if (existingId.isPresent()) {
+            long commentId = existingId.get();
+            try {
+                platformService.updatePrComment(org, project, repo, prId, commentId, body);
+                commentStore.savePrSummaryComment(commentId, prId, org, project, repo, jobId);
+                LOG.infof("Updated PR summary comment %d on PR #%s", commentId, prId);
+                return;
+            } catch (Exception e) {
+                LOG.warnf("Failed to update PR summary comment %d (may have been deleted): %s",
+                        commentId, e.getMessage());
+            }
+        }
+
+        safeComment(() -> {
+            long newId = platformService.addPrComment(org, project, repo, prId, body);
+            if (newId > 0) {
+                commentStore.savePrSummaryComment(newId, prId, org, project, repo, jobId);
+                LOG.infof("Created PR summary comment %d on PR #%s", newId, prId);
+            }
+        });
+    }
 
     private void safeJira(Runnable action) {
         try {

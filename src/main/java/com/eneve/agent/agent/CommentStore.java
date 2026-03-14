@@ -212,6 +212,75 @@ public class CommentStore {
     }
 
     /**
+     * Look up the platform comment ID of the PR walkthrough/summary for this PR.
+     * Returns empty if no walkthrough has been posted yet.
+     */
+    public Optional<Long> findPrSummaryCommentId(String prId, String org, String repo) {
+        String sql = """
+                SELECT comment_id FROM agent_comments
+                WHERE pr_id = ? AND workspace = ? AND repo_slug = ? AND file_path = '__pr_summary__'
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, prId);
+            ps.setString(2, org);
+            ps.setString(3, repo);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(rs.getLong("comment_id"));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to look up PR summary comment for PR #%s: %s", prId, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Persist (or replace) the PR walkthrough/summary comment ID for this PR.
+     * Deletes any existing __pr_summary__ row first so the comment ID is always current.
+     */
+    public void savePrSummaryComment(long commentId, String prId, String org, String project,
+                                     String repo, String reviewJobId) {
+        String delete = """
+                DELETE FROM agent_comments
+                WHERE pr_id = ? AND workspace = ? AND repo_slug = ? AND file_path = '__pr_summary__'
+                """;
+        String insert = """
+                INSERT INTO agent_comments
+                    (comment_id, pr_id, workspace, project, repo_slug, file_path, line_number,
+                     category, severity, finding_text, review_job_id)
+                VALUES (?, ?, ?, ?, ?, '__pr_summary__', 0, '', '', 'pr_summary', ?)
+                """;
+        try (Connection conn = dataSource.getConnection()) {
+            conn.setAutoCommit(false);
+            try (PreparedStatement del = conn.prepareStatement(delete);
+                 PreparedStatement ins = conn.prepareStatement(insert)) {
+                del.setString(1, prId);
+                del.setString(2, org);
+                del.setString(3, repo);
+                del.executeUpdate();
+
+                ins.setLong(1, commentId);
+                ins.setString(2, prId);
+                ins.setString(3, org);
+                ins.setString(4, project);
+                ins.setString(5, repo);
+                ins.setString(6, reviewJobId);
+                ins.executeUpdate();
+                conn.commit();
+                LOG.debugf("Saved PR summary comment %d for PR #%s (%s/%s)", commentId, prId, org, repo);
+            } catch (SQLException e) {
+                conn.rollback();
+                throw e;
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to save PR summary comment %d for PR #%s: %s", commentId, prId, e.getMessage());
+        }
+    }
+
+    /**
      * Persist (or replace) the review summary comment ID for this PR.
      * Deletes any existing __summary__ row first so the comment ID is always current.
      */
