@@ -27,6 +27,7 @@ public final class ToolDefinitions {
         return List.of(
                 ToolUnion.ofTool(readFile()),
                 ToolUnion.ofTool(searchCode()),
+                ToolUnion.ofTool(queryCodeGraph()),
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(listFiles())
         );
@@ -106,6 +107,28 @@ public final class ToolDefinitions {
                                 )))
                                 .build())
                         .addRequired("pattern")
+                        .build())
+                .build();
+    }
+
+    private static Tool queryCodeGraph() {
+        return Tool.builder()
+                .name("query_code_graph")
+                .description("Query the code graph to find callers, implementations, or dependents of a specific symbol. "
+                        + "Use this to understand the impact surface of changed code.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("symbol", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The symbol to query (e.g. 'MyClass.myMethod' or 'MyInterface')"
+                                )))
+                                .putAdditionalProperty("relation", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The relation to query: 'callers' (who calls this), 'implementations' (who implements/extends this), or 'dependents' (all edges pointing at this symbol)"
+                                )))
+                                .build())
+                        .addRequired("symbol")
+                        .addRequired("relation")
                         .build())
                 .build();
     }

@@ -59,6 +59,9 @@ public class AgentRunner {
     @Inject LearningExtractor learningExtractor;
     @Inject JobStore jobStore;
     @Inject FindingResolver findingResolver;
+    @Inject CodeGraphStore codeGraphStore;
+    @Inject CodeGraphIndexer codeGraphIndexer;
+    @Inject CodeGraphQueryService codeGraphQueryService;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -353,6 +356,27 @@ public class AgentRunner {
                 }
             }
 
+            // ── Code graph: index and query impact surface ──
+            String impactSection = "";
+            try {
+                List<String> changedFiles = DiffParser.parse(diff).stream()
+                        .map(ParsedDiffFile::path).toList();
+                if (codeGraphStore.hasGraph(coords.organization(), coords.repository())) {
+                    codeGraphIndexer.indexIncremental(workspace,
+                            coords.organization(), coords.repository(), changedFiles);
+                } else {
+                    codeGraphIndexer.indexFull(workspace,
+                            coords.organization(), coords.repository());
+                }
+                impactSection = codeGraphQueryService.buildImpactSection(
+                        coords.organization(), coords.repository(), changedFiles);
+            } catch (Exception e) {
+                LOG.warnf("Code graph indexing/query failed (non-fatal): %s", e.getMessage());
+            }
+
+            workspace.putMetadata("workspace", coords.organization());
+            workspace.putMetadata("repoSlug", coords.repository());
+
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
                         "PR review for #" + request.prId()));
@@ -360,7 +384,7 @@ public class AgentRunner {
 
             ReviewPromptResult promptResult = promptBuilder.buildReviewPrompt(
                     request, prTitle, targetBranch, diff, existingAgentComments, workspace,
-                    coords.organization(), coords.repository());
+                    coords.organization(), coords.repository(), impactSection);
 
             String reviewOutput;
             try {

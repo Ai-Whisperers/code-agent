@@ -68,6 +68,16 @@ public class AgentPromptBuilder {
                                                 List<AgentComment> existingComments,
                                                 WorkspaceContext workspace,
                                                 String bbWorkspace, String repoSlug) {
+        return buildReviewPrompt(request, prTitle, targetBranch, diff, existingComments,
+                workspace, bbWorkspace, repoSlug, "");
+    }
+
+    public ReviewPromptResult buildReviewPrompt(ReviewPrRequest request, String prTitle,
+                                                String targetBranch, String diff,
+                                                List<AgentComment> existingComments,
+                                                WorkspaceContext workspace,
+                                                String bbWorkspace, String repoSlug,
+                                                String impactSection) {
 
         RepoSettings settings = loadRepoSettings(bbWorkspace, repoSlug);
 
@@ -95,11 +105,11 @@ public class AgentPromptBuilder {
             LOG.infof("Using custom review prompt for %s/%s", bbWorkspace, repoSlug);
             reviewInstructions = applyPlaceholders(settings.reviewPrompt(),
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    falsePositiveSection, diffTruncated, annotatedDiff);
+                    falsePositiveSection, impactSection, diffTruncated, annotatedDiff);
         } else {
             reviewInstructions = buildDefaultReviewInstructions(
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    falsePositiveSection, diffTruncated, annotatedDiff);
+                    falsePositiveSection, impactSection, diffTruncated, annotatedDiff);
         }
 
         String guardrailText = """
@@ -276,7 +286,7 @@ public class AgentPromptBuilder {
 
     private String applyPlaceholders(String template, String prTitle, String targetBranch,
                                      String previousComments, String memorySection,
-                                     String falsePositiveSection,
+                                     String falsePositiveSection, String impactSection,
                                      boolean diffTruncated, String annotatedDiff) {
         String diffNote = diffTruncated
                 ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n"
@@ -287,6 +297,7 @@ public class AgentPromptBuilder {
                 .replace("{{PREVIOUS_COMMENTS}}", previousComments != null ? previousComments : "")
                 .replace("{{MEMORY_SECTION}}", memorySection != null ? memorySection : "")
                 .replace("{{FALSE_POSITIVE_SECTION}}", falsePositiveSection != null ? falsePositiveSection : "")
+                .replace("{{IMPACT_SECTION}}", impactSection != null ? impactSection : "")
                 .replace("{{DIFF_NOTE}}", diffNote)
                 .replace("{{DIFF}}", annotatedDiff != null ? annotatedDiff : "");
     }
@@ -295,6 +306,7 @@ public class AgentPromptBuilder {
                                                   String previousCommentsSection,
                                                   String memorySection,
                                                   String falsePositiveSection,
+                                                  String impactSection,
                                                   boolean diffTruncated,
                                                   String annotatedDiff) {
         return """
@@ -307,9 +319,11 @@ public class AgentPromptBuilder {
                 %s
                 %s
                 %s
+                %s
                 ## Context Gathering (do this FIRST)
                 Before writing any findings, explore the repository for context relevant to the changed code:
                 - Use `search_code` to find callers, implementations, or usages of changed classes, methods, or interfaces.
+                - Use `query_code_graph` to find callers, implementations, or dependents of a specific symbol.
                 - Use `read_file` to examine interfaces, base classes, utility files, or configuration referenced in the diff.
                 - Use `list_files` to understand the module and package structure around changed files.
                 - Look at test files for changed modules to understand expected behaviour and existing coverage.
@@ -393,7 +407,7 @@ public class AgentPromptBuilder {
                 - **summary**: 2-4 sentence overall assessment
                 %s
                 ## Instructions
-                - Use `search_code`, `read_file`, and `list_files` to gather context before finalising findings (see Context Gathering above).
+                - Use `search_code`, `query_code_graph`, `read_file`, and `list_files` to gather context before finalising findings (see Context Gathering above).
                 - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
                 - Be constructive and specific. Provide actionable feedback.
                 - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
@@ -412,6 +426,7 @@ public class AgentPromptBuilder {
                 diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
                 memorySection,
                 falsePositiveSection,
+                impactSection != null ? impactSection : "",
                 previousCommentsSection,
                 diffTruncated ? "(truncated — some files omitted)\n" : "",
                 annotatedDiff
