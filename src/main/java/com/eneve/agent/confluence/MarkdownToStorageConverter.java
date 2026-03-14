@@ -50,9 +50,11 @@ public final class MarkdownToStorageConverter {
             return new ConversionResult("", Collections.emptyList());
         }
 
+        String normalized = normalizeMarkdown(markdown);
+
         List<String> codeBlocks = new ArrayList<>();
         List<MermaidDiagram> mermaidDiagrams = new ArrayList<>();
-        String result = extractCodeBlocks(markdown, codeBlocks, mermaidDiagrams);
+        String result = extractCodeBlocks(normalized, codeBlocks, mermaidDiagrams);
 
         result = convertTables(result);
         result = convertBlockquotes(result);
@@ -64,6 +66,7 @@ public final class MarkdownToStorageConverter {
         result = convertItalic(result);
         result = convertInlineCode(result);
         result = convertParagraphs(result);
+        result = cleanupHtml(result);
 
         result = restoreCodeBlocks(result, codeBlocks);
 
@@ -301,6 +304,51 @@ public final class MarkdownToStorageConverter {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * Normalizes markdown before conversion:
+     * - Collapses whitespace-only lines to truly empty lines
+     * - Ensures a blank line exists before the first list item so
+     *   convertParagraphs doesn't merge text and lists into one block
+     */
+    private static String normalizeMarkdown(String markdown) {
+        String[] lines = markdown.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i];
+            if (line.trim().isEmpty()) {
+                sb.append("\n");
+                continue;
+            }
+            boolean isList = LIST_ITEM_UL.matcher(line.trim()).matches()
+                    || LIST_ITEM_OL.matcher(line.trim()).matches();
+            if (isList && i > 0) {
+                String prev = lines[i - 1];
+                boolean prevEmpty = prev.trim().isEmpty();
+                boolean prevIsList = LIST_ITEM_UL.matcher(prev.trim()).matches()
+                        || LIST_ITEM_OL.matcher(prev.trim()).matches();
+                if (!prevEmpty && !prevIsList) {
+                    sb.append("\n");
+                }
+            }
+            sb.append(line).append("\n");
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Strips artefacts from the final HTML: empty list items, empty paragraphs,
+     * and stray whitespace-only tags.
+     */
+    private static String cleanupHtml(String html) {
+        String result = html;
+        result = result.replaceAll("<li>\\s*</li>\\n?", "");
+        result = result.replaceAll("<p>\\s*</p>\\n?", "");
+        result = result.replaceAll("<p>\\s*<br/>\\s*</p>\\n?", "");
+        result = result.replaceAll("(<ul>\\n?)\\s*</ul>\\n?", "");
+        result = result.replaceAll("(<ol>\\n?)\\s*</ol>\\n?", "");
+        return result;
     }
 
     private static String escapeXml(String text) {
