@@ -430,6 +430,9 @@ public class AgentPromptBuilder {
                 - Use clear language and avoid jargon without explanation.
                 - Every Mermaid diagram must be in a fenced code block with the `mermaid` language tag.
                 - Keep diagrams focused — no more than ~15 nodes per diagram. Split large diagrams.
+                - **erDiagram tips**: Use simple relationship operators (e.g. `||--o{`). Do NOT add spaces \
+                inside the operator. Attribute types must be single words (use `varchar` not `varchar(255)`). \
+                Enclose entity names containing special chars in double-quotes.
                 - Use tables for structured data (endpoints, config properties, DB columns).
                 - Cross-reference between docs using relative links (e.g. `[see API docs](api.md)`).
                 - Do NOT reference any specific git hosting platform (e.g. GitHub, GitLab, Bitbucket) unless the \

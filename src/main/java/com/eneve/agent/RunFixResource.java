@@ -472,7 +472,7 @@ public class RunFixResource {
         }
 
         String branchName = request.branchName();
-        if (!request.commitDirect() && (branchName == null || branchName.isBlank())) {
+        if (!request.isCommitDirect() && (branchName == null || branchName.isBlank())) {
             branchName = "agent/generate-docs";
         }
 

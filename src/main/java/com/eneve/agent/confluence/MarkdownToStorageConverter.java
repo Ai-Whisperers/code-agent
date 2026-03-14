@@ -18,8 +18,8 @@ public final class MarkdownToStorageConverter {
 
     private MarkdownToStorageConverter() {}
 
-    private static final String PLACEHOLDER_PREFIX = "\u0000CODE_BLOCK_";
-    private static final String PLACEHOLDER_SUFFIX = "\u0000";
+    private static final String PLACEHOLDER_PREFIX = "\u00abCODE_BLOCK_";
+    private static final String PLACEHOLDER_SUFFIX = "\u00bb";
 
     private static final Pattern FENCED_CODE = Pattern.compile(
             "^```(\\w*)\\s*\\n(.*?)^```\\s*$", Pattern.DOTALL | Pattern.MULTILINE);

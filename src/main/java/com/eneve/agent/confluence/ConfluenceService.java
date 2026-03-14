@@ -154,12 +154,17 @@ public class ConfluenceService {
         }
     }
 
+    private static final int MERMAID_MAX_RETRIES = 3;
+    private static final long MERMAID_INITIAL_BACKOFF_MS = 2_000;
+
     /**
      * Renders a Mermaid diagram to PNG via the mermaid.ink public service.
      * Uses the pako (zlib deflate) encoding format expected by mermaid.ink.
+     * Retries on transient errors (HTTP 5xx, timeouts) with exponential backoff.
      */
     byte[] renderMermaidToPng(String mermaidCode) throws Exception {
-        String json = "{\"code\":" + MAPPER.writeValueAsString(mermaidCode)
+        String sanitized = sanitizeMermaidCode(mermaidCode);
+        String json = "{\"code\":" + MAPPER.writeValueAsString(sanitized)
                 + ",\"mermaid\":{\"theme\":\"default\"}}";
 
         Deflater deflater = new Deflater(9);
@@ -185,11 +190,68 @@ public class ConfluenceService {
                 .GET()
                 .build();
 
-        HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
-        if (response.statusCode() != 200) {
-            throw new RuntimeException("mermaid.ink returned HTTP " + response.statusCode());
+        Exception lastException = null;
+        for (int attempt = 1; attempt <= MERMAID_MAX_RETRIES; attempt++) {
+            try {
+                HttpResponse<byte[]> response = httpClient.send(request,
+                        HttpResponse.BodyHandlers.ofByteArray());
+                int status = response.statusCode();
+
+                if (status == 200) {
+                    return response.body();
+                }
+
+                if (status >= 500) {
+                    lastException = new RuntimeException(
+                            "mermaid.ink returned HTTP " + status);
+                    LOG.warnf("mermaid.ink HTTP %d (attempt %d/%d), retrying...",
+                            status, attempt, MERMAID_MAX_RETRIES);
+                } else {
+                    String body = new String(response.body(), StandardCharsets.UTF_8);
+                    String snippet = body.length() > 200 ? body.substring(0, 200) : body;
+                    throw new RuntimeException(
+                            "mermaid.ink returned HTTP " + status + ": " + snippet);
+                }
+            } catch (java.net.http.HttpTimeoutException e) {
+                lastException = e;
+                LOG.warnf("mermaid.ink timeout (attempt %d/%d), retrying...",
+                        attempt, MERMAID_MAX_RETRIES);
+            }
+
+            if (attempt < MERMAID_MAX_RETRIES) {
+                long backoff = MERMAID_INITIAL_BACKOFF_MS * (1L << (attempt - 1));
+                Thread.sleep(backoff);
+            }
         }
-        return response.body();
+        throw new RuntimeException("mermaid.ink failed after " + MERMAID_MAX_RETRIES
+                + " attempts", lastException);
+    }
+
+    /**
+     * Sanitizes Mermaid code for rendering compatibility:
+     * - Normalizes erDiagram relationship lines (removes extra spaces)
+     * - Ensures diagram type keywords are on their own line
+     */
+    static String sanitizeMermaidCode(String code) {
+        if (code == null || code.isBlank()) return code;
+
+        String trimmed = code.strip();
+
+        // erDiagram: ensure relationship operators have no leading/trailing whitespace
+        // and attribute definitions are clean
+        if (trimmed.startsWith("erDiagram")) {
+            String[] lines = trimmed.split("\n");
+            StringBuilder sb = new StringBuilder();
+            for (String line : lines) {
+                String stripped = line.stripTrailing();
+                // Collapse multiple spaces around ER relationship operators
+                stripped = stripped.replaceAll("\\s*(\\|[o|{])(-+)(o[||}]|[||}])\\s*", " $1$2$3 ");
+                sb.append(stripped).append('\n');
+            }
+            return sb.toString().strip();
+        }
+
+        return trimmed;
     }
 
     /**

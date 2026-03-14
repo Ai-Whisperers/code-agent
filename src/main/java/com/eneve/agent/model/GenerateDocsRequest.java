@@ -32,10 +32,14 @@ public record GenerateDocsRequest(
         @Schema(description = "Override repo settings for Confluence publishing (null = use repo settings)")
         Boolean publishConfluence,
 
-        @Schema(description = "If true, commit directly to targetBranch instead of creating a PR")
-        boolean commitDirect
+        @Schema(description = "If true, commit directly to targetBranch instead of creating a PR (default: false)")
+        Boolean commitDirect
 ) {
     public String targetBranchOrDefault() {
-        return (targetBranch != null && !targetBranch.isBlank()) ? targetBranch : "develop";
+        return (targetBranch != null && !targetBranch.isBlank()) ? targetBranch : "main";
+    }
+
+    public boolean isCommitDirect() {
+        return commitDirect != null && commitDirect;
     }
 }

@@ -1249,7 +1249,9 @@ public class AgentRunner {
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 
-        LOG.infof("GenerateDocs job %s starting for %s", job.getJobId(), request.repoUrl());
+        LOG.infof("GenerateDocs job %s starting for %s (commitDirect=%s, branch=%s, target=%s)",
+                job.getJobId(), request.repoUrl(), request.isCommitDirect(),
+                request.branchName(), request.targetBranchOrDefault());
 
         RepoCoordinates coords;
         try {
@@ -1275,7 +1277,7 @@ public class AgentRunner {
             String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             String targetBranch = request.targetBranchOrDefault();
 
-            if (request.commitDirect()) {
+            if (request.isCommitDirect()) {
                 try {
                     workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
                 } catch (Exception e) {
@@ -1336,7 +1338,7 @@ public class AgentRunner {
                 LOG.warnf("Doc embedding failed (non-fatal): %s", e.getMessage());
             }
 
-            String pushBranch = request.commitDirect() ? targetBranch : request.branchName();
+            String pushBranch = request.isCommitDirect() ? targetBranch : request.branchName();
             String commitMsg = "docs: generate project documentation";
 
             boolean hasChanges;
@@ -1355,7 +1357,7 @@ public class AgentRunner {
                 return;
             }
 
-            if (request.commitDirect()) {
+            if (request.isCommitDirect()) {
                 try {
                     workspace.pullRebase(targetBranch, jobTimeoutMinutes);
                 } catch (Exception e) {
@@ -1370,7 +1372,7 @@ public class AgentRunner {
                 return;
             }
 
-            if (request.commitDirect()) {
+            if (request.isCommitDirect()) {
                 job.setStatus(JobStatus.SUCCESS);
                 job.setSummary(summary);
                 jobStore.archive(job);
