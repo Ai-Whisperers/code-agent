@@ -100,6 +100,14 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Pull with rebase to incorporate remote changes before pushing.
+     * Used when committing directly to a shared branch to avoid push rejections.
+     */
+    public void pullRebase(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
+        runGit(timeoutMinutes, "pull", "--rebase", "origin", branchName);
+    }
+
+    /**
      * Fetch a remote branch so it is available as origin/{branch} for diff operations.
      */
     public void fetchBranch(String branchName, long timeoutMinutes) throws IOException, InterruptedException {

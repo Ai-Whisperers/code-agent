@@ -1255,7 +1255,7 @@ public class AgentRunner {
         try {
             coords = RepoCoordinates.parse(request.repoUrl());
         } catch (IllegalArgumentException e) {
-            fail(job, "Invalid repo URL: " + e.getMessage());
+            failGenerateDocs(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
 
@@ -1266,7 +1266,7 @@ public class AgentRunner {
                 .orElse(RepoSettings.defaults(ws, repoSlug));
 
         if (!settings.docsEnabled()) {
-            fail(job, "Documentation generation is disabled for " + ws + "/" + repoSlug);
+            failGenerateDocs(job, "Documentation generation is disabled for " + ws + "/" + repoSlug);
             return;
         }
 
@@ -1279,7 +1279,7 @@ public class AgentRunner {
                 try {
                     workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
                 } catch (Exception e) {
-                    fail(job, "Clone failed: " + e.getMessage());
+                    failGenerateDocs(job, "Clone failed: " + e.getMessage());
                     return;
                 }
             } else {
@@ -1287,7 +1287,7 @@ public class AgentRunner {
                     workspace.cloneAndCreateBranch(authUrl, targetBranch,
                             request.branchName(), jobTimeoutMinutes);
                 } catch (Exception e) {
-                    fail(job, "Clone/branch failed: " + e.getMessage());
+                    failGenerateDocs(job, "Clone/branch failed: " + e.getMessage());
                     return;
                 }
             }
@@ -1326,7 +1326,7 @@ public class AgentRunner {
                                 + "Start by exploring the project structure, then create all doc files.",
                         generateDocsMaxIterations, job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
-                fail(job, "Agent loop error: " + e.getMessage());
+                failGenerateDocs(job, "Agent loop error: " + e.getMessage());
                 return;
             }
 
@@ -1343,7 +1343,7 @@ public class AgentRunner {
             try {
                 hasChanges = workspace.commitAll(commitMsg);
             } catch (Exception e) {
-                fail(job, "Commit failed: " + e.getMessage());
+                failGenerateDocs(job, "Commit failed: " + e.getMessage());
                 return;
             }
 
@@ -1355,10 +1355,18 @@ public class AgentRunner {
                 return;
             }
 
+            if (request.commitDirect()) {
+                try {
+                    workspace.pullRebase(targetBranch, jobTimeoutMinutes);
+                } catch (Exception e) {
+                    LOG.warnf("Pull --rebase before push failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
             try {
                 workspace.push(pushBranch, jobTimeoutMinutes);
             } catch (Exception e) {
-                fail(job, "Push failed: " + e.getMessage());
+                failGenerateDocs(job, "Push failed: " + e.getMessage());
                 return;
             }
 
@@ -1382,12 +1390,17 @@ public class AgentRunner {
                     jobStore.update(job);
                     LOG.infof("GenerateDocs job %s completed: PR %s created", job.getJobId(), prResult[0]);
                 } catch (Exception e) {
-                    fail(job, "Create PR failed: " + e.getMessage());
+                    failGenerateDocs(job, "Create PR failed: " + e.getMessage());
                 }
             }
 
+            String webhookUrl = resolveWebhookUrl(request.n8nWebhookUrl());
+            RunResult result = buildGenerateDocsResult(job, true);
+            teamsNotifier.sendNotification(result);
+            n8nNotifier.sendResult(webhookUrl, result);
+
         } catch (Exception e) {
-            fail(job, "Unexpected error in doc generation: " + e.getMessage());
+            failGenerateDocs(job, "Unexpected error in doc generation: " + e.getMessage());
         }
     }
 
@@ -1584,6 +1597,21 @@ public class AgentRunner {
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
+    private void failGenerateDocs(JobRecord job, String message) {
+        LOG.errorf("GenerateDocs job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+
+        RunResult result = buildGenerateDocsResult(job, false);
+        teamsNotifier.sendNotification(result);
+
+        GenerateDocsRequest request = job.getGenerateDocsRequest();
+        if (request != null) {
+            n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+        }
+    }
+
     private void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
@@ -1634,6 +1662,16 @@ public class AgentRunner {
                 job.getJobId(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.branchName(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged());
+    }
+
+    private RunResult buildGenerateDocsResult(JobRecord job, boolean success) {
+        GenerateDocsRequest req = job.getGenerateDocsRequest();
+        return new RunResult(
+                job.getJobId(), success,
+                "",
+                req != null ? req.branchName() : "",
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
     }
