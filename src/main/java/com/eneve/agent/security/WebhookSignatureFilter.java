@@ -51,6 +51,9 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     @ConfigProperty(name = "webhook.secret.jira")
     Optional<String> jiraSecret;
 
+    @ConfigProperty(name = "webhook.secret.gitlab")
+    Optional<String> gitlabSecret;
+
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
         String path = ctx.getUriInfo().getPath();
@@ -62,6 +65,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             verifyBitbucket(ctx);
         } else if (path.contains("azuredevops/")) {
             verifyAzureDevOps(ctx);
+        } else if (path.contains("gitlab/")) {
+            verifyGitLab(ctx);
         } else if (path.contains("jira")) {
             verifyJira(ctx);
         }
@@ -137,6 +142,30 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
         LOG.warn("Azure DevOps webhook rejected — no recognized auth header found");
         abort(ctx);
+    }
+
+    /**
+     * GitLab sends the webhook secret token as the {@code X-Gitlab-Token} header value.
+     * Verification is a constant-time string comparison (no HMAC — GitLab does not sign
+     * the payload body by default for standard webhooks).
+     */
+    private void verifyGitLab(ContainerRequestContext ctx) {
+        String secret = gitlabSecret.orElse("");
+        if (isNotConfigured(secret)) return;
+
+        String tokenHeader = ctx.getHeaderString("X-Gitlab-Token");
+        if (tokenHeader == null) {
+            LOG.warn("GitLab webhook rejected — missing X-Gitlab-Token header");
+            abort(ctx);
+            return;
+        }
+
+        if (!MessageDigest.isEqual(
+                secret.getBytes(StandardCharsets.UTF_8),
+                tokenHeader.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("GitLab webhook rejected — X-Gitlab-Token mismatch");
+            abort(ctx);
+        }
     }
 
     /**

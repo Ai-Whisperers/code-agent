@@ -13,15 +13,19 @@ public record RepoSettings(
         String workspace,
         String repoSlug,
         boolean reviewEnabled,
+        boolean vectorEnabled,
+        boolean docsEnabled,
         List<String> ruleNames,
         String reviewPrompt,
         List<String> disabledHooks,
+        String confluenceSpaceKey,
+        String confluenceParentPageId,
         Instant createdAt,
         Instant updatedAt
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
-        return new RepoSettings(null, workspace, repoSlug, true,
-                List.of(), null, List.of(), Instant.now(), Instant.now());
+        return new RepoSettings(null, workspace, repoSlug, true, false, true,
+                List.of(), null, List.of(), null, null, Instant.now(), Instant.now());
     }
 }

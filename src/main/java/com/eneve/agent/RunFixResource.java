@@ -13,6 +13,8 @@ import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
@@ -100,8 +102,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -169,8 +169,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -293,8 +291,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -352,8 +348,6 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
@@ -398,13 +392,104 @@ public class RunFixResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
         LOG.infof("Fix-PR job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
         return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
+    }
+
+    @POST
+    @Path("/generate-tests")
+    @Tag(name = "Code Review")
+    @Operation(
+            operationId = "generateTests",
+            summary = "Submit a unit test generation job",
+            description = "Queues a job that clones the repo, uses the AI agent to generate unit tests "
+                    + "for the specified source files (or discovers untested classes automatically), "
+                    + "validates the tests with `mvn test`, and creates a pull request with the generated tests. "
+                    + "Returns immediately with a jobId for polling."
+    )
+    @RequestBody(
+            required = true,
+            description = "Unit test generation specification with repo URL and branch name",
+            content = @Content(schema = @Schema(implementation = GenerateTestsRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Test generation job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"repoUrl is required\"}"))),
+            @APIResponse(responseCode = "429", description = "Job queue is full",
+                    content = @Content(schema = @Schema(example = "{\"error\": \"Job queue is full\"}")))
+    })
+    public Response generateTests(GenerateTestsRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+        if (request.branchName() == null || request.branchName().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "branchName is required")).build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        LOG.infof("GenerateTests job %s accepted for %s (branch: %s)", jobId, request.repoUrl(), request.branchName());
+        return Response.accepted(Map.of("jobId", jobId, "branch", request.branchName())).build();
+    }
+
+    @POST
+    @Path("/generate-docs")
+    @Tag(name = "Documentation")
+    @Operation(
+            operationId = "generateDocs",
+            summary = "Submit a documentation generation job",
+            description = "Queues a job that clones the repo, uses the AI agent to explore the codebase "
+                    + "and generate comprehensive Markdown documentation in the docs/ folder. "
+                    + "Includes architecture, API, data model, onboarding, flow, and configuration docs "
+                    + "with Mermaid diagrams. Optionally publishes to Confluence. "
+                    + "Returns immediately with a jobId for polling."
+    )
+    @RequestBody(
+            required = true,
+            description = "Documentation generation specification",
+            content = @Content(schema = @Schema(implementation = GenerateDocsRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Docs generation job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields"),
+            @APIResponse(responseCode = "429", description = "Job queue is full")
+    })
+    public Response generateDocs(GenerateDocsRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+
+        String branchName = request.branchName();
+        if (!request.commitDirect() && (branchName == null || branchName.isBlank())) {
+            branchName = "agent/generate-docs";
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        GenerateDocsRequest effective = new GenerateDocsRequest(
+                request.repoUrl(), branchName, request.targetBranch(),
+                request.ruleNames(), request.extraRules(), request.n8nWebhookUrl(),
+                request.publishConfluence(), request.commitDirect());
+        JobRecord job = new JobRecord(jobId, effective);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        LOG.infof("GenerateDocs job %s accepted for %s", jobId, request.repoUrl());
+        return Response.accepted(Map.of("jobId", jobId)).build();
     }
 
     @GET
@@ -596,8 +681,6 @@ public class RunFixResource {
             jobStore.put(job);
 
             if (!jobQueue.submit(job)) {
-                job.setStatus(JobStatus.FAILED);
-                job.setErrorMessage("Job queue is full");
                 skipped.add(Map.of("key", issue.key(), "reason", "Queue full"));
                 break;
             }

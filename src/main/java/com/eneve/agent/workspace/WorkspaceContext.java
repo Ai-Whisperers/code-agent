@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -18,6 +20,7 @@ public class WorkspaceContext implements AutoCloseable {
     private static final Logger LOG = Logger.getLogger(WorkspaceContext.class);
 
     private final Path root;
+    private final Map<String, String> metadata = new HashMap<>();
 
     private WorkspaceContext(Path root) {
         this.root = root;
@@ -31,6 +34,14 @@ public class WorkspaceContext implements AutoCloseable {
 
     public Path getRoot() {
         return root;
+    }
+
+    public void putMetadata(String key, String value) {
+        metadata.put(key, value);
+    }
+
+    public String getMetadata(String key) {
+        return metadata.get(key);
     }
 
     /**

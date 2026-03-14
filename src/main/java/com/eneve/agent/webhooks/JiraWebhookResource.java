@@ -9,7 +9,6 @@ import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.RunFixRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -190,8 +189,6 @@ public class JiraWebhookResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429)
                     .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
                     .build();

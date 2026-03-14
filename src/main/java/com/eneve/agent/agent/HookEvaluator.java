@@ -9,7 +9,6 @@ import java.util.regex.PatternSyntaxException;
 
 import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -88,8 +87,6 @@ public class HookEvaluator {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             LOG.warnf("Hook '%s' job rejected: queue full", hook.name());
             return null;
         }
