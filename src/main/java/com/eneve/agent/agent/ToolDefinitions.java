@@ -89,7 +89,7 @@ public final class ToolDefinitions {
     private static Tool runCommand() {
         return Tool.builder()
                 .name("run_command")
-                .description("Run a shell command in the repository root. Only allowed commands: mvn, gradle, git diff, git status, ls, find, cat. Returns exit code and output.")
+                .description("Run a shell command in the repository root. Only allowed commands: ./mvnw, mvn, gradle, git diff, git status, ls, find, cat. Prefer ./mvnw over mvn when a Maven wrapper is present. Returns exit code and output.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("command", JsonValue.from(Map.of(

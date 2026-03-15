@@ -165,7 +165,8 @@ public class AgentPromptBuilder {
                 - Use `write_file` to make the necessary fixes.
                 - Address ALL review comments, not just some of them.
                 - Only change code that is relevant to the review comments. Do not refactor unrelated code.
-                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - After making changes, run: `./mvnw test` if `./mvnw` exists in the project root, \
+                otherwise `mvn test` (or `gradle test` if `build.gradle` is present)
                 - If tests fail, fix the test failures before completing.
                 - Provide a summary of all changes you made.
                 """.formatted(
@@ -250,7 +251,8 @@ public class AgentPromptBuilder {
                 - If a test file already exists for a class, ADD missing test cases rather than replacing the file.
 
                 ## After Writing Tests
-                - Run `mvn test` (or `gradle test` if there is no `pom.xml`) to verify the tests compile and pass.
+                - Run `./mvnw test` if `./mvnw` exists in the project root, otherwise `mvn test` \
+                (or `gradle test` if there is no `pom.xml`) to verify the tests compile and pass.
                 - If tests fail, read the error output carefully, fix the failures, and re-run.
                 - Repeat until all tests pass.
                 - Provide a summary listing which test files were created or modified and the number of test \
@@ -326,7 +328,8 @@ public class AgentPromptBuilder {
                 - Use `read_file` to examine the current code around the issue.
                 - Use `write_file` to apply the fix.
                 - Do NOT change unrelated code. Keep the fix as minimal and targeted as possible.
-                - After fixing, run: mvn test (or gradle test if build.gradle is present)
+                - After fixing, run: `./mvnw test` if `./mvnw` exists in the project root, \
+                otherwise `mvn test` (or `gradle test` if `build.gradle` is present)
                 - If tests fail, fix the test failures before completing.
                 - Provide a brief summary of what you changed.
                 """.formatted(
@@ -656,8 +659,8 @@ public class AgentPromptBuilder {
                 ## Constraints
                 - Preserve ALL existing method signatures (name, parameter types, return type, visibility).
                 - Do NOT delete or rename public/protected methods; only add private helpers.
-                - Ensure all existing tests still pass by running: `mvn test`
-                  (or `gradle test` if there is no `pom.xml`).
+                - Ensure all existing tests still pass by running: `./mvnw test` if `./mvnw` exists \
+                in the project root, otherwise `mvn test` (or `gradle test` if there is no `pom.xml`).
                 - If tests fail after a refactoring, REVERT that specific change and try a different strategy.
                 - Stop once each of the listed methods has been refactored or you cannot reduce CC further
                   without breaking tests.
@@ -692,7 +695,8 @@ public class AgentPromptBuilder {
                 - Do NOT modify files under these paths: %s
                 - Do NOT modify ANY file under src/main/java — only write or update files under src/test/java.
                 - Only run allowed commands: %s
-                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - After making changes, run: `./mvnw test` if `./mvnw` exists in the project root, \
+                otherwise `mvn test` (or `gradle test` if `build.gradle` is present)
                 - If tests fail, report the failure and do NOT proceed
                 - Stop as soon as all requested tests have been written and pass.
                 - Never read or write files outside the repository root.
@@ -708,7 +712,8 @@ public class AgentPromptBuilder {
                 - Do NOT modify files under these paths: %s
                 - Only run allowed commands: %s
                 - Do NOT modify more than %d files or %d lines
-                - After making changes, run: mvn test (or gradle test if build.gradle is present)
+                - After making changes, run: `./mvnw test` if `./mvnw` exists in the project root, \
+                otherwise `mvn test` (or `gradle test` if `build.gradle` is present)
                 - If tests fail, report the failure and do NOT proceed
                 - %s
                 - Never read or write files outside the repository root.
