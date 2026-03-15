@@ -80,4 +80,23 @@ public interface GitPlatformService {
      * GitLab resolves the discussion, Azure DevOps sets the thread status to "Fixed".
      */
     void resolveComment(String org, String project, String repo, String prId, long commentId);
+
+    /**
+     * Upload a binary file to platform-specific file hosting and return its public URL.
+     * Used to host rendered diagram images that can be embedded in PR comments.
+     * <p>
+     * For Bitbucket Cloud this uploads to the repository Downloads section.
+     * Implementations for platforms that do not support file uploads return {@code null}.
+     *
+     * @param org         workspace / organization
+     * @param repo        repository slug / name
+     * @param filename    target filename (re-uploading the same name replaces the file)
+     * @param data        raw file bytes
+     * @param contentType MIME type of the file (e.g. {@code "image/png"})
+     * @return public URL of the uploaded file, or {@code null} if not supported
+     */
+    default String uploadDownload(String org, String repo, String filename,
+                                  byte[] data, String contentType) {
+        return null;
+    }
 }

@@ -1,6 +1,8 @@
 package com.eneve.agent.agent;
 
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 import com.anthropic.client.AnthropicClient;
@@ -35,6 +37,27 @@ public class PrSummaryGenerator {
     private static final Logger LOG = Logger.getLogger(PrSummaryGenerator.class);
     private static final String MARKER = "<!-- agent-pr-summary -->";
     private static final int MAX_DIFF_CHARS = 60_000;
+    static final String DIAGRAM_PLACEHOLDER_PREFIX = "DIAGRAM_UPLOAD:";
+
+    /**
+     * A diagram that should be rendered to PNG and uploaded to get a real image URL.
+     *
+     * @param filename     suggested filename for the uploaded PNG (e.g. {@code mermaid-pr42-1.png})
+     * @param placeholder  the placeholder URL embedded in the markdown body
+     *                     (e.g. {@code DIAGRAM_UPLOAD:mermaid-pr42-1.png})
+     * @param mermaidSource raw Mermaid diagram source (without fences)
+     */
+    public record PendingDiagram(String filename, String placeholder, String mermaidSource) {}
+
+    /**
+     * The result of {@link #generate}: the formatted markdown body plus any diagrams
+     * that need to be rendered and uploaded before the comment is posted.
+     * <p>
+     * When {@code pendingDiagrams} is empty the {@code body} is ready to post as-is.
+     * When diagrams are present, each placeholder in {@code body} must be replaced
+     * with the real upload URL before posting.
+     */
+    public record SummaryResult(String body, List<PendingDiagram> pendingDiagrams) {}
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -44,6 +67,9 @@ public class PrSummaryGenerator {
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
 
+    @ConfigProperty(name = "pr.summary.diagram.upload.enabled", defaultValue = "true")
+    boolean diagramUploadEnabled;
+
     @Inject
     AiCallStore aiCallStore;
 
@@ -51,14 +77,18 @@ public class PrSummaryGenerator {
     MermaidRenderer mermaidRenderer;
 
     /**
-     * Generate a PR summary comment body from the diff. Returns fully formatted
-     * markdown ready to be posted as a PR comment, or null if generation fails.
+     * Generate a PR summary from the diff.
+     * <p>
+     * Returns a {@link SummaryResult} containing the formatted markdown body and any
+     * {@link PendingDiagram}s that must be rendered and uploaded before posting.
+     * Returns {@code null} if the diff is empty or the Claude call fails.
      *
+     * @param prId          pull request identifier (used to generate stable diagram filenames)
      * @param diagramContext optional code-graph relationship text for diagram generation;
      *                       pass null or blank to skip diagram generation
      */
-    public String generate(String prTitle, String targetBranch, List<ParsedDiffFile> parsedFiles,
-                           String jobId, String diagramContext) {
+    public SummaryResult generate(String prTitle, String targetBranch, List<ParsedDiffFile> parsedFiles,
+                                  String jobId, String diagramContext, String prId) {
         if (parsedFiles == null || parsedFiles.isEmpty()) {
             return null;
         }
@@ -72,7 +102,7 @@ public class PrSummaryGenerator {
             return null;
         }
 
-        return formatComment(responseText, parsedFiles);
+        return formatComment(responseText, parsedFiles, prId);
     }
 
     /** Returns the HTML marker used to identify existing summary comments. */
@@ -239,10 +269,19 @@ public class PrSummaryGenerator {
     }
 
     /**
-     * Parse Claude's JSON response and format into a markdown comment body.
-     * Falls back to a minimal walkthrough if JSON parsing fails.
+     * Parse Claude's JSON response and format into a {@link SummaryResult}.
+     * <p>
+     * When the platform is Bitbucket and {@code diagramUploadEnabled} is {@code true},
+     * diagram blocks are replaced with placeholder URLs and the raw Mermaid source is
+     * returned as {@link PendingDiagram} records for the caller to render and upload.
+     * For all other platforms, diagrams are rendered inline via {@link MermaidRenderer}
+     * (native fences or mermaid.ink) and the pending list is empty.
+     * <p>
+     * Falls back to a minimal walkthrough table if JSON parsing fails.
+     *
+     * @param prId pull request identifier, used to build stable diagram filenames
      */
-    String formatComment(String responseText, List<ParsedDiffFile> parsedFiles) {
+    SummaryResult formatComment(String responseText, List<ParsedDiffFile> parsedFiles, String prId) {
         String cleaned = responseText.strip();
         if (cleaned.startsWith("```")) {
             int firstNewline = cleaned.indexOf('\n');
@@ -252,7 +291,11 @@ public class PrSummaryGenerator {
             }
         }
 
+        boolean usePlaceholders = diagramUploadEnabled
+                && "bitbucket".equalsIgnoreCase(mermaidRenderer.platform.trim());
+
         StringBuilder comment = new StringBuilder();
+        List<PendingDiagram> pendingDiagrams = new ArrayList<>();
         comment.append(MARKER).append("\n");
         comment.append("## PR Summary\n\n");
 
@@ -283,14 +326,25 @@ public class PrSummaryGenerator {
             JsonNode diagrams = root.path("diagrams");
             if (diagrams.isArray() && !diagrams.isEmpty()) {
                 comment.append("\n### Sequence Diagrams\n\n");
+                int diagramIndex = 0;
                 for (JsonNode diagram : diagrams) {
                     String title = diagram.path("title").asText("").strip();
                     String mermaid = diagram.path("mermaid").asText("").strip();
-                    if (!title.isEmpty() && !mermaid.isEmpty()) {
-                        comment.append("<details><summary>").append(title).append("</summary>\n\n");
-                        comment.append(mermaidRenderer.render(title, mermaid));
-                        comment.append("\n\n</details>\n\n");
+                    if (title.isEmpty() || mermaid.isEmpty()) {
+                        continue;
                     }
+                    diagramIndex++;
+                    comment.append("<details><summary>").append(title).append("</summary>\n\n");
+                    if (usePlaceholders) {
+                        String safeId = (prId != null ? prId : "pr").replaceAll("[^a-zA-Z0-9_-]", "_");
+                        String filename = "mermaid-" + safeId + "-" + diagramIndex + ".png";
+                        String placeholder = DIAGRAM_PLACEHOLDER_PREFIX + filename;
+                        pendingDiagrams.add(new PendingDiagram(filename, placeholder, mermaid));
+                        comment.append("![").append(title).append("](").append(placeholder).append(")");
+                    } else {
+                        comment.append(mermaidRenderer.render(title, mermaid));
+                    }
+                    comment.append("\n\n</details>\n\n");
                 }
             }
 
@@ -313,6 +367,6 @@ public class PrSummaryGenerator {
         }
 
         comment.append("\n---\n_Generated by Code Agent_");
-        return comment.toString();
+        return new SummaryResult(comment.toString(), Collections.unmodifiableList(pendingDiagrams));
     }
 }

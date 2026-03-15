@@ -1,29 +1,26 @@
 package com.eneve.agent.confluence;
 
 import java.io.ByteArrayOutputStream;
-import java.io.IOException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
+import com.eneve.agent.agent.MermaidPngRenderer;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
-
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Client for the Confluence Cloud REST API v2.
@@ -36,7 +33,6 @@ public class ConfluenceService {
 
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    private static final long MMDC_TIMEOUT_SECONDS = 60;
 
     @ConfigProperty(name = "confluence.base.url", defaultValue = "")
     String baseUrl;
@@ -46,6 +42,9 @@ public class ConfluenceService {
 
     @ConfigProperty(name = "confluence.api.token", defaultValue = "")
     String apiToken;
+
+    @Inject
+    MermaidPngRenderer mermaidPngRenderer;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(15))
@@ -159,58 +158,10 @@ public class ConfluenceService {
     }
 
     /**
-     * Renders a Mermaid diagram to PNG locally using the Mermaid CLI (mmdc).
-     * Writes a temp .mmd file, invokes mmdc, and reads back the PNG output.
+     * Renders a Mermaid diagram to PNG by delegating to {@link MermaidPngRenderer}.
      */
     byte[] renderMermaidToPng(String mermaidCode) throws Exception {
-        Path tmpDir = Files.createTempDirectory("mermaid-render");
-        Path inputFile = tmpDir.resolve("input.mmd");
-        Path outputFile = tmpDir.resolve("output.png");
-        try {
-            Files.writeString(inputFile, mermaidCode.strip(), StandardCharsets.UTF_8);
-
-            ProcessBuilder pb = new ProcessBuilder(
-                    "mmdc",
-                    "-i", inputFile.toString(),
-                    "-o", outputFile.toString(),
-                    "-b", "white",
-                    "--scale", "2"
-            );
-            String chromiumPath = System.getenv("PUPPETEER_EXECUTABLE_PATH");
-            if (chromiumPath != null && !chromiumPath.isBlank()) {
-                pb.environment().put("PUPPETEER_EXECUTABLE_PATH", chromiumPath);
-            }
-            pb.redirectErrorStream(true);
-
-            Process process = pb.start();
-            String processOutput = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-            boolean finished = process.waitFor(MMDC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-
-            if (!finished) {
-                process.destroyForcibly();
-                throw new RuntimeException("mmdc timed out after " + MMDC_TIMEOUT_SECONDS + "s");
-            }
-
-            if (process.exitValue() != 0) {
-                throw new RuntimeException("mmdc failed (exit " + process.exitValue() + "): "
-                        + processOutput.substring(0, Math.min(processOutput.length(), 500)));
-            }
-
-            if (!Files.exists(outputFile)) {
-                throw new RuntimeException("mmdc did not produce output file. stdout: "
-                        + processOutput.substring(0, Math.min(processOutput.length(), 500)));
-            }
-
-            return Files.readAllBytes(outputFile);
-        } finally {
-            deleteQuietly(inputFile);
-            deleteQuietly(outputFile);
-            deleteQuietly(tmpDir);
-        }
-    }
-
-    private static void deleteQuietly(Path path) {
-        try { Files.deleteIfExists(path); } catch (IOException ignored) { }
+        return mermaidPngRenderer.renderToPng(mermaidCode);
     }
 
     /**

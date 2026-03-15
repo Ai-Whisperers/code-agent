@@ -69,6 +69,7 @@ public class AgentRunner {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject CodeGraphQueryService codeGraphQueryService;
     @Inject PrSummaryGenerator prSummaryGenerator;
+    @Inject MermaidPngRenderer mermaidPngRenderer;
     @Inject CoverageReporter coverageReporter;
     @Inject ConfluenceService confluenceService;
     @Inject DocsEmbeddingService docsEmbeddingService;
@@ -421,11 +422,12 @@ public class AgentRunner {
                         diagramContext = codeGraphQueryService.buildDiagramContext(
                                 coords.organization(), coords.repository(), changedFilePaths);
                     }
-                    String summaryBody = prSummaryGenerator.generate(
-                            prTitle, targetBranch, summaryFiles, job.getJobId(), diagramContext);
-                    if (summaryBody != null) {
+                    PrSummaryGenerator.SummaryResult summaryResult = prSummaryGenerator.generate(
+                            prTitle, targetBranch, summaryFiles, job.getJobId(), diagramContext,
+                            request.prId());
+                    if (summaryResult != null) {
                         postOrUpdatePrSummary(coords, request.prId(), existingAgentComments,
-                                summaryBody, job.getJobId());
+                                summaryResult, job.getJobId());
                     }
                 } catch (Exception e) {
                     LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
@@ -1691,16 +1693,19 @@ public class AgentRunner {
     // ─── Utilities ──────────────────────────────────────────────────────
 
     /**
-     * Post a new PR walkthrough comment or update the existing one in-place.
-     * Looks for a previously posted comment tracked under the {@code __pr_summary__}
-     * marker in CommentStore. Falls back to creating a new comment on update failure.
+     * Renders any pending diagram PNGs, uploads them via the platform's file-hosting API,
+     * substitutes the real URLs into the summary markdown, then posts or updates the
+     * PR summary comment. Falls back to mermaid.ink URLs if rendering or upload fails.
      */
     private void postOrUpdatePrSummary(RepoCoordinates coords, String prId,
                                        List<AgentComment> existingComments,
-                                       String body, String jobId) {
+                                       PrSummaryGenerator.SummaryResult summaryResult,
+                                       String jobId) {
         String org = coords.organization();
         String project = coords.project();
         String repo = coords.repository();
+
+        String body = resolveDiagramPlaceholders(summaryResult, org, repo);
 
         var existingId = commentStore.findPrSummaryCommentId(prId, org, repo);
         if (existingId.isPresent()) {
@@ -1723,6 +1728,41 @@ public class AgentRunner {
                 LOG.infof("Created PR summary comment %d on PR #%s", newId, prId);
             }
         });
+    }
+
+    /**
+     * For each {@link PrSummaryGenerator.PendingDiagram} in the result, renders the Mermaid
+     * source to PNG and uploads it via {@link com.eneve.agent.scm.GitPlatformService#uploadDownload}.
+     * On success, replaces the placeholder URL with the real download URL.
+     * On failure (mmdc not installed, upload error), falls back to a mermaid.ink URL so the
+     * comment still contains a working image link.
+     */
+    private String resolveDiagramPlaceholders(PrSummaryGenerator.SummaryResult summaryResult,
+                                              String org, String repo) {
+        if (summaryResult.pendingDiagrams().isEmpty()) {
+            return summaryResult.body();
+        }
+
+        String body = summaryResult.body();
+        for (PrSummaryGenerator.PendingDiagram diagram : summaryResult.pendingDiagrams()) {
+            String resolvedUrl = null;
+            try {
+                byte[] png = mermaidPngRenderer.renderToPng(diagram.mermaidSource());
+                resolvedUrl = platformService.uploadDownload(org, repo, diagram.filename(), png, "image/png");
+            } catch (Exception e) {
+                LOG.warnf("Failed to render/upload diagram '%s', falling back to mermaid.ink: %s",
+                        diagram.filename(), e.getMessage());
+            }
+
+            if (resolvedUrl == null) {
+                String encoded = java.util.Base64.getEncoder()
+                        .encodeToString(diagram.mermaidSource().getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                resolvedUrl = "https://mermaid.ink/img/base64:" + encoded;
+            }
+
+            body = body.replace(diagram.placeholder(), resolvedUrl);
+        }
+        return body;
     }
 
     private void safeJira(Runnable action) {

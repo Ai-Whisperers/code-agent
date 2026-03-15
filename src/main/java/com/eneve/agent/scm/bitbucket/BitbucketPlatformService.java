@@ -337,6 +337,63 @@ public class BitbucketPlatformService implements GitPlatformService {
         return comments;
     }
 
+    /**
+     * Uploads a file to the Bitbucket repository Downloads section.
+     * The uploaded file is publicly accessible (subject to repository visibility) at:
+     * {@code https://bitbucket.org/{org}/{repo}/downloads/{filename}}
+     * <p>
+     * Re-uploading a file with the same name replaces the existing file.
+     *
+     * @return public download URL, or {@code null} on failure
+     */
+    @Override
+    public String uploadDownload(String org, String repo, String filename,
+                                 byte[] data, String contentType) {
+        String path = "/repositories/" + org + "/" + repo + "/downloads";
+        String boundary = "----DownloadBoundary" + System.nanoTime();
+        byte[] body = buildMultipartBody(boundary, filename, data, contentType);
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + path))
+                    .header("Authorization", authHeader())
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                String downloadUrl = "https://bitbucket.org/" + org + "/" + repo + "/downloads/" + filename;
+                LOG.infof("Uploaded diagram '%s' to Bitbucket downloads: %s", filename, downloadUrl);
+                return downloadUrl;
+            } else {
+                LOG.warnf("Bitbucket download upload failed (HTTP %d): %s",
+                        response.statusCode(), response.body());
+                return null;
+            }
+        } catch (Exception e) {
+            LOG.warnf("Bitbucket download upload error for '%s': %s", filename, e.getMessage());
+            return null;
+        }
+    }
+
+    private static byte[] buildMultipartBody(String boundary, String filename,
+                                             byte[] data, String contentType) {
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            String header = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"files\"; filename=\"" + filename + "\"\r\n"
+                    + "Content-Type: " + contentType + "\r\n\r\n";
+            bos.write(header.getBytes(StandardCharsets.UTF_8));
+            bos.write(data);
+            String footer = "\r\n--" + boundary + "--\r\n";
+            bos.write(footer.getBytes(StandardCharsets.UTF_8));
+            return bos.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build multipart body", e);
+        }
+    }
+
     @Override
     public void resolveComment(String org, String project, String repo, String prId, long commentId) {
         String path = "/repositories/" + org + "/" + repo
