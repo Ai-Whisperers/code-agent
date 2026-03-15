@@ -1645,7 +1645,7 @@ public class AgentRunner {
     private RunResult buildResult(JobRecord job, boolean success) {
         RunFixRequest req = job.getRequest();
         return new RunResult(
-                job.getJobId(), success, req.jiraKey(), req.branchName(),
+                job.getJobId(), success, req.jiraKey(), req.repoUrl(), req.branchName(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
     }
@@ -1655,6 +1655,7 @@ public class AgentRunner {
         return new RunResult(
                 job.getJobId(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
+                req.repoUrl(),
                 "PR-" + req.prId(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 0, 0);
@@ -1665,6 +1666,7 @@ public class AgentRunner {
         return new RunResult(
                 job.getJobId(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
+                req.repoUrl(),
                 req.branchName(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
@@ -1675,6 +1677,7 @@ public class AgentRunner {
         return new RunResult(
                 job.getJobId(), success,
                 "",
+                req != null ? req.repoUrl() : "",
                 req != null ? req.branchName() : "",
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
@@ -1685,6 +1688,7 @@ public class AgentRunner {
         return new RunResult(
                 job.getJobId(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
+                req.repoUrl(),
                 "fix-pr-" + req.prId(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
