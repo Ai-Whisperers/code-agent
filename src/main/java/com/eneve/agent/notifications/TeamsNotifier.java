@@ -32,18 +32,21 @@ public class TeamsNotifier {
             return;
         }
 
-        String status = result.success() ? "SUCCESS" : "FAILED";
-        String cardStyle = result.success() ? "default" : "attention";
+        String status = result.status() != null ? result.status() : "UNKNOWN";
+        String cardStyle = "FAILED".equals(status) ? "attention" : "default";
         String jobLabel = jobTypeLabel(result.jobType());
 
         boolean hasStats = result.filesChanged() > 0 || result.linesChanged() > 0;
-        String body = result.success()
-                ? (result.prUrl() != null && !result.prUrl().isBlank()
-                        ? "PR: " + result.prUrl() + "\\n\\n" : "")
-                  + "Summary: " + escape(result.summary())
-                  + (hasStats ? "\\n\\nFiles changed: " + result.filesChanged()
-                        + " | Lines changed: " + result.linesChanged() : "")
-                : "Error: " + escape(result.errorMessage());
+        String body = switch (status) {
+            case "FAILED" -> "Error: " + escape(result.errorMessage());
+            case "STARTED" -> "Summary: " + escape(result.summary());
+            default -> // SUCCESS and anything else
+                    (result.prUrl() != null && !result.prUrl().isBlank()
+                            ? "PR: " + result.prUrl() + "\\n\\n" : "")
+                    + "Summary: " + escape(result.summary())
+                    + (hasStats ? "\\n\\nFiles changed: " + result.filesChanged()
+                            + " | Lines changed: " + result.linesChanged() : "");
+        };
 
         String repoLabel = repoSlug(result.repoUrl());
 

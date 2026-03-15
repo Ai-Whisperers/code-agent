@@ -1734,7 +1734,7 @@ public class AgentRunner {
     private RunResult buildResult(JobRecord job, boolean success) {
         RunFixRequest req = job.getRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 req.jiraKey(), req.repoUrl(), req.branchName(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
@@ -1743,7 +1743,7 @@ public class AgentRunner {
     private RunResult buildReviewResult(JobRecord job, boolean success) {
         ReviewPrRequest req = job.getReviewRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 "PR-" + req.prId(),
@@ -1754,7 +1754,7 @@ public class AgentRunner {
     private RunResult buildGenerateTestsResult(JobRecord job, boolean success) {
         GenerateTestsRequest req = job.getGenerateTestsRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 req.branchName(),
@@ -1765,7 +1765,7 @@ public class AgentRunner {
     private RunResult buildGenerateDocsResult(JobRecord job, boolean success) {
         GenerateDocsRequest req = job.getGenerateDocsRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 "",
                 req != null ? req.repoUrl() : "",
                 req != null ? req.branchName() : "",
@@ -1776,7 +1776,7 @@ public class AgentRunner {
     private RunResult buildFixPrResult(JobRecord job, boolean success) {
         FixPrRequest req = job.getFixPrRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 "fix-pr-" + req.prId(),
@@ -1787,7 +1787,7 @@ public class AgentRunner {
     private RunResult buildHookResult(JobRecord job, boolean success) {
         HookJobRequest req = job.getHookRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 "",
                 req.repoUrl(),
                 req.branchName(),
@@ -1798,7 +1798,7 @@ public class AgentRunner {
     private RunResult buildMetricsResult(JobRecord job, boolean success) {
         MetricsJobRequest req = job.getMetricsRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 "",
                 req != null ? req.repoUrl() : "",
                 req != null ? req.branch() : "",
@@ -1809,7 +1809,7 @@ public class AgentRunner {
     private RunResult buildFixCommentResult(JobRecord job, boolean success) {
         ReplyCommentRequest req = job.getReplyRequest();
         return new RunResult(
-                job.getJobId(), job.getJobType().name(), success,
+                job.getJobId(), job.getJobType().name(), success ? "SUCCESS" : "FAILED",
                 "",
                 req != null ? req.repoUrl() : "",
                 req != null ? "PR-" + req.prId() : "",

@@ -13,6 +13,7 @@ import com.eneve.agent.planner.PlanOrchestratorService;
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.PlannerService;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.util.UrlUtils;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -146,24 +147,29 @@ public class UpgradeService {
 
     private String startUpgrade(RepoSettings repo, String latestVersion, String migrationNotes) {
         String currentVersion = repo.archetypeVersion();
-        String repoUrl = platformService.buildCloneUrl(repo.workspace(), repo.repoSlug());
-        if (repoUrl == null) {
+        String cloneUrl = platformService.buildCloneUrl(repo.workspace(), repo.repoSlug());
+        if (cloneUrl == null) {
             LOG.warnf("UpgradeService: cannot build clone URL for %s/%s — skipping",
                     repo.workspace(), repo.repoSlug());
             return null;
         }
 
+        // Clean URL used in notifications and the AI prompt — never contains credentials.
+        String cleanUrl = UrlUtils.stripCredentials(cloneUrl);
+
         String branchName = "agent/upgrade-quarkus-" + latestVersion;
         String specText = buildSpecText(currentVersion, latestVersion, branchName, migrationNotes);
 
+        // Pass the authenticated clone URL so the orchestrator can clone/push, but the
+        // prompt and any stored plan metadata use the clean URL.
         ExecutionPlan plan = plannerService.generatePlan(
-                specText, repoUrl, defaultBranch, "UPGRADE", "quarkus-" + latestVersion);
+                specText, cloneUrl, defaultBranch, "UPGRADE", "quarkus-" + latestVersion);
 
         if (plan == null) {
             LOG.errorf("UpgradeService: plan generation failed for %s/%s", repo.workspace(), repo.repoSlug());
             teamsNotifier.sendNotification(new RunResult(
-                    "upgrade-" + repo.repoSlug(), "UPGRADE", false,
-                    null, repoUrl, branchName, null,
+                    "upgrade-" + repo.repoSlug(), "UPGRADE", "FAILED",
+                    null, cleanUrl, branchName, null,
                     null, "Plan generation failed for Quarkus upgrade to " + latestVersion,
                     0, 0));
             return null;
@@ -178,8 +184,8 @@ public class UpgradeService {
                     plan.planId(), repo.workspace(), repo.repoSlug(), currentVersion, latestVersion);
 
             teamsNotifier.sendNotification(new RunResult(
-                    plan.planId(), "UPGRADE", true,
-                    null, repoUrl, branchName, null,
+                    plan.planId(), "UPGRADE", "STARTED",
+                    null, cleanUrl, branchName, null,
                     "Quarkus upgrade from " + currentVersion + " to " + latestVersion
                             + " started. Plan: " + plan.planId(),
                     null, 0, 0));
@@ -191,8 +197,8 @@ public class UpgradeService {
                     plan.planId(), repo.workspace(), repo.repoSlug(), e.getMessage());
 
             teamsNotifier.sendNotification(new RunResult(
-                    plan.planId(), "UPGRADE", false,
-                    null, repoUrl, branchName, null,
+                    plan.planId(), "UPGRADE", "FAILED",
+                    null, cleanUrl, branchName, null,
                     null, "Failed to start Quarkus upgrade plan: " + e.getMessage(),
                     0, 0));
             return null;
