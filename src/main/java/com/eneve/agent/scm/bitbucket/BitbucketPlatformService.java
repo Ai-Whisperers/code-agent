@@ -407,6 +407,36 @@ public class BitbucketPlatformService implements GitPlatformService {
         LOG.infof("Resolved comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
     }
 
+    @Override
+    public List<String> listRepositories(String org) {
+        List<String> slugs = new ArrayList<>();
+        String path = "/repositories/" + org + "?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list repos for workspace " + org);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode repo : values) {
+                        String slug = repo.path("slug").asText("");
+                        if (!slug.isEmpty()) {
+                            slugs.add(slug);
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse repository list response: %s", e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d repositories in workspace '%s'", slugs.size(), org);
+        return slugs;
+    }
+
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {

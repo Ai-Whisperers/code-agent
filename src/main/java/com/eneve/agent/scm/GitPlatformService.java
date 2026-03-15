@@ -101,6 +101,21 @@ public interface GitPlatformService {
     }
 
     /**
+     * List all repository slugs / names within an org or workspace.
+     * <p>
+     * Implementations that do not support workspace-level repository listing
+     * (e.g. Azure DevOps, which requires a project segment) should return an
+     * empty list. {@link com.eneve.agent.agent.RepoSyncService} skips sync
+     * gracefully when the list is empty.
+     *
+     * @param org workspace, namespace, or organisation slug
+     * @return mutable list of repository slugs/names; empty if not supported
+     */
+    default List<String> listRepositories(String org) {
+        return List.of();
+    }
+
+    /**
      * Builds an authenticated HTTPS clone URL for the given repository.
      *
      * <p>Used by scheduled jobs (code-graph builder, upgrade checker) that need to clone
