@@ -12,6 +12,7 @@ public class JobRecord {
     private final HookJobRequest hookRequest;
     private final GenerateTestsRequest generateTestsRequest;
     private final GenerateDocsRequest generateDocsRequest;
+    private final SyncConfluenceRequest syncConfluenceRequest;
     private final MetricsJobRequest metricsRequest;
     private final JobType jobType;
     private final Instant createdAt;
@@ -32,6 +33,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
@@ -47,6 +49,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
@@ -62,6 +65,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
@@ -81,6 +85,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
@@ -96,6 +101,7 @@ public class JobRecord {
         this.hookRequest = hookRequest;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
@@ -111,6 +117,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = generateTestsRequest;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.GENERATE_TESTS;
         this.createdAt = Instant.now();
@@ -126,8 +133,25 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = generateDocsRequest;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = null;
         this.jobType = JobType.GENERATE_DOCS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, SyncConfluenceRequest syncConfluenceRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = syncConfluenceRequest;
+        this.metricsRequest = null;
+        this.jobType = JobType.SYNC_CONFLUENCE;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -141,6 +165,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
         this.metricsRequest = metricsRequest;
         this.jobType = JobType.METRICS;
         this.createdAt = Instant.now();
@@ -155,6 +180,7 @@ public class JobRecord {
     public HookJobRequest getHookRequest() { return hookRequest; }
     public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
     public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
+    public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
     public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }

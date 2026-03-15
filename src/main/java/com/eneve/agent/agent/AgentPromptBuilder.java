@@ -341,28 +341,12 @@ public class AgentPromptBuilder {
     }
 
     public String buildGenerateDocsPrompt(GenerateDocsRequest request, WorkspaceContext workspace,
-                                          RepoSettings settings, boolean confluenceActive,
-                                          String confluenceSpaceKey) {
+                                          RepoSettings settings) {
         String rulesRepoUrl = resolveRulesRepoUrl(null);
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
 
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
-
-        String confluenceSection = "";
-        if (confluenceActive) {
-            confluenceSection = """
-
-                    ## Confluence Publishing
-                    After writing each documentation file, publish it to Confluence using the `publish_confluence` tool.
-                    - **IMPORTANT**: Publish the index page (`docs/README.md`) FIRST. It becomes the parent page \
-                    under which all other documentation pages are created as children.
-                    - Use the document title as the Confluence page title (e.g. "Architecture Overview", "API Documentation").
-                    - Pass the full Markdown content as `markdown_content` — it will be converted automatically.
-                    - The space key and parent page are pre-configured; you do not need to supply them.
-                    - If a page with the same title already exists, it will be updated.
-                    """;
-        }
 
         String docsInstructions = """
                 You are generating comprehensive documentation for a software project.
@@ -423,7 +407,7 @@ public class AgentPromptBuilder {
                 - Group by feature area (e.g. "Database", "Authentication", "External Services").
                 - For each: property name, env var name, description, default value, whether required.
                 - Read `application.properties` and `.env` files as sources.
-                %s
+
                 ## Writing Guidelines
                 - **Depth**: Moderate — cover packages and key classes, skip private internals.
                 - **Audience**: Mixed — both internal developers and external API consumers.
@@ -443,7 +427,7 @@ public class AgentPromptBuilder {
                 1. Explore the codebase thoroughly before writing any documentation.
                 2. Write each doc file using `write_file`.
                 3. After writing all files, provide a summary of what was generated.
-                """.formatted(confluenceSection);
+                """;
 
         String guardrailText = """
                 You MUST follow these rules without exception:

@@ -19,6 +19,7 @@ import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
+import com.eneve.agent.model.SyncConfluenceRequest;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -436,8 +437,18 @@ public class PlanOrchestratorService {
                         null,  // ruleNames
                         nullIfBlank(step.prompt()),
                         null,  // n8nWebhookUrl
-                        null,  // publishConfluence — use repo settings
                         false
+                ));
+            }
+            case "SYNC_CONFLUENCE" -> {
+                String branch = param(step, "branchName", plan.targetBranch() != null ? plan.targetBranch() : "main");
+                String docsPath = param(step, "docsPath", "docs");
+                yield new JobRecord(jobId, new SyncConfluenceRequest(
+                        plan.repoUrl(),
+                        branch,
+                        docsPath,
+                        null,  // confluenceSpaceKey — use repo settings
+                        null   // confluenceParentPageId — use repo settings
                 ));
             }
             case "REVIEW" -> {

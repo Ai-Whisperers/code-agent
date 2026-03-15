@@ -29,9 +29,6 @@ public record GenerateDocsRequest(
         @Schema(description = "n8n webhook URL for completion callback")
         String n8nWebhookUrl,
 
-        @Schema(description = "Override repo settings for Confluence publishing (null = use repo settings)")
-        Boolean publishConfluence,
-
         @Schema(description = "If true, commit directly to targetBranch instead of creating a PR (default: false)")
         Boolean commitDirect
 ) {

@@ -9,5 +9,6 @@ public enum JobType {
     HOOK,
     GENERATE_TESTS,
     GENERATE_DOCS,
+    SYNC_CONFLUENCE,
     METRICS
 }

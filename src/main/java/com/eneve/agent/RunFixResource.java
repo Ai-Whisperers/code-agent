@@ -22,6 +22,7 @@ import com.eneve.agent.model.QuickFixRequest;
 import com.eneve.agent.model.RejectRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
+import com.eneve.agent.model.SyncConfluenceRequest;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
@@ -452,7 +453,7 @@ public class RunFixResource {
             description = "Queues a job that clones the repo, uses the AI agent to explore the codebase "
                     + "and generate comprehensive Markdown documentation in the docs/ folder. "
                     + "Includes architecture, API, data model, onboarding, flow, and configuration docs "
-                    + "with Mermaid diagrams. Optionally publishes to Confluence. "
+                    + "with Mermaid diagrams. Use POST /sync-confluence to publish docs to Confluence. "
                     + "Returns immediately with a jobId for polling."
     )
     @RequestBody(
@@ -480,7 +481,7 @@ public class RunFixResource {
         GenerateDocsRequest effective = new GenerateDocsRequest(
                 request.repoUrl(), branchName, request.targetBranch(),
                 request.ruleNames(), request.extraRules(), request.n8nWebhookUrl(),
-                request.publishConfluence(), request.commitDirect());
+                request.commitDirect());
         JobRecord job = new JobRecord(jobId, effective);
         jobStore.put(job);
 
@@ -489,6 +490,44 @@ public class RunFixResource {
         }
 
         LOG.infof("GenerateDocs job %s accepted for %s", jobId, request.repoUrl());
+        return Response.accepted(Map.of("jobId", jobId)).build();
+    }
+
+    @POST
+    @Path("/sync-confluence")
+    @Tag(name = "Documentation")
+    @Operation(
+            operationId = "syncConfluence",
+            summary = "Submit a Confluence sync job",
+            description = "Queues a job that clones the repo and publishes all Markdown files from the docs/ folder "
+                    + "to Confluence. No AI agent loop — purely programmatic and deterministic. "
+                    + "Intended for release-time syncs. Returns immediately with a jobId for polling."
+    )
+    @RequestBody(
+            required = true,
+            description = "Confluence sync specification",
+            content = @Content(schema = @Schema(implementation = SyncConfluenceRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Confluence sync job accepted and queued",
+                    content = @Content(schema = @Schema(example = "{\"jobId\": \"550e8400-e29b-41d4-a716-446655440000\"}"))),
+            @APIResponse(responseCode = "400", description = "Missing required fields"),
+            @APIResponse(responseCode = "429", description = "Job queue is full")
+    })
+    public Response syncConfluence(SyncConfluenceRequest request) {
+        if (request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+
+        String jobId = UUID.randomUUID().toString();
+        JobRecord job = new JobRecord(jobId, request);
+        jobStore.put(job);
+
+        if (!jobQueue.submit(job)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        LOG.infof("SyncConfluence job %s accepted for %s", jobId, request.repoUrl());
         return Response.accepted(Map.of("jobId", jobId)).build();
     }
 

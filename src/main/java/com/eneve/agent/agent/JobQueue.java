@@ -179,6 +179,7 @@ public class JobQueue {
                             case HOOK -> agentRunner.executeHook(job);
                             case GENERATE_TESTS -> agentRunner.executeGenerateTests(job);
                             case GENERATE_DOCS -> agentRunner.executeGenerateDocs(job);
+                            case SYNC_CONFLUENCE -> agentRunner.executeSyncConfluence(job);
                             case METRICS -> agentRunner.executeMetrics(job);
                             default -> agentRunner.execute(job);
                         }

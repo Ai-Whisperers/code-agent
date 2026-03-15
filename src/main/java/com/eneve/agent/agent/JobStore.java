@@ -23,6 +23,7 @@ import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.ReplyCommentRequest;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.model.SyncConfluenceRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -371,6 +372,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, GenerateTestsRequest.class));
                 case GENERATE_DOCS -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, GenerateDocsRequest.class));
+                case SYNC_CONFLUENCE -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, SyncConfluenceRequest.class));
                 case METRICS -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, MetricsJobRequest.class));
             };
@@ -390,6 +393,7 @@ public class JobStore {
             case HOOK -> job.getHookRequest();
             case GENERATE_TESTS -> job.getGenerateTestsRequest();
             case GENERATE_DOCS -> job.getGenerateDocsRequest();
+            case SYNC_CONFLUENCE -> job.getSyncConfluenceRequest();
             case METRICS -> job.getMetricsRequest();
         };
         if (request == null) return "{}";

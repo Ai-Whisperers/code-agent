@@ -30,6 +30,7 @@ import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
+import com.eneve.agent.model.SyncConfluenceRequest;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.tools.GuardrailConfig;
@@ -1308,27 +1309,9 @@ public class AgentRunner {
             workspace.putMetadata("workspace", ws);
             workspace.putMetadata("repoSlug", repoSlug);
 
-            boolean confluenceActive = false;
-            String confluenceSpaceKey = settings.confluenceSpaceKey();
-            String confluenceParentPageId = settings.confluenceParentPageId();
+            String systemPrompt = promptBuilder.buildGenerateDocsPrompt(request, workspace, settings);
 
-            if (confluenceService.isEnabled() && confluenceSpaceKey != null && !confluenceSpaceKey.isBlank()) {
-                Boolean override = request.publishConfluence();
-                if (override == null || override) {
-                    confluenceActive = true;
-                    workspace.putMetadata("confluenceSpaceKey", confluenceSpaceKey);
-                    if (confluenceParentPageId != null && !confluenceParentPageId.isBlank()) {
-                        workspace.putMetadata("confluenceParentPageId", confluenceParentPageId);
-                    }
-                }
-            }
-
-            String systemPrompt = promptBuilder.buildGenerateDocsPrompt(
-                    request, workspace, settings, confluenceActive, confluenceSpaceKey);
-
-            var tools = confluenceActive
-                    ? ToolDefinitions.docsGeneration()
-                    : ToolDefinitions.docsGenerationNoConfluence();
+            var tools = ToolDefinitions.docsGeneration();
 
             String summary;
             try {
@@ -1412,6 +1395,134 @@ public class AgentRunner {
 
         } catch (Exception e) {
             failGenerateDocs(job, "Unexpected error in doc generation: " + e.getMessage());
+        }
+    }
+
+    // ─── Execute Sync Confluence ─────────────────────────────────────────
+
+    public void executeSyncConfluence(JobRecord job) {
+        SyncConfluenceRequest request = job.getSyncConfluenceRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        LOG.infof("SyncConfluence job %s starting for %s (branch=%s, docsPath=%s)",
+                job.getJobId(), request.repoUrl(), request.branchOrDefault(), request.docsPathOrDefault());
+
+        if (!confluenceService.isEnabled()) {
+            failSyncConfluence(job, "Confluence is not configured (set CONFLUENCE_BASE_URL, CONFLUENCE_USER, CONFLUENCE_API_TOKEN)");
+            return;
+        }
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failSyncConfluence(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        String ws = coords.organization();
+        String repoSlug = coords.repository();
+
+        RepoSettings settings = repoSettingsStore.find(ws, repoSlug)
+                .orElse(RepoSettings.defaults(ws, repoSlug));
+
+        String spaceKey = (request.confluenceSpaceKey() != null && !request.confluenceSpaceKey().isBlank())
+                ? request.confluenceSpaceKey()
+                : settings.confluenceSpaceKey();
+
+        if (spaceKey == null || spaceKey.isBlank()) {
+            failSyncConfluence(job, "No Confluence space key available. Provide it in the request or configure it in repo settings.");
+            return;
+        }
+
+        String parentPageId = (request.confluenceParentPageId() != null && !request.confluenceParentPageId().isBlank())
+                ? request.confluenceParentPageId()
+                : settings.confluenceParentPageId();
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            try {
+                workspace.cloneRepo(authUrl, request.branchOrDefault(), jobTimeoutMinutes);
+            } catch (Exception e) {
+                failSyncConfluence(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            java.nio.file.Path docsDir = workspace.getRoot().resolve(request.docsPathOrDefault());
+            if (!java.nio.file.Files.isDirectory(docsDir)) {
+                failSyncConfluence(job, "Docs folder not found: " + request.docsPathOrDefault());
+                return;
+            }
+
+            java.util.List<java.nio.file.Path> mdFiles;
+            try (java.util.stream.Stream<java.nio.file.Path> stream = java.nio.file.Files.walk(docsDir)) {
+                mdFiles = stream
+                        .filter(p -> java.nio.file.Files.isRegularFile(p) && p.getFileName().toString().endsWith(".md"))
+                        .sorted(java.util.Comparator.comparing(p -> {
+                            // README.md sorts first so it becomes the root page
+                            return p.getFileName().toString().equalsIgnoreCase("README.md") ? "0" : p.getFileName().toString();
+                        }))
+                        .collect(java.util.stream.Collectors.toList());
+            } catch (Exception e) {
+                failSyncConfluence(job, "Failed to list docs files: " + e.getMessage());
+                return;
+            }
+
+            if (mdFiles.isEmpty()) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("No Markdown files found in " + request.docsPathOrDefault() + "; nothing to sync.");
+                jobStore.archive(job);
+                return;
+            }
+
+            int synced = 0;
+            String docsRootPageId = null;
+
+            for (java.nio.file.Path mdFile : mdFiles) {
+                String fileName = mdFile.getFileName().toString();
+                String title = fileName.replaceAll("\\.md$", "").replace("-", " ").replace("_", " ");
+                if (fileName.equalsIgnoreCase("README.md")) {
+                    title = repoSlug + " Documentation";
+                }
+
+                String markdownContent;
+                try {
+                    markdownContent = java.nio.file.Files.readString(mdFile);
+                } catch (Exception e) {
+                    LOG.warnf("SyncConfluence job %s: could not read %s — skipping: %s",
+                            job.getJobId(), fileName, e.getMessage());
+                    continue;
+                }
+
+                String effectiveParent = (docsRootPageId != null) ? docsRootPageId : parentPageId;
+
+                try {
+                    com.eneve.agent.confluence.ConfluenceService.PageResult result =
+                            confluenceService.createOrUpdatePage(spaceKey, effectiveParent, title, markdownContent);
+                    if (result != null) {
+                        if (docsRootPageId == null) {
+                            docsRootPageId = result.pageId();
+                        }
+                        synced++;
+                        LOG.debugf("SyncConfluence job %s: published '%s' → %s", job.getJobId(), title, result.pageUrl());
+                    } else {
+                        LOG.warnf("SyncConfluence job %s: failed to publish '%s'", job.getJobId(), title);
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("SyncConfluence job %s: error publishing '%s': %s", job.getJobId(), title, e.getMessage());
+                }
+            }
+
+            String summary = "Synced " + synced + " of " + mdFiles.size() + " Markdown files to Confluence space " + spaceKey + ".";
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(summary);
+            jobStore.archive(job);
+            LOG.infof("SyncConfluence job %s completed: %s", job.getJobId(), summary);
+
+        } catch (Exception e) {
+            failSyncConfluence(job, "Unexpected error in Confluence sync: " + e.getMessage());
         }
     }
 
@@ -1682,6 +1793,13 @@ public class AgentRunner {
         if (request != null) {
             n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
         }
+    }
+
+    private void failSyncConfluence(JobRecord job, String message) {
+        LOG.errorf("SyncConfluence job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
     }
 
     private void failHook(JobRecord job, String message) {
