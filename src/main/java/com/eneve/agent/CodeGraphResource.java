@@ -64,6 +64,67 @@ public class CodeGraphResource {
     }
 
     @POST
+    @Path("/detect-archetypes")
+    @Operation(
+            operationId = "detectArchetypesAll",
+            summary = "Detect framework archetype for all repos that lack one",
+            description = "Lightweight scan: clones each repo whose archetype is not yet set, runs "
+                    + "ArchetypeDetector, and persists the result. Does NOT rebuild the code graph "
+                    + "or regenerate embeddings, so it is much faster than /build-missing. "
+                    + "Returns immediately; detection runs in the background."
+    )
+    @APIResponse(responseCode = "202", description = "Detection job accepted")
+    public Response detectArchetypesAll() {
+        graphExecutor.submit(() -> {
+            try {
+                CodeGraphBuildService.DetectResult result = buildService.detectArchetypesForAll();
+                LOG.infof("Archetype detection finished: %d detected, %d skipped, %d unchanged",
+                        result.detected(), result.skipped(), result.unchanged());
+            } catch (Exception e) {
+                LOG.errorf("Archetype detection failed: %s", e.getMessage());
+            }
+        });
+        return Response.accepted(Map.of("action", "detect_archetypes_started")).build();
+    }
+
+    @POST
+    @Path("/detect-archetypes/{workspace}/{repoSlug}")
+    @Operation(
+            operationId = "detectArchetypeSingle",
+            summary = "Detect framework archetype for a single repository",
+            description = "Clones the repo, runs ArchetypeDetector, and persists the result. "
+                    + "Does NOT rebuild the code graph or embeddings. Returns immediately."
+    )
+    @APIResponse(responseCode = "202", description = "Detection job accepted")
+    public Response detectArchetypeSingle(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        graphExecutor.submit(() -> {
+            try {
+                Boolean detected = buildService.detectArchetype(workspace, repoSlug);
+                if (Boolean.TRUE.equals(detected)) {
+                    LOG.infof("Archetype detected for %s/%s", workspace, repoSlug);
+                } else if (Boolean.FALSE.equals(detected)) {
+                    LOG.infof("No archetype recognised for %s/%s", workspace, repoSlug);
+                } else {
+                    LOG.warnf("Archetype detection skipped (clone failed?) for %s/%s", workspace, repoSlug);
+                }
+            } catch (Exception e) {
+                LOG.errorf("Archetype detection error for %s/%s: %s", workspace, repoSlug, e.getMessage());
+            }
+        });
+
+        return Response.accepted(Map.of(
+                "action", "detect_archetype_started",
+                "workspace", workspace,
+                "repoSlug", repoSlug
+        )).build();
+    }
+
+    @POST
     @Path("/rebuild/{workspace}/{repoSlug}")
     @Operation(
             operationId = "rebuildGraph",

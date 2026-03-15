@@ -35,6 +35,8 @@ public class CodeGraphBuildService {
 
     public record BuildResult(int built, int skipped, int alreadyPresent) {}
 
+    public record DetectResult(int detected, int skipped, int unchanged) {}
+
     /**
      * Scans all review-enabled repos and builds a code graph for any that lack one.
      */
@@ -74,6 +76,81 @@ public class CodeGraphBuildService {
         LOG.infof("Build missing graphs complete: %d built, %d skipped, %d already present",
                 built, skipped, alreadyPresent);
         return new BuildResult(built, skipped, alreadyPresent);
+    }
+
+    /**
+     * Lightweight archetype detection for all repos whose archetype is not yet set.
+     * Only clones the default branch root — no code-graph indexing or embedding —
+     * so it is much faster than a full rebuild.
+     */
+    public DetectResult detectArchetypesForAll() {
+        List<RepoSettings> repos = repoSettingsStore.listAll();
+        int detected = 0, skipped = 0, unchanged = 0;
+        for (RepoSettings repo : repos) {
+            if (repo.archetype() != null && !repo.archetype().isBlank()) {
+                unchanged++;
+                continue;
+            }
+            Boolean result = detectArchetypeOnce(repo.workspace(), repo.repoSlug());
+            if (result == null) {
+                skipped++;
+            } else if (result) {
+                detected++;
+            } else {
+                unchanged++;
+            }
+        }
+        LOG.infof("Archetype detection complete: %d detected, %d skipped, %d unchanged", detected, skipped, unchanged);
+        return new DetectResult(detected, skipped, unchanged);
+    }
+
+    /**
+     * Lightweight archetype detection for a single repository.
+     * Only clones the default branch root — no code-graph indexing or embedding.
+     * Returns {@code true} if an archetype was newly detected, {@code false} if the repo
+     * was already known or unrecognised, {@code null} if the clone failed.
+     */
+    public Boolean detectArchetype(String workspace, String repoSlug) {
+        return detectArchetypeOnce(workspace, repoSlug);
+    }
+
+    private Boolean detectArchetypeOnce(String workspace, String repoSlug) {
+        String cloneUrl = platformService.buildCloneUrl(workspace, repoSlug);
+        if (cloneUrl == null) {
+            LOG.debugf("No clone URL for %s/%s — skipping archetype detection", workspace, repoSlug);
+            return null;
+        }
+
+        try (WorkspaceContext ws = WorkspaceContext.create("archetype-" + workspace + "-" + repoSlug)) {
+            try {
+                ws.cloneRepo(cloneUrl, defaultBranch, cloneTimeoutMinutes);
+            } catch (Exception e) {
+                if (!"main".equals(defaultBranch)) {
+                    LOG.debugf("Archetype clone failed for %s/%s on '%s': %s", workspace, repoSlug, defaultBranch, e.getMessage());
+                    return null;
+                }
+                // Try master as fallback
+                try {
+                    ws.cloneRepo(cloneUrl, "master", cloneTimeoutMinutes);
+                } catch (Exception e2) {
+                    LOG.warnf("Archetype clone failed for %s/%s on both branches: %s", workspace, repoSlug, e2.getMessage());
+                    return null;
+                }
+            }
+
+            ArchetypeDetector.ArchetypeInfo info = archetypeDetector.detect(ws.getRoot());
+            if (info != null) {
+                repoSettingsStore.updateArchetype(workspace, repoSlug, info.archetype(), info.version());
+                LOG.infof("Detected archetype for %s/%s: %s %s", workspace, repoSlug, info.archetype(), info.version());
+                return true;
+            }
+            LOG.debugf("No archetype detected for %s/%s", workspace, repoSlug);
+            return false;
+
+        } catch (Exception e) {
+            LOG.warnf("Archetype detection failed for %s/%s: %s", workspace, repoSlug, e.getMessage());
+            return null;
+        }
     }
 
     /**
