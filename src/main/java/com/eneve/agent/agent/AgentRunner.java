@@ -910,6 +910,7 @@ public class AgentRunner {
             job.setStatus(JobStatus.SUCCESS);
             job.setSummary(summary);
             jobStore.archive(job);
+            teamsNotifier.sendNotification(buildFixCommentResult(job, true));
             LOG.infof("FixComment job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
@@ -1423,7 +1424,7 @@ public class AgentRunner {
         try {
             coords = RepoCoordinates.parse(request.repoUrl());
         } catch (IllegalArgumentException e) {
-            fail(job, "Invalid repo URL: " + e.getMessage());
+            failHook(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
 
@@ -1435,7 +1436,7 @@ public class AgentRunner {
                 try {
                     workspace.cloneRepo(authUrl, request.targetBranch(), jobTimeoutMinutes);
                 } catch (Exception e) {
-                    fail(job, "Clone failed: " + e.getMessage());
+                    failHook(job, "Clone failed: " + e.getMessage());
                     return;
                 }
             } else {
@@ -1443,7 +1444,7 @@ public class AgentRunner {
                     workspace.cloneAndCreateBranch(authUrl, request.targetBranch(),
                             request.branchName(), jobTimeoutMinutes);
                 } catch (Exception e) {
-                    fail(job, "Clone/branch failed: " + e.getMessage());
+                    failHook(job, "Clone/branch failed: " + e.getMessage());
                     return;
                 }
             }
@@ -1462,7 +1463,7 @@ public class AgentRunner {
                 summary = toolUseLoop.run(systemPrompt, workspace,
                         job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
-                fail(job, "Agent loop error: " + e.getMessage());
+                failHook(job, "Agent loop error: " + e.getMessage());
                 return;
             }
 
@@ -1476,7 +1477,7 @@ public class AgentRunner {
             try {
                 hasChanges = workspace.commitAll(commitMsg);
             } catch (Exception e) {
-                fail(job, "Commit failed: " + e.getMessage());
+                failHook(job, "Commit failed: " + e.getMessage());
                 return;
             }
 
@@ -1485,13 +1486,14 @@ public class AgentRunner {
                 job.setSummary("Hook '" + request.hookName() + "' completed with no changes needed.");
                 jobStore.archive(job);
                 LOG.infof("Hook job %s completed: no changes made", job.getJobId());
+                teamsNotifier.sendNotification(buildHookResult(job, true));
                 return;
             }
 
             try {
                 workspace.push(pushBranch, jobTimeoutMinutes);
             } catch (Exception e) {
-                fail(job, "Push failed: " + e.getMessage());
+                failHook(job, "Push failed: " + e.getMessage());
                 return;
             }
 
@@ -1500,6 +1502,7 @@ public class AgentRunner {
                 job.setSummary(summary);
                 jobStore.archive(job);
                 LOG.infof("Hook job %s completed: committed directly to %s", job.getJobId(), pushBranch);
+                teamsNotifier.sendNotification(buildHookResult(job, true));
             } else {
                 try {
                     String title = "chore: " + request.hookName();
@@ -1514,13 +1517,14 @@ public class AgentRunner {
                     job.setPrId(prResult[1]);
                     jobStore.update(job);
                     LOG.infof("Hook job %s completed: PR %s created", job.getJobId(), prResult[0]);
+                    teamsNotifier.sendNotification(buildHookResult(job, true));
                 } catch (Exception e) {
-                    fail(job, "Create PR failed: " + e.getMessage());
+                    failHook(job, "Create PR failed: " + e.getMessage());
                 }
             }
 
         } catch (Exception e) {
-            fail(job, "Unexpected error in hook execution: " + e.getMessage());
+            failHook(job, "Unexpected error in hook execution: " + e.getMessage());
         }
     }
 
@@ -1616,6 +1620,16 @@ public class AgentRunner {
         }
     }
 
+    private void failHook(JobRecord job, String message) {
+        LOG.errorf("Hook job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+
+        RunResult result = buildHookResult(job, false);
+        teamsNotifier.sendNotification(result);
+    }
+
     private void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
@@ -1628,6 +1642,8 @@ public class AgentRunner {
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
         jobStore.archive(job);
+
+        teamsNotifier.sendNotification(buildFixCommentResult(job, false));
 
         try {
             RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());
@@ -1645,7 +1661,8 @@ public class AgentRunner {
     private RunResult buildResult(JobRecord job, boolean success) {
         RunFixRequest req = job.getRequest();
         return new RunResult(
-                job.getJobId(), success, req.jiraKey(), req.repoUrl(), req.branchName(),
+                job.getJobId(), job.getJobType().name(), success,
+                req.jiraKey(), req.repoUrl(), req.branchName(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
     }
@@ -1653,7 +1670,7 @@ public class AgentRunner {
     private RunResult buildReviewResult(JobRecord job, boolean success) {
         ReviewPrRequest req = job.getReviewRequest();
         return new RunResult(
-                job.getJobId(), success,
+                job.getJobId(), job.getJobType().name(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 "PR-" + req.prId(),
@@ -1664,7 +1681,7 @@ public class AgentRunner {
     private RunResult buildGenerateTestsResult(JobRecord job, boolean success) {
         GenerateTestsRequest req = job.getGenerateTestsRequest();
         return new RunResult(
-                job.getJobId(), success,
+                job.getJobId(), job.getJobType().name(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 req.branchName(),
@@ -1675,7 +1692,7 @@ public class AgentRunner {
     private RunResult buildGenerateDocsResult(JobRecord job, boolean success) {
         GenerateDocsRequest req = job.getGenerateDocsRequest();
         return new RunResult(
-                job.getJobId(), success,
+                job.getJobId(), job.getJobType().name(), success,
                 "",
                 req != null ? req.repoUrl() : "",
                 req != null ? req.branchName() : "",
@@ -1686,10 +1703,32 @@ public class AgentRunner {
     private RunResult buildFixPrResult(JobRecord job, boolean success) {
         FixPrRequest req = job.getFixPrRequest();
         return new RunResult(
-                job.getJobId(), success,
+                job.getJobId(), job.getJobType().name(), success,
                 req.jiraKey() != null ? req.jiraKey() : "",
                 req.repoUrl(),
                 "fix-pr-" + req.prId(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged());
+    }
+
+    private RunResult buildHookResult(JobRecord job, boolean success) {
+        HookJobRequest req = job.getHookRequest();
+        return new RunResult(
+                job.getJobId(), job.getJobType().name(), success,
+                "",
+                req.repoUrl(),
+                req.branchName(),
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                job.getFilesChanged(), job.getLinesChanged());
+    }
+
+    private RunResult buildFixCommentResult(JobRecord job, boolean success) {
+        ReplyCommentRequest req = job.getReplyRequest();
+        return new RunResult(
+                job.getJobId(), job.getJobType().name(), success,
+                "",
+                req != null ? req.repoUrl() : "",
+                req != null ? "PR-" + req.prId() : "",
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
     }

@@ -32,8 +32,9 @@ public class TeamsNotifier {
             return;
         }
 
-        String color = result.success() ? "Good" : "Attention";
         String status = result.success() ? "SUCCESS" : "FAILED";
+        String cardStyle = result.success() ? "default" : "attention";
+        String jobLabel = jobTypeLabel(result.jobType());
 
         boolean hasStats = result.filesChanged() > 0 || result.linesChanged() > 0;
         String body = result.success()
@@ -45,6 +46,17 @@ public class TeamsNotifier {
                 : "Error: " + escape(result.errorMessage());
 
         String repoLabel = repoSlug(result.repoUrl());
+
+        StringBuilder factsJson = new StringBuilder();
+        factsJson.append("{\"title\": \"Job\", \"value\": \"").append(escape(result.jobId())).append("\"},\n");
+        factsJson.append("            {\"title\": \"Type\", \"value\": \"").append(escape(jobLabel)).append("\"},\n");
+        factsJson.append("            {\"title\": \"Repo\", \"value\": \"").append(escape(repoLabel)).append("\"}");
+        if (result.jiraKey() != null && !result.jiraKey().isBlank()) {
+            factsJson.append(",\n            {\"title\": \"JIRA\", \"value\": \"").append(escape(result.jiraKey())).append("\"}");
+        }
+        if (result.branchName() != null && !result.branchName().isBlank()) {
+            factsJson.append(",\n            {\"title\": \"Branch / PR\", \"value\": \"").append(escape(result.branchName())).append("\"}");
+        }
 
         String payload = """
                 {
@@ -60,16 +72,13 @@ public class TeamsNotifier {
                           "type": "TextBlock",
                           "size": "Medium",
                           "weight": "Bolder",
-                          "text": "Code Agent: %s [%s]",
+                          "text": "Code Agent %s: %s",
                           "style": "%s"
                         },
                         {
                           "type": "FactSet",
                           "facts": [
-                            {"title": "Job", "value": "%s"},
-                            {"title": "Repo", "value": "%s"},
-                            {"title": "JIRA", "value": "%s"},
-                            {"title": "Branch / PR", "value": "%s"}
+                            %s
                           ]
                         },
                         {
@@ -82,12 +91,9 @@ public class TeamsNotifier {
                   }]
                 }
                 """.formatted(
-                status, escape(result.jiraKey()),
-                color.equals("Good") ? "default" : "attention",
-                escape(result.jobId()),
-                escape(repoLabel),
-                escape(result.jiraKey()),
-                escape(result.branchName()),
+                jobLabel, status,
+                cardStyle,
+                factsJson,
                 body
         );
 
@@ -103,6 +109,21 @@ public class TeamsNotifier {
         } catch (Exception e) {
             LOG.errorf("Teams notification failed: %s", e.getMessage());
         }
+    }
+
+    private static String jobTypeLabel(String jobType) {
+        if (jobType == null) return "Job";
+        return switch (jobType) {
+            case "FIX" -> "Fix";
+            case "REVIEW" -> "Review";
+            case "FIX_PR" -> "Fix PR";
+            case "REPLY" -> "Reply";
+            case "FIX_COMMENT" -> "Fix Comment";
+            case "HOOK" -> "Hook";
+            case "GENERATE_TESTS" -> "Generate Tests";
+            case "GENERATE_DOCS" -> "Generate Docs";
+            default -> jobType;
+        };
     }
 
     private static String escape(String text) {
