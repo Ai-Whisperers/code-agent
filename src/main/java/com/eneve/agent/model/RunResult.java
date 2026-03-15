@@ -2,6 +2,7 @@ package com.eneve.agent.model;
 
 public record RunResult(
         String jobId,
+        String jobType,
         boolean success,
         String jiraKey,
         String repoUrl,

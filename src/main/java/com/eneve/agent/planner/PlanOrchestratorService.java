@@ -4,17 +4,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
+import com.eneve.agent.agent.CodeMetricsStore;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -61,8 +67,24 @@ public class PlanOrchestratorService {
      */
     private final ConcurrentHashMap<String, String> planPrUrl = new ConcurrentHashMap<>();
 
+    /**
+     * Tracks how many quality-improvement iterations (FIX→METRICS cycles) have been
+     * completed per quality-improvement plan. Used to enforce {@code maxIterations}.
+     */
+    private final ConcurrentHashMap<String, AtomicInteger> planIterationCount = new ConcurrentHashMap<>();
+
     @Inject PlanStore planStore;
     @Inject JobQueue jobQueue;
+    @Inject CodeMetricsStore codeMetricsStore;
+
+    @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
+    int defaultCcThreshold;
+
+    @ConfigProperty(name = "metrics.max-iterations", defaultValue = "3")
+    int defaultMaxIterations;
+
+    @ConfigProperty(name = "metrics.max-methods-per-fix", defaultValue = "20")
+    int defaultMaxMethodsPerFix;
 
     // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -125,6 +147,14 @@ public class PlanOrchestratorService {
         // awaiting human merge — the step itself is done from the orchestrator's view.
         String stepStatus = isSuccess(event.status()) ? "SUCCESS" : "FAILED";
         planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId());
+
+        // When a METRICS step succeeds, evaluate whether the quality loop should continue
+        // or terminate. This must happen before checkPhaseCompletion advances the plan.
+        if (isSuccess(event.status()) && tracked.isMetricsStep()) {
+            synchronized (lockFor(tracked.planId())) {
+                maybeAppendQualityIteration(tracked.planId());
+            }
+        }
 
         synchronized (lockFor(tracked.planId())) {
             checkPhaseCompletion(tracked.planId(), tracked.phaseOrder());
@@ -245,12 +275,114 @@ public class PlanOrchestratorService {
                 return;
             }
 
-            trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order()));
+            boolean isMetrics = "METRICS".equalsIgnoreCase(step.jobType());
+            trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order(), isMetrics));
             submittedJobIds.add(job.getJobId());
             planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId());
             LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s",
                     job.getJobId(), step.stepId(), step.jobType(), plan.planId());
         }
+    }
+
+    // ─── Quality loop ────────────────────────────────────────────────────────────
+
+    /**
+     * Called synchronously (inside the plan lock) after a METRICS step succeeds.
+     * Reads the latest snapshot for the plan, evaluates exit conditions, and either
+     * appends a new FIX + METRICS phase pair (loop continues) or leaves the plan
+     * data unchanged (orchestrator will advance to whatever comes next, or complete).
+     *
+     * <p>Exit conditions (any one terminates the loop):
+     * <ol>
+     *   <li>Threshold met: all methods at or below CC threshold.</li>
+     *   <li>Max iterations reached: the configured iteration cap has been hit.</li>
+     *   <li>No improvement: average CC did not decrease since the previous snapshot.</li>
+     * </ol>
+     */
+    private void maybeAppendQualityIteration(String planId) {
+        ExecutionPlan plan = planStore.find(planId).orElse(null);
+        if (plan == null || !PlanStatus.EXECUTING.name().equals(plan.status())) {
+            return;
+        }
+
+        List<CodeMetricsSnapshot> snapshots = codeMetricsStore.findByPlan(planId);
+        if (snapshots.isEmpty()) {
+            LOG.warnf("Orchestrator: no snapshots found for plan %s after METRICS step", planId);
+            return;
+        }
+
+        CodeMetricsSnapshot latest = snapshots.get(snapshots.size() - 1);
+        int maxIterations = latest.threshold() > 0
+                ? defaultMaxIterations : defaultMaxIterations; // use snapshot threshold
+
+        // Determine effective limits from the snapshot metadata (threshold was baked in)
+        int ccThreshold = latest.threshold();
+        AtomicInteger iterCount = planIterationCount.computeIfAbsent(planId, k -> new AtomicInteger(0));
+
+        if (latest.thresholdMet()) {
+            LOG.infof("Orchestrator: quality threshold met for plan %s (0 methods above CC %d) — loop complete",
+                    planId, ccThreshold);
+            return;
+        }
+
+        if (iterCount.get() >= maxIterations) {
+            LOG.infof("Orchestrator: max iterations (%d) reached for plan %s — stopping quality loop",
+                    maxIterations, planId);
+            return;
+        }
+
+        if (snapshots.size() >= 2) {
+            CodeMetricsSnapshot previous = snapshots.get(snapshots.size() - 2);
+            if (latest.avgComplexity() >= previous.avgComplexity()) {
+                LOG.infof("Orchestrator: no improvement in avg CC for plan %s (%.2f → %.2f) — stopping loop",
+                        planId, previous.avgComplexity(), latest.avgComplexity());
+                return;
+            }
+        }
+
+        // Append a new FIX phase + METRICS phase pair
+        int iteration = iterCount.incrementAndGet();
+        int nextOrder = plan.planData().phases().stream()
+                .mapToInt(PlanPhase::order)
+                .max()
+                .orElse(0) + 1;
+
+        String fixStepId = "quality-fix-iter-" + iteration;
+        String metricsStepId = "quality-metrics-iter-" + iteration;
+
+        // Extract connection info from the latest metrics snapshot for the fix prompt
+        String metricsContext = latest.formatForPrompt(defaultMaxMethodsPerFix);
+
+        PlanStep fixStep = new PlanStep(
+                fixStepId, "FIX",
+                "Reduce cyclomatic complexity (iteration " + iteration + ")",
+                metricsContext,
+                "PENDING", null,
+                Map.of("branchName", "agent/quality/" + planId.substring(0, 8) + "-iter-" + iteration));
+
+        PlanStep metricsStep = new PlanStep(
+                metricsStepId, "METRICS",
+                "Re-measure code metrics (iteration " + iteration + ")",
+                null,
+                "PENDING", null,
+                Map.of(
+                        "ccThreshold", String.valueOf(ccThreshold),
+                        "maxIterations", String.valueOf(maxIterations)));
+
+        PlanPhase fixPhase = new PlanPhase(nextOrder, "Quality Fix (iteration " + iteration + ")", true,
+                List.of(fixStep));
+        PlanPhase metricsPhase = new PlanPhase(nextOrder + 1, "Metrics Check (iteration " + iteration + ")", true,
+                List.of(metricsStep));
+
+        List<PlanPhase> updatedPhases = new ArrayList<>(plan.planData().phases());
+        updatedPhases.add(fixPhase);
+        updatedPhases.add(metricsPhase);
+
+        planStore.updatePlanData(planId, new PlanData(updatedPhases));
+
+        LOG.infof("Orchestrator: appended FIX+METRICS phase pair (iteration %d) for plan %s "
+                + "(%d methods above CC %d, avg %.2f)",
+                iteration, planId, latest.methodsAboveThreshold(), ccThreshold, latest.avgComplexity());
     }
 
     // ─── Step → Job mapping ──────────────────────────────────────────────────────
@@ -334,6 +466,30 @@ public class PlanOrchestratorService {
                         null   // headCommitSha
                 ));
             }
+            case "METRICS" -> {
+                String branch = param(step, "branch",
+                        plan.targetBranch() != null ? plan.targetBranch() : "main");
+                String ccThresholdStr = param(step, "ccThreshold", String.valueOf(defaultCcThreshold));
+                String maxIterStr = param(step, "maxIterations", String.valueOf(defaultMaxIterations));
+                int ccThreshold;
+                int maxIter;
+                try {
+                    ccThreshold = Integer.parseInt(ccThresholdStr);
+                    maxIter = Integer.parseInt(maxIterStr);
+                } catch (NumberFormatException e) {
+                    ccThreshold = defaultCcThreshold;
+                    maxIter = defaultMaxIterations;
+                }
+                yield new JobRecord(jobId, new MetricsJobRequest(
+                        plan.repoUrl(),
+                        branch,
+                        null,  // workspace — derived from repoUrl in AgentRunner
+                        null,  // repoSlug — derived from repoUrl in AgentRunner
+                        ccThreshold,
+                        maxIter,
+                        plan.planId()
+                ));
+            }
             default -> {
                 LOG.warnf("Orchestrator: unknown jobType '%s' for step %s", jobType, step.stepId());
                 yield null;
@@ -409,6 +565,7 @@ public class PlanOrchestratorService {
     private void cleanup(String planId) {
         planPrUrl.remove(planId);
         planLocks.remove(planId);
+        planIterationCount.remove(planId);
     }
 
     private Object lockFor(String planId) {
@@ -429,5 +586,5 @@ public class PlanOrchestratorService {
     // ─── Inner record ─────────────────────────────────────────────────────────────
 
     /** Maps a dispatched jobId back to the plan + step + phase it represents. */
-    private record TrackedStep(String planId, String stepId, int phaseOrder) {}
+    private record TrackedStep(String planId, String stepId, int phaseOrder, boolean isMetricsStep) {}
 }
