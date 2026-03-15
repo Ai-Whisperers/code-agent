@@ -34,11 +34,17 @@ public class TeamsNotifier {
 
         String color = result.success() ? "Good" : "Attention";
         String status = result.success() ? "SUCCESS" : "FAILED";
+
+        boolean hasStats = result.filesChanged() > 0 || result.linesChanged() > 0;
         String body = result.success()
-                ? "PR: " + result.prUrl() + "\\n\\nSummary: " + escape(result.summary())
-                  + "\\n\\nFiles changed: " + result.filesChanged()
-                  + " | Lines changed: " + result.linesChanged()
+                ? (result.prUrl() != null && !result.prUrl().isBlank()
+                        ? "PR: " + result.prUrl() + "\\n\\n" : "")
+                  + "Summary: " + escape(result.summary())
+                  + (hasStats ? "\\n\\nFiles changed: " + result.filesChanged()
+                        + " | Lines changed: " + result.linesChanged() : "")
                 : "Error: " + escape(result.errorMessage());
+
+        String repoLabel = repoSlug(result.repoUrl());
 
         String payload = """
                 {
@@ -61,8 +67,9 @@ public class TeamsNotifier {
                           "type": "FactSet",
                           "facts": [
                             {"title": "Job", "value": "%s"},
+                            {"title": "Repo", "value": "%s"},
                             {"title": "JIRA", "value": "%s"},
-                            {"title": "Branch", "value": "%s"}
+                            {"title": "Branch / PR", "value": "%s"}
                           ]
                         },
                         {
@@ -78,6 +85,7 @@ public class TeamsNotifier {
                 status, escape(result.jiraKey()),
                 color.equals("Good") ? "default" : "attention",
                 escape(result.jobId()),
+                escape(repoLabel),
                 escape(result.jiraKey()),
                 escape(result.branchName()),
                 body
@@ -103,5 +111,19 @@ public class TeamsNotifier {
                 .replace("\"", "\\\"")
                 .replace("\n", "\\n")
                 .replace("\r", "");
+    }
+
+    /**
+     * Extracts a human-readable "workspace/repo" slug from a clone URL.
+     * e.g. "https://bitbucket.org/acme/my-service.git" -> "acme/my-service"
+     * Falls back to the raw URL if parsing fails.
+     */
+    private static String repoSlug(String repoUrl) {
+        if (repoUrl == null || repoUrl.isBlank()) return "";
+        String s = repoUrl.stripTrailing().replaceAll("\\.git$", "");
+        int slash = s.lastIndexOf('/');
+        if (slash <= 0) return s;
+        int prevSlash = s.lastIndexOf('/', slash - 1);
+        return prevSlash >= 0 ? s.substring(prevSlash + 1) : s.substring(slash + 1);
     }
 }

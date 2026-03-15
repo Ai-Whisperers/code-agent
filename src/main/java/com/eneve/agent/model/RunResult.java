@@ -4,6 +4,7 @@ public record RunResult(
         String jobId,
         boolean success,
         String jiraKey,
+        String repoUrl,
         String branchName,
         String prUrl,
         String summary,
