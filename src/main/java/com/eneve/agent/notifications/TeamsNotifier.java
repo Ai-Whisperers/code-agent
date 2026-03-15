@@ -122,6 +122,7 @@ public class TeamsNotifier {
             case "HOOK" -> "Hook";
             case "GENERATE_TESTS" -> "Generate Tests";
             case "GENERATE_DOCS" -> "Generate Docs";
+            case "UPGRADE" -> "Quarkus Upgrade";
             default -> jobType;
         };
     }

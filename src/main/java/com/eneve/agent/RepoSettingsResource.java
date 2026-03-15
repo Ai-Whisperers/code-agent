@@ -94,13 +94,14 @@ public class RepoSettingsResource {
         boolean enabled = request.reviewEnabled() != null ? request.reviewEnabled() : true;
         boolean vectorEnabled = request.vectorEnabled() != null ? request.vectorEnabled() : false;
         boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
+        boolean upgradeEnabled = request.upgradeEnabled() != null ? request.upgradeEnabled() : true;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
         String confluenceSpaceKey = request.confluenceSpaceKey();
         String confluenceParentPageId = request.confluenceParentPageId();
 
-        settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled,
+        settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
                 ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
 
         return Response.ok(Map.of(
@@ -109,7 +110,8 @@ public class RepoSettingsResource {
                 "repoSlug", repoSlug,
                 "reviewEnabled", enabled,
                 "vectorEnabled", vectorEnabled,
-                "docsEnabled", docsEnabled
+                "docsEnabled", docsEnabled,
+                "upgradeEnabled", upgradeEnabled
         )).build();
     }
 
@@ -272,6 +274,60 @@ public class RepoSettingsResource {
         return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/upgrade/enable")
+    @Operation(
+            operationId = "enableRepoUpgrade",
+            summary = "Enable automatic upgrades for a repository",
+            description = "Turns on automated framework version upgrades for the specified repository. "
+                    + "The repo will be included in the next upgrade scheduler run."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Auto-upgrade enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableUpgrade(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setUpgradeEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "upgrade_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/upgrade/disable")
+    @Operation(
+            operationId = "disableRepoUpgrade",
+            summary = "Disable automatic upgrades for a repository",
+            description = "Prevents the automated upgrade scheduler from creating upgrade plans "
+                    + "for the specified repository. Manual triggers via the /upgrades API still work."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Auto-upgrade disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableUpgrade(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setUpgradeEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
     @DELETE
     @Path("/{workspace}/{repoSlug}")
     @Operation(
@@ -302,6 +358,7 @@ public class RepoSettingsResource {
             Boolean reviewEnabled,
             Boolean vectorEnabled,
             Boolean docsEnabled,
+            Boolean upgradeEnabled,
             List<String> ruleNames,
             String reviewPrompt,
             List<String> disabledHooks,

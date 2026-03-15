@@ -35,8 +35,9 @@ public class RepoSettingsStore {
     public Optional<RepoSettings> find(String workspace, String repoSlug) {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                       rule_names, review_prompt, disabled_hooks,
-                       confluence_space_key, confluence_parent_page_id, created_at, updated_at
+                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       confluence_space_key, confluence_parent_page_id,
+                       archetype, archetype_version, created_at, updated_at
                 FROM repo_settings
                 WHERE workspace = ? AND repo_slug = ?
                 """;
@@ -58,8 +59,9 @@ public class RepoSettingsStore {
     public List<RepoSettings> listAll() {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                       rule_names, review_prompt, disabled_hooks,
-                       confluence_space_key, confluence_parent_page_id, created_at, updated_at
+                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       confluence_space_key, confluence_parent_page_id,
+                       archetype, archetype_version, created_at, updated_at
                 FROM repo_settings
                 ORDER BY workspace, repo_slug
                 """;
@@ -77,20 +79,21 @@ public class RepoSettingsStore {
     }
 
     public void upsert(String workspace, String repoSlug, boolean reviewEnabled,
-                       boolean vectorEnabled, boolean docsEnabled,
+                       boolean vectorEnabled, boolean docsEnabled, boolean upgradeEnabled,
                        List<String> ruleNames, String reviewPrompt,
                        List<String> disabledHooks,
                        String confluenceSpaceKey, String confluenceParentPageId) {
         String sql = """
                 INSERT INTO repo_settings
                     (workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                     rule_names, review_prompt, disabled_hooks,
+                     upgrade_enabled, rule_names, review_prompt, disabled_hooks,
                      confluence_space_key, confluence_parent_page_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (workspace, repo_slug)
                 DO UPDATE SET review_enabled           = EXCLUDED.review_enabled,
                               vector_enabled           = EXCLUDED.vector_enabled,
                               docs_enabled             = EXCLUDED.docs_enabled,
+                              upgrade_enabled          = EXCLUDED.upgrade_enabled,
                               rule_names               = EXCLUDED.rule_names,
                               review_prompt            = EXCLUDED.review_prompt,
                               disabled_hooks           = EXCLUDED.disabled_hooks,
@@ -105,14 +108,15 @@ public class RepoSettingsStore {
             ps.setBoolean(3, reviewEnabled);
             ps.setBoolean(4, vectorEnabled);
             ps.setBoolean(5, docsEnabled);
-            setNullableString(ps, 6, toJson(ruleNames));
-            setNullableString(ps, 7, reviewPrompt);
-            setNullableString(ps, 8, toJson(disabledHooks));
-            setNullableString(ps, 9, confluenceSpaceKey);
-            setNullableString(ps, 10, confluenceParentPageId);
+            ps.setBoolean(6, upgradeEnabled);
+            setNullableString(ps, 7, toJson(ruleNames));
+            setNullableString(ps, 8, reviewPrompt);
+            setNullableString(ps, 9, toJson(disabledHooks));
+            setNullableString(ps, 10, confluenceSpaceKey);
+            setNullableString(ps, 11, confluenceParentPageId);
             ps.executeUpdate();
-            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s, docsEnabled=%s)",
-                    workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled);
+            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s, docsEnabled=%s, upgradeEnabled=%s)",
+                    workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled);
         } catch (SQLException e) {
             LOG.errorf("Failed to upsert repo settings for %s/%s: %s", workspace, repoSlug, e.getMessage());
         }
@@ -282,6 +286,73 @@ public class RepoSettingsStore {
         }
     }
 
+    public void setUpgradeEnabled(String workspace, String repoSlug, boolean enabled) {
+        String sql = """
+                UPDATE repo_settings SET upgrade_enabled = ?, updated_at = now()
+                WHERE workspace = ? AND repo_slug = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBoolean(1, enabled);
+            ps.setString(2, workspace);
+            ps.setString(3, repoSlug);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to set upgrade_enabled for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+    }
+
+    /**
+     * Stores the detected framework archetype and its version for a repository.
+     * Called by {@code CodeGraphBuildService} after indexing completes.
+     */
+    public void updateArchetype(String workspace, String repoSlug, String archetype, String archetypeVersion) {
+        String sql = """
+                UPDATE repo_settings SET archetype = ?, archetype_version = ?, updated_at = now()
+                WHERE workspace = ? AND repo_slug = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            setNullableString(ps, 1, archetype);
+            setNullableString(ps, 2, archetypeVersion);
+            ps.setString(3, workspace);
+            ps.setString(4, repoSlug);
+            ps.executeUpdate();
+            LOG.debugf("Updated archetype for %s/%s: %s %s", workspace, repoSlug, archetype, archetypeVersion);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to update archetype for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+    }
+
+    /**
+     * Returns all repos whose detected archetype matches the given value (case-insensitive).
+     * Only repos with a non-null archetype_version are returned (detection must have run).
+     */
+    public List<RepoSettings> listByArchetype(String archetype) {
+        String sql = """
+                SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
+                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       confluence_space_key, confluence_parent_page_id,
+                       archetype, archetype_version, created_at, updated_at
+                FROM repo_settings
+                WHERE lower(archetype) = lower(?) AND archetype_version IS NOT NULL
+                ORDER BY workspace, repo_slug
+                """;
+        List<RepoSettings> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, archetype);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list repos by archetype '%s': %s", archetype, e.getMessage());
+        }
+        return results;
+    }
+
     // ─── Private helpers ────────────────────────────────────────────────
 
     private RepoSettings mapRow(ResultSet rs) throws SQLException {
@@ -294,11 +365,14 @@ public class RepoSettingsStore {
                 rs.getBoolean("review_enabled"),
                 rs.getBoolean("vector_enabled"),
                 rs.getBoolean("docs_enabled"),
+                rs.getBoolean("upgrade_enabled"),
                 fromJson(rs.getString("rule_names")),
                 rs.getString("review_prompt"),
                 fromJson(rs.getString("disabled_hooks")),
                 rs.getString("confluence_space_key"),
                 rs.getString("confluence_parent_page_id"),
+                rs.getString("archetype"),
+                rs.getString("archetype_version"),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );

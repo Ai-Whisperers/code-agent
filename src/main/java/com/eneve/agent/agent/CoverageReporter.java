@@ -10,6 +10,7 @@ import java.util.concurrent.TimeUnit;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
+import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import org.jboss.logging.Logger;
@@ -194,9 +195,9 @@ public class CoverageReporter {
         }
 
         LOG.info("Running JaCoCo coverage measurement...");
-        String command = "mvn jacoco:prepare-agent test jacoco:report -q";
+        String command = ProcessHelper.mvn(workspace.getRoot()) + " jacoco:prepare-agent test jacoco:report -q";
         try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();

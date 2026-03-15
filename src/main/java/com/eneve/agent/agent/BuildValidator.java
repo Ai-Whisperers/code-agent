@@ -6,6 +6,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
+import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -29,7 +30,7 @@ public class BuildValidator {
         }
 
         LOG.infof("Build validation using: %s", command);
-        ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
+        ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);
         Process proc = pb.start();
@@ -49,7 +50,7 @@ public class BuildValidator {
 
     private String detectTestCommand(Path root) {
         if (Files.exists(root.resolve("pom.xml"))) {
-            return "mvn test";
+            return ProcessHelper.mvn(root) + " test";
         }
         if (Files.exists(root.resolve("build.gradle")) || Files.exists(root.resolve("build.gradle.kts"))) {
             return "gradle test";

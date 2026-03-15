@@ -494,6 +494,12 @@ public class BitbucketPlatformService implements GitPlatformService {
         }
     }
 
+    @Override
+    public String buildCloneUrl(String workspace, String repoSlug) {
+        return "https://" + bbUser + ":" + appPassword
+                + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
+    }
+
     private static String escapeJson(String text) {
         if (text == null) return "";
         return text.replace("\\", "\\\\")

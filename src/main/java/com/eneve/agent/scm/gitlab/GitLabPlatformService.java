@@ -567,6 +567,12 @@ public class GitLabPlatformService implements GitPlatformService {
         }
     }
 
+    @Override
+    public String buildCloneUrl(String workspace, String repoSlug) {
+        String user = agentUser != null && !agentUser.isBlank() ? agentUser : "gitlab-ci-token";
+        return "https://" + user + ":" + token + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
+    }
+
     private static String escapeJson(String text) {
         if (text == null) return "";
         return text.replace("\\", "\\\\")

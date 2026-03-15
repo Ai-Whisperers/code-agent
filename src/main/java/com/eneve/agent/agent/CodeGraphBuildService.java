@@ -2,6 +2,7 @@ package com.eneve.agent.agent;
 
 import java.util.List;
 
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -23,15 +24,8 @@ public class CodeGraphBuildService {
     @Inject CodeGraphIndexer codeGraphIndexer;
     @Inject EmbeddingIndexer embeddingIndexer;
     @Inject RepoSettingsStore repoSettingsStore;
-
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
-    @ConfigProperty(name = "git.platform", defaultValue = "bitbucket")
-    String gitPlatform;
+    @Inject ArchetypeDetector archetypeDetector;
+    @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "code-graph.scheduler.default-branch", defaultValue = "main")
     String defaultBranch;
@@ -64,7 +58,7 @@ public class CodeGraphBuildService {
                 continue;
             }
 
-            String cloneUrl = buildCloneUrl(repo.workspace(), repo.repoSlug());
+            String cloneUrl = platformService.buildCloneUrl(repo.workspace(), repo.repoSlug());
             if (cloneUrl == null) {
                 skipped++;
                 continue;
@@ -87,7 +81,7 @@ public class CodeGraphBuildService {
      * Returns true on success.
      */
     public boolean buildGraph(String workspace, String repoSlug) {
-        String cloneUrl = buildCloneUrl(workspace, repoSlug);
+        String cloneUrl = platformService.buildCloneUrl(workspace, repoSlug);
         if (cloneUrl == null) {
             return false;
         }
@@ -119,6 +113,13 @@ public class CodeGraphBuildService {
 
             codeGraphIndexer.indexFull(ws, workspace, repoSlug);
 
+            ArchetypeDetector.ArchetypeInfo archetypeInfo = archetypeDetector.detect(ws.getRoot());
+            if (archetypeInfo != null) {
+                repoSettingsStore.updateArchetype(workspace, repoSlug, archetypeInfo.archetype(), archetypeInfo.version());
+                LOG.infof("Detected archetype for %s/%s: %s %s",
+                        workspace, repoSlug, archetypeInfo.archetype(), archetypeInfo.version());
+            }
+
             if (repoSettingsStore.isVectorEnabled(workspace, repoSlug)) {
                 LOG.infof("Vector indexing enabled for %s/%s — generating embeddings", workspace, repoSlug);
                 embeddingIndexer.indexFull(ws, workspace, repoSlug);
@@ -134,22 +135,4 @@ public class CodeGraphBuildService {
         }
     }
 
-    String buildCloneUrl(String workspace, String repoSlug) {
-        return switch (gitPlatform.toLowerCase()) {
-            case "bitbucket" -> "https://" + gitUser + ":" + gitPassword
-                    + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
-            case "gitlab" -> "https://" + gitUser + ":" + gitPassword
-                    + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
-            case "azuredevops" -> {
-                LOG.debugf("Graph build for Azure DevOps repos requires project field — "
-                        + "skipping %s/%s. Graph will be built at first review.", workspace, repoSlug);
-                yield null;
-            }
-            default -> {
-                LOG.warnf("Unknown git.platform '%s' — cannot build clone URL for %s/%s",
-                        gitPlatform, workspace, repoSlug);
-                yield null;
-            }
-        };
-    }
 }

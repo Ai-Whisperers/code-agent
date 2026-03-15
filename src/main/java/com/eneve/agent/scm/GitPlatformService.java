@@ -99,4 +99,23 @@ public interface GitPlatformService {
                                   byte[] data, String contentType) {
         return null;
     }
+
+    /**
+     * Builds an authenticated HTTPS clone URL for the given repository.
+     *
+     * <p>Used by scheduled jobs (code-graph builder, upgrade checker) that need to clone
+     * a repository identified only by its {@code workspace} and {@code repoSlug}, without
+     * a full clone URL being available in advance.
+     *
+     * <p>Implementations that cannot construct a valid clone URL from these two parameters
+     * alone (e.g. Azure DevOps, which also requires a {@code project} segment) must return
+     * {@code null}. Callers are expected to skip such repos gracefully.
+     *
+     * @param workspace workspace, namespace, or organisation slug
+     * @param repoSlug  repository slug or name
+     * @return authenticated HTTPS clone URL, or {@code null} if not supported
+     */
+    default String buildCloneUrl(String workspace, String repoSlug) {
+        return null;
+    }
 }

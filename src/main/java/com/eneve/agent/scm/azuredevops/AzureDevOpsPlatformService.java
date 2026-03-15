@@ -536,6 +536,19 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                 .encodeToString((":" + pat).getBytes(StandardCharsets.UTF_8));
     }
 
+    /**
+     * Azure DevOps clone URLs require the project path segment
+     * ({@code https://dev.azure.com/{org}/{project}/_git/{repo}}), which is not
+     * available from workspace + repoSlug alone. Returns {@code null} so callers
+     * skip Azure DevOps repos gracefully; graphs and upgrades are handled at first review.
+     */
+    @Override
+    public String buildCloneUrl(String workspace, String repoSlug) {
+        LOG.debugf("buildCloneUrl not supported for Azure DevOps without project — skipping %s/%s",
+                workspace, repoSlug);
+        return null;
+    }
+
     private static String escapeJson(String text) {
         if (text == null) return "";
         return text.replace("\\", "\\\\")

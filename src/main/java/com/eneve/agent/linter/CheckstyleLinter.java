@@ -16,6 +16,8 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
+import com.eneve.agent.util.ProcessHelper;
+
 import jakarta.enterprise.context.ApplicationScoped;
 
 @ApplicationScoped
@@ -23,8 +25,8 @@ public class CheckstyleLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(CheckstyleLinter.class);
 
-    private static final String MAVEN_COMMAND =
-            "mvn org.apache.maven.plugins:maven-checkstyle-plugin:3.6.0:checkstyle"
+    private static final String CHECKSTYLE_ARGS =
+            " org.apache.maven.plugins:maven-checkstyle-plugin:3.6.0:checkstyle"
                     + " -Dcheckstyle.output.format=xml -q";
 
     private static final String REPORT_PATH = "target/checkstyle-result.xml";
@@ -42,8 +44,9 @@ public class CheckstyleLinter implements LinterRunner {
     @Override
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running Checkstyle analysis...");
+        String command = ProcessHelper.mvn(workspaceRoot) + CHECKSTYLE_ARGS;
         try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", MAVEN_COMMAND)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
