@@ -25,6 +25,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.ObservesAsync;
 import jakarta.inject.Inject;
 
@@ -77,6 +78,7 @@ public class PlanOrchestratorService {
     @Inject PlanStore planStore;
     @Inject JobQueue jobQueue;
     @Inject CodeMetricsStore codeMetricsStore;
+    @Inject Event<PlanCompletedEvent> planCompletedEvent;
 
     @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
     int defaultCcThreshold;
@@ -199,6 +201,7 @@ public class PlanOrchestratorService {
             planStore.updatePlanData(planId, skipped);
             planStore.updateStatusAndError(planId, PlanStatus.FAILED.name(),
                     "Phase \"" + phase.name() + "\" failed; subsequent phases skipped");
+            planCompletedEvent.fireAsync(new PlanCompletedEvent(planId, PlanStatus.FAILED.name()));
             cleanup(planId);
             return;
         }
@@ -272,6 +275,7 @@ public class PlanOrchestratorService {
                 planStore.updateStepInPlan(plan.planId(), step.stepId(), "FAILED", job.getJobId());
                 planStore.updateStatusAndError(plan.planId(), PlanStatus.FAILED.name(),
                         "Job queue full when submitting step \"" + step.stepId() + "\"");
+                planCompletedEvent.fireAsync(new PlanCompletedEvent(plan.planId(), PlanStatus.FAILED.name()));
                 cleanup(plan.planId());
                 return;
             }
@@ -569,6 +573,7 @@ public class PlanOrchestratorService {
     private void markCompleted(String planId) {
         LOG.infof("Orchestrator: plan %s completed successfully", planId);
         planStore.updateStatus(planId, PlanStatus.COMPLETED.name());
+        planCompletedEvent.fireAsync(new PlanCompletedEvent(planId, PlanStatus.COMPLETED.name()));
         cleanup(planId);
     }
 

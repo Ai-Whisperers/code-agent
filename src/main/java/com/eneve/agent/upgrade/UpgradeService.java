@@ -3,13 +3,16 @@ package com.eneve.agent.upgrade;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.eneve.agent.agent.RepoSettings;
 import com.eneve.agent.agent.RepoSettingsStore;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.planner.ExecutionPlan;
+import com.eneve.agent.planner.PlanCompletedEvent;
 import com.eneve.agent.planner.PlanOrchestratorService;
+import com.eneve.agent.planner.PlanStatus;
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.PlannerService;
 import com.eneve.agent.scm.GitPlatformService;
@@ -19,6 +22,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.ObservesAsync;
 import jakarta.inject.Inject;
 
 /**
@@ -50,6 +54,11 @@ public class UpgradeService {
 
     @ConfigProperty(name = "upgrade.scheduler.default-branch", defaultValue = "develop")
     String defaultBranch;
+
+    /** Tracks plans started by this service: planId → upgrade context needed to update repo settings on completion. */
+    private final ConcurrentHashMap<String, UpgradeContext> activePlans = new ConcurrentHashMap<>();
+
+    private record UpgradeContext(String workspace, String repoSlug, String targetVersion) {}
 
     public record UpgradeResult(int checked, int outdated, int plansCreated, List<String> planIds) {}
 
@@ -178,6 +187,8 @@ public class UpgradeService {
         planStore.create(plan);
         planStore.approve(plan.planId());
 
+        activePlans.put(plan.planId(), new UpgradeContext(repo.workspace(), repo.repoSlug(), latestVersion));
+
         try {
             orchestratorService.startExecution(plan.planId());
             LOG.infof("UpgradeService: plan %s started for %s/%s (Quarkus %s → %s)",
@@ -195,6 +206,7 @@ public class UpgradeService {
         } catch (Exception e) {
             LOG.errorf("UpgradeService: failed to start execution for plan %s (%s/%s): %s",
                     plan.planId(), repo.workspace(), repo.repoSlug(), e.getMessage());
+            activePlans.remove(plan.planId());
 
             teamsNotifier.sendNotification(new RunResult(
                     plan.planId(), "UPGRADE", "FAILED",
@@ -203,6 +215,26 @@ public class UpgradeService {
                     0, 0));
             return null;
         }
+    }
+
+    /**
+     * Listens for plan completion events. When an upgrade plan completes successfully,
+     * updates the repo's stored {@code archetype_version} so that the next upgrade check
+     * sees the correct baseline and does not re-trigger an already-applied upgrade.
+     */
+    public void onPlanCompleted(@ObservesAsync PlanCompletedEvent event) {
+        UpgradeContext ctx = activePlans.remove(event.planId());
+        if (ctx == null) {
+            return; // not an upgrade plan managed by this service
+        }
+        if (!PlanStatus.COMPLETED.name().equals(event.status())) {
+            LOG.infof("UpgradeService: upgrade plan %s ended with %s for %s/%s — archetype_version not updated",
+                    event.planId(), event.status(), ctx.workspace(), ctx.repoSlug());
+            return;
+        }
+        LOG.infof("UpgradeService: upgrade plan %s completed — updating %s/%s archetype_version to %s",
+                event.planId(), ctx.workspace(), ctx.repoSlug(), ctx.targetVersion());
+        repoSettingsStore.updateArchetype(ctx.workspace(), ctx.repoSlug(), "quarkus", ctx.targetVersion());
     }
 
     private String buildSpecText(String currentVersion, String latestVersion,
