@@ -218,10 +218,10 @@ public class UpgradeService {
                 Steps:
                 1. Update the Quarkus BOM/platform version in pom.xml (check parent pom, \
                 properties, dependencyManagement).
-                2. Run `mvn quarkus:update` if the Quarkus Maven plugin is present.
+                2. Run `./mvnw quarkus:update` (or `mvn quarkus:update` if no wrapper) if the Quarkus Maven plugin is present.
                 3. Apply any breaking changes listed in the Migration Guide section below.
-                4. Ensure the project compiles: `mvn compile`
-                5. Run tests: `mvn test`
+                4. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists in the project root, otherwise `mvn compile`
+                5. Run tests: run `./mvnw test` if ./mvnw exists in the project root, otherwise `mvn test`
 
                 Current version: %s
                 Target version: %s
