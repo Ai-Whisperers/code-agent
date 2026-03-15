@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 
+import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
 import javax.xml.parsers.DocumentBuilderFactory;
 
@@ -48,8 +49,19 @@ public class ArchetypeDetector {
         try (InputStream in = Files.newInputStream(pomPath)) {
             DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
             factory.setNamespaceAware(false);
-            // Disable external entity processing to prevent XXE
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            // Disable external entity processing (XXE) using the portable JAXP constant.
+            // The Xerces-specific disallow-doctype-decl feature is also attempted but
+            // wrapped in a separate try-catch so that unsupported parsers don't swallow
+            // detection entirely.
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            try {
+                factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            } catch (Exception ignored) {
+                // Not all XML parser implementations support this Xerces-specific feature;
+                // FEATURE_SECURE_PROCESSING above is sufficient for our purposes.
+            }
             DocumentBuilder builder = factory.newDocumentBuilder();
             Document doc = builder.parse(in);
             doc.getDocumentElement().normalize();
@@ -76,7 +88,7 @@ public class ArchetypeDetector {
 
     private ArchetypeInfo detectQuarkus(Document doc, Map<String, String> properties) {
         // 1. Check parent: <groupId>io.quarkus.platform</groupId> or <groupId>io.quarkus</groupId>
-        String parentGroupId = firstText(doc, "project > parent > groupId");
+        String parentGroupId = resolve(firstText(doc, "project > parent > groupId"), properties);
         String parentVersion = firstText(doc, "project > parent > version");
 
         if (isQuarkusGroup(parentGroupId) && parentVersion != null) {
@@ -87,15 +99,18 @@ public class ArchetypeDetector {
             }
         }
 
-        // 2. Check <dependencyManagement> for quarkus-bom or quarkus-universe-bom
+        // 2. Check <dependencyManagement> for quarkus-bom or quarkus-universe-bom.
+        // groupId and artifactId are resolved through properties first so that the common
+        // pattern of using ${quarkus.platform.group-id} / ${quarkus.platform.artifact-id}
+        // is handled correctly.
         NodeList deps = doc.getElementsByTagName("dependency");
         for (int i = 0; i < deps.getLength(); i++) {
             Node node = deps.item(i);
             if (node.getNodeType() != Node.ELEMENT_NODE) continue;
             Element dep = (Element) node;
-            String groupId = textContent(dep, "groupId");
-            String artifactId = textContent(dep, "artifactId");
-            String version = textContent(dep, "version");
+            String groupId    = resolve(textContent(dep, "groupId"),    properties);
+            String artifactId = resolve(textContent(dep, "artifactId"), properties);
+            String version    = textContent(dep, "version");
 
             if (isQuarkusGroup(groupId) && isQuarkusBom(artifactId) && version != null) {
                 String resolved = resolve(version, properties);
@@ -106,7 +121,9 @@ public class ArchetypeDetector {
             }
         }
 
-        // 3. Check properties for quarkus.platform.version or quarkus.version
+        // 3. Check properties for quarkus.platform.version or quarkus.version.
+        // This is the primary path for POMs that declare the version only in <properties>
+        // and reference it everywhere else via ${quarkus.platform.version}.
         String version = properties.get("quarkus.platform.version");
         if (version == null) {
             version = properties.get("quarkus.version");
@@ -135,8 +152,8 @@ public class ArchetypeDetector {
 
     private ArchetypeInfo detectWildFly(Document doc, Map<String, String> properties) {
         // Check parent for jboss-parent or wildfly-parent
-        String parentGroupId = firstText(doc, "project > parent > groupId");
-        String wildFlyParentArtifactId = firstText(doc, "project > parent > artifactId");
+        String parentGroupId = resolve(firstText(doc, "project > parent > groupId"), properties);
+        String wildFlyParentArtifactId = resolve(firstText(doc, "project > parent > artifactId"), properties);
         String parentVersion = firstText(doc, "project > parent > version");
 
         if (isWildFlyParent(parentGroupId, wildFlyParentArtifactId) && parentVersion != null) {
@@ -147,15 +164,16 @@ public class ArchetypeDetector {
             }
         }
 
-        // Check dependencyManagement for wildfly-bom or jboss-eap-jakartaee8-with-tools
+        // Check dependencyManagement for wildfly-bom or jboss-eap-jakartaee8-with-tools.
+        // Resolve groupId and artifactId through properties for consistency.
         NodeList deps = doc.getElementsByTagName("dependency");
         for (int i = 0; i < deps.getLength(); i++) {
             Node node = deps.item(i);
             if (node.getNodeType() != Node.ELEMENT_NODE) continue;
             Element dep = (Element) node;
-            String groupId = textContent(dep, "groupId");
-            String artifactId = textContent(dep, "artifactId");
-            String version = textContent(dep, "version");
+            String groupId    = resolve(textContent(dep, "groupId"),    properties);
+            String artifactId = resolve(textContent(dep, "artifactId"), properties);
+            String version    = textContent(dep, "version");
 
             if (isWildFlyBom(groupId, artifactId) && version != null) {
                 String resolved = resolve(version, properties);
