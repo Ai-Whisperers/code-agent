@@ -22,7 +22,7 @@ public class CodeGraphScheduler {
     @ConfigProperty(name = "code-graph.scheduler.enabled", defaultValue = "true")
     boolean enabled;
 
-    @Scheduled(every = "6h", delayed = "5m",
+    @Scheduled(every = "24h", delayed = "5m",
                concurrentExecution = Scheduled.ConcurrentExecution.SKIP)
     void buildMissingGraphs() {
         if (!enabled) {
