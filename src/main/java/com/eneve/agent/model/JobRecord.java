@@ -12,6 +12,7 @@ public class JobRecord {
     private final HookJobRequest hookRequest;
     private final GenerateTestsRequest generateTestsRequest;
     private final GenerateDocsRequest generateDocsRequest;
+    private final MetricsJobRequest metricsRequest;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -31,6 +32,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -45,6 +47,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -59,6 +62,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -77,6 +81,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -91,6 +96,7 @@ public class JobRecord {
         this.hookRequest = hookRequest;
         this.generateTestsRequest = null;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -105,6 +111,7 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = generateTestsRequest;
         this.generateDocsRequest = null;
+        this.metricsRequest = null;
         this.jobType = JobType.GENERATE_TESTS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -119,7 +126,23 @@ public class JobRecord {
         this.hookRequest = null;
         this.generateTestsRequest = null;
         this.generateDocsRequest = generateDocsRequest;
+        this.metricsRequest = null;
         this.jobType = JobType.GENERATE_DOCS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, MetricsJobRequest metricsRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.metricsRequest = metricsRequest;
+        this.jobType = JobType.METRICS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -132,6 +155,7 @@ public class JobRecord {
     public HookJobRequest getHookRequest() { return hookRequest; }
     public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
     public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
+    public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 

@@ -636,6 +636,64 @@ public class AgentPromptBuilder {
         );
     }
 
+    /**
+     * Builds the system prompt for a quality-improvement FIX job driven by cyclomatic
+     * complexity metrics. The agent's goal is to refactor methods above the CC threshold
+     * without changing observable behaviour, then commit the result.
+     *
+     * @param snapshot   the CC snapshot from the preceding METRICS step
+     * @param maxMethods how many of the worst-offending methods to include in the prompt
+     */
+    public String buildMetricsFixPrompt(
+            CodeMetricsCalculator.CodeMetricsSnapshot snapshot,
+            int maxMethods) {
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(null, Collections.emptyList());
+
+        String metricsSection = snapshot.formatForPrompt(maxMethods);
+
+        String instructions = """
+                You are refactoring Java source code to reduce cyclomatic complexity.
+                Your ONLY goal is to lower the CC of the methods listed below without changing
+                their observable behaviour. Do NOT add new features, fix bugs, or touch unrelated code.
+
+                %s
+
+                ## Refactoring Strategies (apply as appropriate)
+                1. **Extract Method** — break large method bodies into smaller, focused helpers.
+                2. **Replace Conditionals with Polymorphism** — use strategy/command patterns instead
+                   of long if-else or switch chains that dispatch on type.
+                3. **Introduce Guard Clauses** — use early returns to eliminate deeply nested else branches.
+                4. **Simplify Boolean Expressions** — extract complex conditions into named boolean methods or variables.
+                5. **Replace Loop with Pipeline** — replace imperative loops with Stream operations where it improves
+                   readability without adding complexity.
+                6. **Decompose Conditionals** — extract the condition and both branches into separate methods.
+
+                ## Constraints
+                - Preserve ALL existing method signatures (name, parameter types, return type, visibility).
+                - Do NOT delete or rename public/protected methods; only add private helpers.
+                - Ensure all existing tests still pass by running: `mvn test`
+                  (or `gradle test` if there is no `pom.xml`).
+                - If tests fail after a refactoring, REVERT that specific change and try a different strategy.
+                - Stop once each of the listed methods has been refactored or you cannot reduce CC further
+                  without breaking tests.
+                - Do NOT modify test files.
+
+                ## Workflow
+                1. Read each source file listed in the metrics table above.
+                2. Identify the specific method body for each CC violation.
+                3. Apply the most appropriate refactoring strategy to bring CC as close to the threshold (%d) as possible.
+                4. After all refactorings, run the test suite to confirm nothing is broken.
+                5. Write a concise summary listing each method refactored and the strategy applied.
+                """.formatted(metricsSection, snapshot.threshold());
+
+        String guardrailText = buildWritableGuardrailText(
+                "Stop as soon as all listed high-CC methods have been refactored and tests pass.");
+
+        return rulesLoader.buildSystemPrompt(sharedRules, Collections.emptyList(),
+                null, guardrailText, instructions);
+    }
+
     private String resolveRulesRepoUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;
     }

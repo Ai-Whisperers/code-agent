@@ -1,9 +1,11 @@
 package com.eneve.agent.planner;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 import com.eneve.agent.jira.JiraService;
 
@@ -50,6 +52,12 @@ public class PlanResource {
 
     @ConfigProperty(name = "planner.enabled", defaultValue = "true")
     boolean plannerEnabled;
+
+    @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
+    int defaultCcThreshold;
+
+    @ConfigProperty(name = "metrics.max-iterations", defaultValue = "3")
+    int defaultMaxIterations;
 
     // ─── Create / Generate ──────────────────────────────────────────────
 
@@ -148,6 +156,94 @@ public class PlanResource {
                 plan.planData().phases() != null ? plan.planData().phases().size() : 0);
 
         return Response.status(201).entity(plan).build();
+    }
+
+    @POST
+    @Path("/improve-quality")
+    @Operation(
+            operationId = "improveQuality",
+            summary = "Start an iterative cyclomatic complexity improvement loop",
+            description = "Creates an execution plan that measures cyclomatic complexity (METRICS phase), "
+                    + "then iteratively refactors high-CC methods (FIX phases) until the configured threshold "
+                    + "is met, max iterations are exhausted, or no further improvement is possible. "
+                    + "The plan starts as DRAFT unless autoApprove is true."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "201", description = "Quality improvement plan created"),
+            @APIResponse(responseCode = "400", description = "Missing required fields"),
+            @APIResponse(responseCode = "503", description = "Planner is disabled")
+    })
+    public Response improveQuality(
+            @RequestBody(description = "Repository and quality target parameters", required = true)
+            ImproveQualityRequest request) {
+
+        if (!plannerEnabled) {
+            return Response.status(503).entity(Map.of("error", "Planner is disabled")).build();
+        }
+        if (request == null || request.repoUrl() == null || request.repoUrl().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
+        }
+        if (request.branch() == null || request.branch().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "branch is required")).build();
+        }
+
+        int ccThreshold = request.ccThreshold() > 0 ? request.ccThreshold() : defaultCcThreshold;
+        int maxIterations = request.maxIterations() > 0 ? request.maxIterations() : defaultMaxIterations;
+        String targetBranch = request.targetBranch() != null && !request.targetBranch().isBlank()
+                ? request.targetBranch() : "main";
+
+        String planId = "quality-" + UUID.randomUUID().toString().substring(0, 8);
+        String title = "Quality Improvement: CC ≤ " + ccThreshold + " on " + request.branch();
+
+        // Phase 1: baseline METRICS
+        PlanStep metricsStep = new PlanStep(
+                "baseline-metrics", "METRICS",
+                "Measure baseline cyclomatic complexity",
+                null,
+                "PENDING", null,
+                Map.of(
+                        "branch", request.branch(),
+                        "ccThreshold", String.valueOf(ccThreshold),
+                        "maxIterations", String.valueOf(maxIterations)));
+
+        PlanPhase metricsPhase = new PlanPhase(1, "Baseline Metrics", true, List.of(metricsStep));
+        PlanData planData = new PlanData(List.of(metricsPhase));
+
+        ExecutionPlan plan = new ExecutionPlan(
+                planId,
+                PlanStatus.DRAFT.name(),
+                "QUALITY",
+                request.branch(),
+                request.repoUrl(),
+                targetBranch,
+                title,
+                planData,
+                Instant.now(),
+                Instant.now(),
+                null,
+                null,
+                null);
+
+        planStore.create(plan);
+        LOG.infof("Quality improvement plan %s created for %s (CC threshold=%d, maxIter=%d)",
+                planId, request.repoUrl(), ccThreshold, maxIterations);
+
+        if (request.autoApprove()) {
+            planStore.approve(planId);
+            if (request.autoExecute()) {
+                try {
+                    orchestratorService.startExecution(planId);
+                    LOG.infof("Quality improvement plan %s auto-started execution", planId);
+                } catch (Exception e) {
+                    LOG.warnf("Quality improvement plan %s created and approved but execution start failed: %s",
+                            planId, e.getMessage());
+                }
+            }
+        }
+
+        return planStore.find(planId)
+                .map(p -> Response.status(201).entity(p).build())
+                .orElse(Response.status(500).entity(Map.of("error", "Plan not found after creation")).build());
     }
 
     // ─── Read ───────────────────────────────────────────────────────────
@@ -613,5 +709,44 @@ public class PlanResource {
     public record AddStepRequest(
             int phaseOrder,
             PlanStep step
+    ) {}
+
+    public record ImproveQualityRequest(
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    required = true,
+                    description = "Repository URL (HTTPS)",
+                    example = "https://bitbucket.org/workspace/repo.git")
+            String repoUrl,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    required = true,
+                    description = "Branch to analyse and improve",
+                    example = "main")
+            String branch,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    description = "Target branch for generated fix PRs (default: main)",
+                    example = "develop")
+            String targetBranch,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    description = "CC threshold — methods above this value will be refactored. Default: 10",
+                    example = "10")
+            int ccThreshold,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    description = "Maximum number of fix iterations. Default: 3",
+                    example = "3")
+            int maxIterations,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    description = "If true, auto-approve the plan after creation. Default: false",
+                    example = "false")
+            boolean autoApprove,
+
+            @org.eclipse.microprofile.openapi.annotations.media.Schema(
+                    description = "If true (and autoApprove is true), start execution immediately. Default: false",
+                    example = "false")
+            boolean autoExecute
     ) {}
 }

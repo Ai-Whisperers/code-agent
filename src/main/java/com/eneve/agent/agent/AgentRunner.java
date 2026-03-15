@@ -24,6 +24,7 @@ import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.ReplyCommentRequest;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
@@ -73,6 +74,8 @@ public class AgentRunner {
     @Inject CoverageReporter coverageReporter;
     @Inject ConfluenceService confluenceService;
     @Inject DocsEmbeddingService docsEmbeddingService;
+    @Inject CodeMetricsCalculator codeMetricsCalculator;
+    @Inject CodeMetricsStore codeMetricsStore;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -100,6 +103,9 @@ public class AgentRunner {
 
     @ConfigProperty(name = "generate-docs.max-loop-iterations", defaultValue = "200")
     int generateDocsMaxIterations;
+
+    @ConfigProperty(name = "metrics.job-timeout-minutes", defaultValue = "30")
+    long metricsTimeoutMinutes;
 
     @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
     boolean prSummaryEnabled;
@@ -1409,6 +1415,64 @@ public class AgentRunner {
         }
     }
 
+    // ─── Execute Metrics ─────────────────────────────────────────────────
+
+    public void executeMetrics(JobRecord job) {
+        MetricsJobRequest request = job.getMetricsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            failMetrics(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        LOG.infof("Metrics job %s: analysing %s/%s (branch: %s, threshold: %d)",
+                job.getJobId(), coords.organization(), coords.repository(),
+                request.branch(), request.effectiveThreshold());
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            try {
+                workspace.cloneRepo(authUrl, request.branch(), metricsTimeoutMinutes);
+            } catch (Exception e) {
+                failMetrics(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            String wsName = request.workspace() != null ? request.workspace() : coords.organization();
+            String repoSlug = request.repoSlug() != null ? request.repoSlug() : coords.repository();
+
+            CodeMetricsCalculator.CodeMetricsSnapshot snapshot;
+            try {
+                snapshot = codeMetricsCalculator.calculate(
+                        workspace.getRoot(), wsName, repoSlug, request.branch(),
+                        request.effectiveThreshold());
+            } catch (Exception e) {
+                failMetrics(job, "Metrics calculation failed: " + e.getMessage());
+                return;
+            }
+
+            codeMetricsStore.save(snapshot, request.planId());
+
+            String summary = snapshot.formatMarkdownComparison(null);
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(summary);
+            jobStore.archive(job);
+
+            LOG.infof("Metrics job %s complete: %d methods, %d above threshold (CC>%d), avg=%.2f",
+                    job.getJobId(), snapshot.totalMethods(), snapshot.methodsAboveThreshold(),
+                    snapshot.threshold(), snapshot.avgComplexity());
+
+        } catch (Exception e) {
+            failMetrics(job, "Unexpected error in metrics job: " + e.getMessage());
+        }
+    }
+
     // ─── Execute Hook ────────────────────────────────────────────────────
 
     public void executeHook(JobRecord job) {
@@ -1630,6 +1694,15 @@ public class AgentRunner {
         teamsNotifier.sendNotification(result);
     }
 
+    private void failMetrics(JobRecord job, String message) {
+        LOG.errorf("Metrics job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+
+        teamsNotifier.sendNotification(buildMetricsResult(job, false));
+    }
+
     private void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
@@ -1720,6 +1793,17 @@ public class AgentRunner {
                 req.branchName(),
                 job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
                 job.getFilesChanged(), job.getLinesChanged());
+    }
+
+    private RunResult buildMetricsResult(JobRecord job, boolean success) {
+        MetricsJobRequest req = job.getMetricsRequest();
+        return new RunResult(
+                job.getJobId(), job.getJobType().name(), success,
+                "",
+                req != null ? req.repoUrl() : "",
+                req != null ? req.branch() : "",
+                job.getPrUrl(), job.getSummary(), job.getErrorMessage(),
+                0, 0);
     }
 
     private RunResult buildFixCommentResult(JobRecord job, boolean success) {
