@@ -12,6 +12,7 @@ import java.util.List;
 
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.planner.JobCompletedEvent;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -19,6 +20,7 @@ import org.jboss.logging.Logger;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
@@ -34,6 +36,7 @@ public class JobQueue {
 
     @Inject AgentRunner agentRunner;
     @Inject JobStore jobStore;
+    @Inject Event<JobCompletedEvent> jobCompletedEvent;
 
     @ConfigProperty(name = "run-fix.max-concurrent-jobs", defaultValue = "3")
     int maxConcurrentJobs;
@@ -183,6 +186,8 @@ public class JobQueue {
                         job.setErrorMessage("Unhandled error: " + e.getMessage());
                         jobStore.archive(job);
                     } finally {
+                        jobCompletedEvent.fireAsync(new JobCompletedEvent(
+                                job.getJobId(), job.getStatus(), job.getSummary(), job.getPrUrl()));
                         semaphore.release();
                     }
                 });
