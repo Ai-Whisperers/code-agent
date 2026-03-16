@@ -67,9 +67,8 @@ public class JiraWebhookResource {
                     + "uses the enriched /aikido-fix flow. Otherwise falls back to /quick-fix behavior."
     )
     @APIResponses({
-            @APIResponse(responseCode = "200", description = "Webhook processed (job may or may not have been triggered)",
+            @APIResponse(responseCode = "200", description = "Webhook processed — job triggered, or event ignored (not a matching issue or assignee change)",
                     content = @Content(schema = @Schema(example = "{\"action\": \"job_triggered\", \"jobId\": \"...\", \"branch\": \"...\"}"))),
-            @APIResponse(responseCode = "200", description = "Event ignored (not a matching issue or assignee change)"),
             @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response handleJiraWebhook(String rawPayload) {
