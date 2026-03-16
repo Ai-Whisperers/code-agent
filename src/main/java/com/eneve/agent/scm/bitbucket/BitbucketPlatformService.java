@@ -145,14 +145,15 @@ public class BitbucketPlatformService implements GitPlatformService {
     @Override
     public void updatePrComment(String org, String project, String repo, String prId,
                                 long commentId, String commentBody) {
+        String safeId = sanitizeId(prId);
         String path = "/repositories/" + org + "/" + repo
-                + "/pullrequests/" + prId + "/comments/" + commentId;
+                + "/pullrequests/" + safeId + "/comments/" + commentId;
         String body = """
                 {
                   "content": { "raw": "%s" }
                 }
                 """.formatted(escapeJson(commentBody));
-        putAndReturn(path, body, "update comment #" + commentId + " on PR #" + prId);
+        putAndReturn(path, body, "update comment #" + commentId + " on PR #" + safeId);
         LOG.infof("Updated review comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
     }
 
@@ -350,6 +351,7 @@ public class BitbucketPlatformService implements GitPlatformService {
     public String uploadDownload(String org, String repo, String filename,
                                  byte[] data, String contentType) {
         String path = "/repositories/" + org + "/" + repo + "/downloads";
+        requireTrustedUrl(baseUrl + path);
         String boundary = "----DownloadBoundary" + System.nanoTime();
         byte[] body = buildMultipartBody(boundary, filename, data, contentType);
 
@@ -440,6 +442,7 @@ public class BitbucketPlatformService implements GitPlatformService {
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {
+        requireTrustedUrl(baseUrl + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
@@ -474,6 +477,7 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private String sendAndReturn(String path, String body, String method, String operation) {
+        requireTrustedUrl(baseUrl + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
@@ -528,6 +532,34 @@ public class BitbucketPlatformService implements GitPlatformService {
     public String buildCloneUrl(String workspace, String repoSlug) {
         return "https://" + bbUser + ":" + appPassword
                 + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
+    }
+
+    /**
+     * Validates that the target URL is directed at the configured Bitbucket host,
+     * preventing SSRF by ensuring requests never leave the configured API endpoint.
+     */
+    private void requireTrustedUrl(String url) {
+        try {
+            String configuredHost = URI.create(baseUrl).getHost();
+            String targetHost = URI.create(url).getHost();
+            if (!targetHost.equalsIgnoreCase(configuredHost)) {
+                throw new IllegalArgumentException(
+                        "URL host '" + targetHost + "' does not match configured host '" + configuredHost + "'");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid URL: " + url, e);
+        }
+    }
+
+    /**
+     * Removes characters from an identifier that are not word characters, hyphens, or dots,
+     * preventing injection of metacharacters via user-supplied IDs.
+     */
+    private static String sanitizeId(String id) {
+        if (id == null) return "";
+        return id.replaceAll("[^\\w.-]", "");
     }
 
     private static String escapeJson(String text) {

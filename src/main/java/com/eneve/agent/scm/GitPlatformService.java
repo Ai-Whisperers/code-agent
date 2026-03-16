@@ -8,8 +8,10 @@ import java.util.Map;
  * <p>
  * Parameter mapping per platform:
  * <ul>
- *   <li>Bitbucket Cloud: org = workspace, project = "" (ignored), repo = repoSlug</li>
+ *   <li>Bitbucket Cloud: org = workspace,    project = "" (ignored), repo = repoSlug</li>
  *   <li>Azure DevOps:    org = organization, project = project name, repo = repository name</li>
+ *   <li>GitLab Cloud:    org = namespace,    project = "" (ignored), repo = project slug</li>
+ *   <li>GitHub:          org = owner,        project = "" (ignored), repo = repository name</li>
  * </ul>
  */
 public interface GitPlatformService {

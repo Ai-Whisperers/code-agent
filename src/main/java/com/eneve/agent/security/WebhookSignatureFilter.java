@@ -54,6 +54,9 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     @ConfigProperty(name = "webhook.secret.gitlab")
     Optional<String> gitlabSecret;
 
+    @ConfigProperty(name = "webhook.secret.github")
+    Optional<String> githubSecret;
+
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
         String path = ctx.getUriInfo().getPath();
@@ -67,6 +70,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             verifyAzureDevOps(ctx);
         } else if (path.contains("gitlab/")) {
             verifyGitLab(ctx);
+        } else if (path.contains("github/")) {
+            verifyGitHub(ctx);
         } else if (path.contains("jira")) {
             verifyJira(ctx);
         }
@@ -142,6 +147,33 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
         LOG.warn("Azure DevOps webhook rejected — no recognized auth header found");
         abort(ctx);
+    }
+
+    /**
+     * GitHub signs the payload with HMAC-SHA256 and sends the signature
+     * in the {@code X-Hub-Signature-256} header as {@code sha256=<hex-encoded-digest>}.
+     */
+    private void verifyGitHub(ContainerRequestContext ctx) throws IOException {
+        String secret = githubSecret.orElse("");
+        if (isNotConfigured(secret)) return;
+
+        String signatureHeader = ctx.getHeaderString("X-Hub-Signature-256");
+        if (signatureHeader == null || !signatureHeader.startsWith("sha256=")) {
+            LOG.warn("GitHub webhook rejected — missing or malformed X-Hub-Signature-256 header");
+            abort(ctx);
+            return;
+        }
+
+        byte[] body = readAndRestoreBody(ctx);
+        String expectedHex = signatureHeader.substring("sha256=".length());
+        String computedHex = hmacSha256Hex(body, secret);
+
+        if (!MessageDigest.isEqual(
+                expectedHex.getBytes(StandardCharsets.UTF_8),
+                computedHex.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("GitHub webhook rejected — HMAC signature mismatch");
+            abort(ctx);
+        }
     }
 
     /**

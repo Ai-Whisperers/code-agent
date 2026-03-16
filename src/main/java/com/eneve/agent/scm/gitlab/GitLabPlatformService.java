@@ -146,13 +146,14 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public void updatePrComment(String org, String project, String repo, String prId,
                                 long commentId, String commentBody) {
+        String safeId = sanitizeId(prId);
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + safeId
                 + "/notes/" + commentId;
         String body = """
                 { "body": "%s" }
                 """.formatted(escapeJson(commentBody));
-        putAndReturn(url, body, "update note #" + commentId + " on MR !" + prId);
+        putAndReturn(url, body, "update note #" + commentId + " on MR !" + safeId);
         LOG.infof("Updated review note %d on MR !%s in %s/%s", commentId, prId, org, repo);
     }
 
@@ -508,6 +509,7 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     private HttpResponse<String> getWithResponse(String url, String operation) {
+        requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -541,6 +543,7 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     private String sendAndReturn(String url, String body, String method, String operation) {
+        requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -571,6 +574,34 @@ public class GitLabPlatformService implements GitPlatformService {
     public String buildCloneUrl(String workspace, String repoSlug) {
         String user = agentUser != null && !agentUser.isBlank() ? agentUser : "gitlab-ci-token";
         return "https://" + user + ":" + token + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
+    }
+
+    /**
+     * Validates that the target URL is directed at the configured GitLab host,
+     * preventing SSRF by ensuring requests never leave the configured API endpoint.
+     */
+    private void requireTrustedUrl(String url) {
+        try {
+            String configuredHost = URI.create(baseUrl).getHost();
+            String targetHost = URI.create(url).getHost();
+            if (!targetHost.equalsIgnoreCase(configuredHost)) {
+                throw new IllegalArgumentException(
+                        "URL host '" + targetHost + "' does not match configured host '" + configuredHost + "'");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid URL: " + url, e);
+        }
+    }
+
+    /**
+     * Removes characters from an identifier that are not word characters, hyphens, or dots,
+     * preventing injection of metacharacters via user-supplied IDs.
+     */
+    private static String sanitizeId(String id) {
+        if (id == null) return "";
+        return id.replaceAll("[^\\w.-]", "");
     }
 
     private static String escapeJson(String text) {

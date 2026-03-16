@@ -14,6 +14,7 @@ import java.util.regex.Pattern;
  *   <li>Bitbucket Cloud: org = workspace,    project = "" (ignored), repo = repoSlug</li>
  *   <li>Azure DevOps:    org = organization, project = project name, repo = repository name</li>
  *   <li>GitLab Cloud:    org = namespace,    project = "" (ignored), repo = project slug</li>
+ *   <li>GitHub:          org = owner,        project = "" (ignored), repo = repository name</li>
  * </ul>
  */
 public record RepoCoordinates(String organization, String project, String repository, Platform platform) {
@@ -22,7 +23,8 @@ public record RepoCoordinates(String organization, String project, String reposi
     public enum Platform {
         BITBUCKET,
         AZURE_DEVOPS,
-        GITLAB
+        GITLAB,
+        GITHUB
     }
 
     // ── Bitbucket Cloud ──────────────────────────────────────────────────
@@ -51,6 +53,13 @@ public record RepoCoordinates(String organization, String project, String reposi
     private static final Pattern GL_SSH =
             Pattern.compile("git@gitlab\\.com:(.+)/([^/]+?)(?:\\.git)?$");
 
+    // ── GitHub ────────────────────────────────────────────────────────────
+    // https://github.com/{owner}/{repo}
+    private static final Pattern GH_HTTPS =
+            Pattern.compile("https?://(?:[^@]+@)?github\\.com/([^/]+)/([^/]+?)(?:\\.git)?/?$");
+    private static final Pattern GH_SSH =
+            Pattern.compile("git@github\\.com:([^/]+)/([^/]+?)(?:\\.git)?$");
+
     public static RepoCoordinates parse(String repoUrl) {
         Matcher m;
 
@@ -75,6 +84,12 @@ public record RepoCoordinates(String organization, String project, String reposi
         m = GL_SSH.matcher(repoUrl);
         if (m.matches()) return new RepoCoordinates(m.group(1), "", m.group(2), Platform.GITLAB);
 
+        m = GH_HTTPS.matcher(repoUrl);
+        if (m.matches()) return new RepoCoordinates(m.group(1), "", m.group(2), Platform.GITHUB);
+
+        m = GH_SSH.matcher(repoUrl);
+        if (m.matches()) return new RepoCoordinates(m.group(1), "", m.group(2), Platform.GITHUB);
+
         throw new IllegalArgumentException("Cannot parse repository URL: " + repoUrl);
     }
 
@@ -90,6 +105,8 @@ public record RepoCoordinates(String organization, String project, String reposi
                     + "@dev.azure.com/" + organization + "/" + project + "/_git/" + repository;
             case GITLAB -> "https://" + username + ":" + password
                     + "@gitlab.com/" + organization + "/" + repository + ".git";
+            case GITHUB -> "https://" + username + ":" + password
+                    + "@github.com/" + organization + "/" + repository + ".git";
         };
     }
 
@@ -101,6 +118,7 @@ public record RepoCoordinates(String organization, String project, String reposi
             case BITBUCKET -> "https://bitbucket.org/" + organization + "/" + repository + ".git";
             case AZURE_DEVOPS -> "https://dev.azure.com/" + organization + "/" + project + "/_git/" + repository;
             case GITLAB -> "https://gitlab.com/" + organization + "/" + repository;
+            case GITHUB -> "https://github.com/" + organization + "/" + repository;
         };
     }
 }

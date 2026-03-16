@@ -156,13 +156,14 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     @Override
     public void updatePrComment(String org, String project, String repo, String prId,
                                 long commentId, String commentBody) {
-        int threadId = resolveThreadId(org, project, repo, prId, commentId);
+        String safeId = sanitizeId(prId);
+        int threadId = resolveThreadId(org, project, repo, safeId, commentId);
         if (threadId <= 0) {
-            LOG.warnf("Could not resolve thread for comment %d on PR #%s — skipping update", commentId, prId);
+            LOG.warnf("Could not resolve thread for comment %d on PR #%s — skipping update", commentId, safeId);
             throw new RuntimeException("Could not resolve ADO thread for comment " + commentId);
         }
         String url = repoApiUrl(org, project, repo)
-                + "/pullrequests/" + prId + "/threads/" + threadId
+                + "/pullrequests/" + safeId + "/threads/" + threadId
                 + "/comments/" + commentId + "?" + API_VERSION;
         String body = """
                 {
@@ -170,7 +171,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                   "commentType": 1
                 }
                 """.formatted(escapeJson(commentBody));
-        patchAndReturn(url, body, "update comment #" + commentId + " on PR #" + prId);
+        patchAndReturn(url, body, "update comment #" + commentId + " on PR #" + safeId);
         LOG.infof("Updated review comment %d (thread %d) on PR #%s in %s/%s/%s",
                 commentId, threadId, prId, org, project, repo);
     }
@@ -470,6 +471,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String url, String operation) {
+        requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -504,6 +506,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     }
 
     private String sendAndReturn(String url, String body, String method, String operation) {
+        requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -547,6 +550,34 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         LOG.debugf("buildCloneUrl not supported for Azure DevOps without project — skipping %s/%s",
                 workspace, repoSlug);
         return null;
+    }
+
+    /**
+     * Validates that the target URL is directed at the configured Azure DevOps host,
+     * preventing SSRF by ensuring requests never leave the configured API endpoint.
+     */
+    private void requireTrustedUrl(String url) {
+        try {
+            String configuredHost = URI.create(baseUrl).getHost();
+            String targetHost = URI.create(url).getHost();
+            if (!targetHost.equalsIgnoreCase(configuredHost)) {
+                throw new IllegalArgumentException(
+                        "URL host '" + targetHost + "' does not match configured host '" + configuredHost + "'");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid URL: " + url, e);
+        }
+    }
+
+    /**
+     * Removes characters from an identifier that are not word characters, hyphens, or dots,
+     * preventing injection of metacharacters via user-supplied IDs.
+     */
+    private static String sanitizeId(String id) {
+        if (id == null) return "";
+        return id.replaceAll("[^\\w.-]", "");
     }
 
     private static String escapeJson(String text) {
