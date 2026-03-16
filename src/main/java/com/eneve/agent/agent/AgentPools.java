@@ -11,7 +11,7 @@ public final class AgentPools {
     private AgentPools() {}
 
     /** Unbounded cached pool for brief parallel phases within a single job. */
-    static final ExecutorService PARALLEL = Executors.newCachedThreadPool(r -> {
+    public static final ExecutorService PARALLEL = Executors.newCachedThreadPool(r -> {
         Thread t = new Thread(r, "agent-parallel-phase");
         t.setDaemon(true);
         return t;
