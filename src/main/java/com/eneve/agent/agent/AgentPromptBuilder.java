@@ -132,10 +132,20 @@ public class AgentPromptBuilder {
                                    WorkspaceContext workspace) {
         String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
-
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+        return buildFixPrPrompt(request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
+                sharedRules, repoRules);
+    }
 
+    /**
+     * Builds the fix-PR system prompt using pre-loaded rules. Callers that load rules in parallel
+     * (e.g. while the repo is being cloned) should use this overload to avoid redundant loading.
+     */
+    public String buildFixPrPrompt(FixPrRequest request, String prTitle,
+                                   String sourceBranch, String targetBranch,
+                                   String diff, List<String> reviewComments,
+                                   List<String> sharedRules, List<String> repoRules) {
         StringBuilder commentsSection = new StringBuilder();
         for (int i = 0; i < reviewComments.size(); i++) {
             commentsSection.append(i + 1).append(". ").append(reviewComments.get(i)).append("\n");

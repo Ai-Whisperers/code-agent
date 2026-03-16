@@ -12,6 +12,7 @@ import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 
+import com.eneve.agent.rules.CursorRulesLoader;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
@@ -64,6 +65,7 @@ public class AgentRunner {
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
+    @Inject CursorRulesLoader rulesLoader;
     @Inject ReviewCommentProcessor reviewProcessor;
     @Inject BuildValidator buildValidator;
     @Inject GuardrailConfig guardrails;
@@ -103,6 +105,9 @@ public class AgentRunner {
 
     @ConfigProperty(name = "n8n.webhook.url", defaultValue = "")
     String defaultN8nWebhookUrl;
+
+    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
+    String defaultRulesRepoUrl;
 
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
@@ -557,11 +562,27 @@ public class AgentRunner {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
+            // Phase 1: launch PR comments and shared rules loading in parallel — no dependency on PR info
+            CompletableFuture<List<String>> commentsFuture = CompletableFuture.supplyAsync(
+                    () -> platformService.getPullRequestComments(
+                            coords.organization(), coords.project(), coords.repository(), request.prId()),
+                    REVIEW_PARALLEL_POOL);
+
+            String resolvedRulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
+                    ? request.rulesRepoUrl() : defaultRulesRepoUrl;
+            List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+            CompletableFuture<List<String>> sharedRulesFuture = CompletableFuture.supplyAsync(
+                    () -> rulesLoader.loadFromRulesRepo(resolvedRulesRepoUrl, ruleNames),
+                    REVIEW_PARALLEL_POOL);
+
+            // PR info is needed for sourceBranch before we can clone
             Map<String, String> prInfo;
             try {
                 prInfo = platformService.getPullRequestInfo(
                         coords.organization(), coords.project(), coords.repository(), request.prId());
             } catch (Exception e) {
+                commentsFuture.cancel(true);
+                sharedRulesFuture.cancel(true);
                 failFixPr(job, "Failed to fetch PR info: " + e.getMessage());
                 return;
             }
@@ -571,10 +592,39 @@ public class AgentRunner {
             String prTitle = prInfo.get("title");
             job.setPrId(request.prId());
 
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            LOG.infof("Fix-PR: cloning %s/%s branch %s for PR #%s",
+                    coords.organization(), coords.repository(), sourceBranch, request.prId());
+            try {
+                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                commentsFuture.cancel(true);
+                sharedRulesFuture.cancel(true);
+                failFixPr(job, "Clone failed: " + e.getMessage());
+                return;
+            }
+
+            configureGitIfNeeded(workspace);
+
+            // Phase 2: fetchBranch+diff and target-repo rules loading overlap with each other
+            CompletableFuture<String> diffFuture = CompletableFuture.supplyAsync(() -> {
+                try {
+                    workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
+                    return workspace.getDiff(targetBranch);
+                } catch (Exception e) {
+                    LOG.warnf("Failed to compute diff for context (non-fatal): %s", e.getMessage());
+                    return "";
+                }
+            }, REVIEW_PARALLEL_POOL);
+
+            CompletableFuture<List<String>> repoRulesFuture = CompletableFuture.supplyAsync(
+                    () -> rulesLoader.loadFromTargetRepo(workspace.getRoot()),
+                    REVIEW_PARALLEL_POOL);
+
+            // Resolve comments — needed before we can determine whether to proceed
             List<String> reviewComments;
             try {
-                reviewComments = platformService.getPullRequestComments(
-                        coords.organization(), coords.project(), coords.repository(), request.prId());
+                reviewComments = commentsFuture.join();
             } catch (Exception e) {
                 failFixPr(job, "Failed to fetch PR comments: " + e.getMessage());
                 return;
@@ -585,30 +635,15 @@ public class AgentRunner {
                 return;
             }
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
-            LOG.infof("Fix-PR: cloning %s/%s branch %s for PR #%s",
-                    coords.organization(), coords.repository(), sourceBranch, request.prId());
-            try {
-                workspace.cloneRepo(authUrl, sourceBranch, jobTimeoutMinutes);
-            } catch (Exception e) {
-                failFixPr(job, "Clone failed: " + e.getMessage());
-                return;
-            }
-
-            configureGitIfNeeded(workspace);
-
-            String diff = "";
-            try {
-                workspace.fetchBranch(targetBranch, jobTimeoutMinutes);
-                diff = workspace.getDiff(targetBranch);
-            } catch (Exception e) {
-                LOG.warnf("Failed to compute diff for context (non-fatal): %s", e.getMessage());
-            }
-
+            // Collect all parallel results before building the prompt
+            String diff = diffFuture.join();
             int maxDiffChars = 40_000;
             if (diff.length() > maxDiffChars) {
                 diff = diff.substring(0, maxDiffChars);
             }
+
+            List<String> sharedRules = sharedRulesFuture.join();
+            List<String> repoRules = repoRulesFuture.join();
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),
@@ -616,7 +651,8 @@ public class AgentRunner {
             }
 
             String systemPrompt = promptBuilder.buildFixPrPrompt(
-                    request, prTitle, sourceBranch, targetBranch, diff, reviewComments, workspace);
+                    request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
+                    sharedRules, repoRules);
 
             String summary;
             try {
@@ -651,13 +687,7 @@ public class AgentRunner {
                 return;
             }
 
-            try {
-                workspace.push(fixBranch, jobTimeoutMinutes);
-            } catch (Exception e) {
-                failFixPr(job, "Push failed: " + e.getMessage());
-                return;
-            }
-
+            // Guardrails check before push to avoid pushing a branch that violates limits
             DiffStats stats = countChanges(workspace);
             String violation = checkGuardrails(stats);
             if (violation != null) {
@@ -666,6 +696,13 @@ public class AgentRunner {
             }
             job.setFilesChanged(stats.filesChanged);
             job.setLinesChanged(stats.linesChanged);
+
+            try {
+                workspace.push(fixBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                failFixPr(job, "Push failed: " + e.getMessage());
+                return;
+            }
 
             String prUrl;
             String newPrId;
@@ -696,18 +733,27 @@ public class AgentRunner {
             job.setPrId(newPrId);
             jobStore.update(job);
 
-            safeComment(() -> platformService.addPrComment(
+            RunResult result = buildFixPrResult(job, true);
+
+            // Fire-and-forget: notifications are best-effort and do not block job completion
+            final String capturedPrUrl = prUrl;
+            final String capturedSummary = summary;
+            CompletableFuture.runAsync(() -> safeComment(() -> platformService.addPrComment(
                     coords.organization(), coords.project(), coords.repository(), request.prId(),
-                    "Code Agent has created a fix PR for the review comments: " + prUrl));
+                    "Code Agent has created a fix PR for the review comments: " + capturedPrUrl)),
+                    REVIEW_PARALLEL_POOL);
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-                safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
-                safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
+                CompletableFuture.runAsync(() -> {
+                    safeJira(() -> jiraService.commentSuccess(request.jiraKey(), capturedPrUrl, capturedSummary));
+                    safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
+                }, REVIEW_PARALLEL_POOL);
             }
 
-            RunResult result = buildFixPrResult(job, true);
-            teamsNotifier.sendNotification(result);
-            n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+            CompletableFuture.runAsync(() -> teamsNotifier.sendNotification(result), REVIEW_PARALLEL_POOL);
+            CompletableFuture.runAsync(
+                    () -> n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result),
+                    REVIEW_PARALLEL_POOL);
 
             LOG.infof("Fix-PR job %s completed. Fix PR: %s", job.getJobId(), prUrl);
 

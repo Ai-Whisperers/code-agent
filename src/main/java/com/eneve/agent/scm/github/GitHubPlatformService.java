@@ -8,6 +8,9 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ForkJoinPool;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -242,18 +245,26 @@ public class GitHubPlatformService implements GitPlatformService {
 
     @Override
     public List<String> getPullRequestComments(String org, String project, String repo, String prId) {
-        List<String> comments = new ArrayList<>();
-
-        // General issue comments (non-inline)
+        // Fetch general issue comments and inline review comments in parallel — independent endpoints
         String issueUrl = baseUrl + "/repos/" + org + "/" + repo
                 + "/issues/" + prId + "/comments?per_page=100";
-        collectComments(issueUrl, "get issue comments for PR #" + prId, false, comments);
-
-        // Inline review comments
         String reviewUrl = baseUrl + "/repos/" + org + "/" + repo
                 + "/pulls/" + prId + "/comments?per_page=100";
-        collectReviewComments(reviewUrl, "get review comments for PR #" + prId, false, comments);
 
+        List<String> issueComments = new CopyOnWriteArrayList<>();
+        List<String> reviewComments = new CopyOnWriteArrayList<>();
+
+        CompletableFuture<Void> issueFuture = CompletableFuture.runAsync(
+                () -> collectComments(issueUrl, "get issue comments for PR #" + prId, false, issueComments),
+                ForkJoinPool.commonPool());
+        CompletableFuture<Void> reviewFuture = CompletableFuture.runAsync(
+                () -> collectReviewComments(reviewUrl, "get review comments for PR #" + prId, false, reviewComments),
+                ForkJoinPool.commonPool());
+
+        CompletableFuture.allOf(issueFuture, reviewFuture).join();
+
+        List<String> comments = new ArrayList<>(issueComments);
+        comments.addAll(reviewComments);
         LOG.infof("Fetched %d review comments from PR #%s in %s/%s", comments.size(), prId, org, repo);
         return comments;
     }
