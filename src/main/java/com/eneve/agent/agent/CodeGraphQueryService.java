@@ -6,6 +6,7 @@ import java.util.Map;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -20,6 +21,12 @@ public class CodeGraphQueryService {
 
     @Inject
     CodeGraphStore store;
+
+    @ConfigProperty(name = "code-graph.cross-repo.enabled", defaultValue = "true")
+    boolean crossRepoEnabled;
+
+    @ConfigProperty(name = "code-graph.cross-repo.critical-threshold", defaultValue = "3")
+    int criticalThreshold;
 
     public String buildImpactSection(String workspace, String repoSlug, List<String> changedFiles) {
         List<String> sourceFiles = changedFiles.stream()
@@ -50,7 +57,9 @@ public class CodeGraphQueryService {
             }
         }
 
-        if (callersMap.isEmpty() && implMap.isEmpty()) {
+        boolean hasCrossRepo = crossRepoEnabled && buildCrossRepoImpact(workspace, repoSlug, sourceFiles, new StringBuilder()) > 0;
+
+        if (callersMap.isEmpty() && implMap.isEmpty() && !hasCrossRepo) {
             return "";
         }
 
@@ -59,7 +68,7 @@ public class CodeGraphQueryService {
         sb.append("The following code depends on symbols changed in this PR:\n\n");
 
         for (var entry : callersMap.entrySet()) {
-            if (sb.length() > MAX_OUTPUT_CHARS) {
+            if (sb.length() > MAX_OUTPUT_CHARS / 2) {
                 sb.append("- ... (truncated)\n");
                 break;
             }
@@ -71,7 +80,7 @@ public class CodeGraphQueryService {
         }
 
         for (var entry : implMap.entrySet()) {
-            if (sb.length() > MAX_OUTPUT_CHARS) {
+            if (sb.length() > MAX_OUTPUT_CHARS / 2) {
                 sb.append("- ... (truncated)\n");
                 break;
             }
@@ -79,6 +88,15 @@ public class CodeGraphQueryService {
             for (CodeGraphStore.EdgeResult edge : entry.getValue()) {
                 String location = edge.sourceFile() != null ? " (" + edge.sourceFile() + ")" : "";
                 sb.append("  - ").append(edge.sourceNode()).append(location).append("\n");
+            }
+        }
+
+        if (crossRepoEnabled) {
+            StringBuilder crossRepo = new StringBuilder();
+            int crossRepoCount = buildCrossRepoImpact(workspace, repoSlug, sourceFiles, crossRepo);
+            if (crossRepoCount > 0) {
+                sb.append("\n### Cross-repo impact\n");
+                sb.append(crossRepo);
             }
         }
 
@@ -91,6 +109,76 @@ public class CodeGraphQueryService {
         LOG.debugf("Built impact section (%d chars) for %s/%s from %d changed files",
                 sb.length(), workspace, repoSlug, sourceFiles.size());
         return sb.toString();
+    }
+
+    /**
+     * Builds the cross-repo impact subsection and appends it to {@code out}.
+     * Returns the number of symbols that had any cross-repo usage (used to decide
+     * whether the subsection should be included at all, without running the queries twice).
+     */
+    private int buildCrossRepoImpact(String workspace, String repoSlug,
+                                     List<String> sourceFiles, StringBuilder out) {
+        int symbolsWithCrossRepoUsage = 0;
+        int remainingBudget = MAX_OUTPUT_CHARS / 2;
+
+        for (String filePath : sourceFiles) {
+            List<String> symbols = store.findSymbolsInFile(workspace, repoSlug, filePath);
+            for (String symbol : symbols) {
+                if (out.length() >= remainingBudget) {
+                    out.append("- ... (truncated)\n");
+                    return symbolsWithCrossRepoUsage;
+                }
+
+                int count = store.countDistinctReposUsing(workspace, repoSlug, symbol);
+                if (count == 0) {
+                    continue;
+                }
+
+                symbolsWithCrossRepoUsage++;
+
+                if (count >= criticalThreshold) {
+                    out.append("- **CRITICAL**: `").append(symbol)
+                            .append("` is used across **").append(count)
+                            .append("** other repositories — changes here have a wide blast radius. ")
+                            .append("Exercise extra caution.\n");
+                } else {
+                    // Detail mode: list individual callers grouped by repo
+                    List<CodeGraphStore.CrossRepoEdgeResult> callers =
+                            store.findCallersAcrossWorkspace(workspace, repoSlug, symbol);
+                    if (symbol.contains(".")) {
+                        // Method symbol: show callers
+                        if (!callers.isEmpty()) {
+                            out.append("- **`").append(symbol).append("`** is called from other repos:\n");
+                            for (CodeGraphStore.CrossRepoEdgeResult edge : callers) {
+                                String location = edge.sourceFile() != null ? " (" + edge.sourceFile() + ")" : "";
+                                out.append("  - ").append(edge.repoSlug()).append(": ")
+                                        .append(edge.sourceNode()).append(location).append("\n");
+                            }
+                        }
+                    } else {
+                        // Type symbol: show implementations/extensions
+                        List<CodeGraphStore.CrossRepoEdgeResult> impls =
+                                store.findImplementationsAcrossWorkspace(workspace, repoSlug, symbol);
+                        if (!impls.isEmpty()) {
+                            out.append("- **`").append(symbol).append("`** is implemented/extended in other repos:\n");
+                            for (CodeGraphStore.CrossRepoEdgeResult edge : impls) {
+                                String location = edge.sourceFile() != null ? " (" + edge.sourceFile() + ")" : "";
+                                out.append("  - ").append(edge.repoSlug()).append(": ")
+                                        .append(edge.sourceNode()).append(location).append("\n");
+                            }
+                        } else if (!callers.isEmpty()) {
+                            out.append("- **`").append(symbol).append("`** is used in other repos:\n");
+                            for (CodeGraphStore.CrossRepoEdgeResult edge : callers) {
+                                String location = edge.sourceFile() != null ? " (" + edge.sourceFile() + ")" : "";
+                                out.append("  - ").append(edge.repoSlug()).append(": ")
+                                        .append(edge.sourceNode()).append(location).append("\n");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return symbolsWithCrossRepoUsage;
     }
 
     /**
@@ -170,6 +258,29 @@ public class CodeGraphQueryService {
         }
         if (!hierarchy.isEmpty()) {
             sb.append("\n### Class Hierarchy\n").append(hierarchy);
+        }
+
+        if (crossRepoEnabled) {
+            StringBuilder crossNotes = new StringBuilder();
+            for (String filePath : sourceFiles) {
+                List<String> symbols = store.findSymbolsInFile(workspace, repoSlug, filePath)
+                        .stream().limit(MAX_SYMBOLS_PER_FILE).toList();
+                for (String symbol : symbols) {
+                    if (sb.length() + crossNotes.length() > MAX_DIAGRAM_CHARS) break;
+                    int count = store.countDistinctReposUsing(workspace, repoSlug, symbol);
+                    if (count >= criticalThreshold) {
+                        crossNotes.append("- `").append(symbol)
+                                .append("` is a **cross-repo critical symbol** (used in ")
+                                .append(count).append(" other repos)\n");
+                    } else if (count > 0) {
+                        crossNotes.append("- `").append(symbol)
+                                .append("` has cross-repo usage (").append(count).append(" other repo(s))\n");
+                    }
+                }
+            }
+            if (!crossNotes.isEmpty()) {
+                sb.append("\n### Cross-repo Notes\n").append(crossNotes);
+            }
         }
 
         String result = sb.toString();

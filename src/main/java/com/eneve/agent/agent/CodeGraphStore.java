@@ -131,6 +131,8 @@ public class CodeGraphStore {
 
     public record EdgeResult(String sourceNode, String sourceFile) {}
 
+    public record CrossRepoEdgeResult(String repoSlug, String sourceNode, String sourceFile) {}
+
     public List<EdgeResult> findCallers(String workspace, String repoSlug, String symbolName) {
         String sql = """
                 SELECT source_node, source_file FROM code_graph_edges
@@ -217,6 +219,70 @@ public class CodeGraphStore {
                     workspace, repoSlug, e.getMessage());
             return false;
         }
+    }
+
+    public int countDistinctReposUsing(String workspace, String excludeRepo, String symbolName) {
+        String sql = """
+                SELECT COUNT(DISTINCT repo_slug) FROM code_graph_edges
+                WHERE workspace = ? AND repo_slug != ? AND target_node = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, excludeRepo);
+            ps.setString(3, symbolName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to count repos using symbol %s in workspace %s: %s",
+                    symbolName, workspace, e.getMessage());
+            return 0;
+        }
+    }
+
+    public List<CrossRepoEdgeResult> findCallersAcrossWorkspace(String workspace, String excludeRepo,
+                                                                String symbolName) {
+        String sql = """
+                SELECT repo_slug, source_node, source_file FROM code_graph_edges
+                WHERE workspace = ? AND repo_slug != ? AND target_node = ? AND edge_type = 'CALLS'
+                LIMIT 20
+                """;
+        return queryEdgesAcrossWorkspace(sql, workspace, excludeRepo, symbolName);
+    }
+
+    public List<CrossRepoEdgeResult> findImplementationsAcrossWorkspace(String workspace, String excludeRepo,
+                                                                        String symbolName) {
+        String sql = """
+                SELECT repo_slug, source_node, source_file FROM code_graph_edges
+                WHERE workspace = ? AND repo_slug != ? AND target_node = ?
+                  AND edge_type IN ('IMPLEMENTS', 'EXTENDS')
+                LIMIT 20
+                """;
+        return queryEdgesAcrossWorkspace(sql, workspace, excludeRepo, symbolName);
+    }
+
+    private List<CrossRepoEdgeResult> queryEdgesAcrossWorkspace(String sql, String workspace,
+                                                                String excludeRepo, String symbolName) {
+        List<CrossRepoEdgeResult> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, excludeRepo);
+            ps.setString(3, symbolName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new CrossRepoEdgeResult(
+                            rs.getString("repo_slug"),
+                            rs.getString("source_node"),
+                            rs.getString("source_file")));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query cross-repo edges for symbol %s in workspace %s: %s",
+                    symbolName, workspace, e.getMessage());
+        }
+        return results;
     }
 
     private List<EdgeResult> queryEdges(String sql, String workspace, String repoSlug, String symbolName) {

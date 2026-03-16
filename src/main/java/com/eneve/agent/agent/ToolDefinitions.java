@@ -131,7 +131,8 @@ public final class ToolDefinitions {
         return Tool.builder()
                 .name("query_code_graph")
                 .description("Query the code graph to find callers, implementations, or dependents of a specific symbol. "
-                        + "Use this to understand the impact surface of changed code.")
+                        + "Use this to understand the impact surface of changed code. "
+                        + "Use scope='workspace' to find cross-repo usages across all indexed repositories in the workspace.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("symbol", JsonValue.from(Map.of(
@@ -141,6 +142,10 @@ public final class ToolDefinitions {
                                 .putAdditionalProperty("relation", JsonValue.from(Map.of(
                                         "type", "string",
                                         "description", "The relation to query: 'callers' (who calls this), 'implementations' (who implements/extends this), or 'dependents' (all edges pointing at this symbol)"
+                                )))
+                                .putAdditionalProperty("scope", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Optional: 'repo' (default, current repository only) or 'workspace' (all indexed repos in the workspace). Use 'workspace' when you suspect a symbol is shared across multiple repositories."
                                 )))
                                 .build())
                         .addRequired("symbol")
