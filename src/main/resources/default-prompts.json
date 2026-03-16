@@ -109,6 +109,12 @@
     "content": "The following review finding was posted on a previous commit:\nFile: {{FILE}}, Line: {{LINE}}\nFinding: {{FINDING}}\n\nThe developer has since pushed new commits. Here is the current state of the code around line {{LINE}}:\n{{CODE_CONTEXT}}\n\nHas this finding been addressed? Reply with only YES or NO."
   },
 
+  "self-review": {
+    "description": "Self-review prompt: agent reviews its own diff against the original task before linter/build validation",
+    "placeholders": ["ORIGINAL_TASK", "DIFF", "FILES_CHANGED"],
+    "content": "You have just completed a coding task. Before the changes are validated, review your own work carefully.\n\n## Original task\n{{ORIGINAL_TASK}}\n\n## Files you changed\n{{FILES_CHANGED}}\n\n## Your changes (diff)\n```diff\n{{DIFF}}\n```\n\n## Review checklist\nWork through this checklist. For each issue you find, fix it immediately using `read_file` and `write_file` before moving on.\n\n1. **Completeness** — Does the diff fully address the original task? Are there files that should have been changed but were not?\n2. **Correctness** — Are there obvious bugs, off-by-one errors, wrong conditions, or missing null/empty checks?\n3. **Unrelated changes** — Did you accidentally modify files unrelated to the task? If so, revert those changes.\n4. **Debug artefacts** — Remove any `System.out.println`, `console.log`, temporary variables, commented-out code blocks, or `TODO`/`FIXME` comments you introduced.\n5. **Unused imports** — Check changed files for unused imports you may have added.\n6. **Edge cases** — Are there inputs (null, empty, zero, negative, very large) that your change doesn't handle?\n7. **Consistency** — Does the code style match the surrounding code (naming conventions, formatting, patterns)?\n\n## Instructions\n- Use `read_file` to examine any file before changing it.\n- Use `write_file` to apply fixes.\n- Keep all fixes minimal and targeted — do NOT refactor unrelated code or add new features.\n- Do NOT re-implement the task from scratch.\n- If you find nothing to fix, respond with a brief confirmation (e.g. \"Self-review complete — no issues found.\") and stop.\n- This is a quick review pass. Aim to finish in as few iterations as possible."
+  },
+
   "build-retry": {
     "description": "Prompt for fixing build or test failures introduced by the agent's own changes",
     "placeholders": ["BUILD_OUTPUT", "ATTEMPT", "MAX_ATTEMPTS"],

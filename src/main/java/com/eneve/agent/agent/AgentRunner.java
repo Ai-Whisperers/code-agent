@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -118,6 +119,15 @@ public class AgentRunner {
     @ConfigProperty(name = "run-fix.max-build-retries", defaultValue = "2")
     int maxBuildRetries;
 
+    @ConfigProperty(name = "run-fix.self-review.enabled", defaultValue = "true")
+    boolean selfReviewEnabled;
+
+    @ConfigProperty(name = "run-fix.self-review.max-iterations", defaultValue = "15")
+    int selfReviewMaxIterations;
+
+    @ConfigProperty(name = "run-fix.self-review.max-diff-chars", defaultValue = "30000")
+    int selfReviewMaxDiffChars;
+
     @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
     int generateTestsMaxIterations;
 
@@ -221,6 +231,8 @@ public class AgentRunner {
                 fail(job, "Agent loop error: " + e.getMessage());
                 return;
             }
+
+            runSelfReview(workspace, job, effectivePrompt);
 
             LinterFixResult linterFixResult = runLinterFixLoop(workspace, linterBaseline, job);
             if (!linterFixResult.canContinue()) {
@@ -707,6 +719,8 @@ public class AgentRunner {
                 failFixPr(job, "Agent loop error: " + e.getMessage());
                 return;
             }
+
+            runSelfReview(workspace, job, "Fix review comments on PR #" + request.prId());
 
             if (!runBuildWithRetry(workspace, job)) {
                 failFixPr(job, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
@@ -1320,6 +1334,7 @@ public class AgentRunner {
      */
     private void finishFixJob(JobRecord job, RunFixRequest request, WorkspaceContext workspace, String summary) {
         RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
+        runSelfReview(workspace, job, "Refactor methods to reduce cyclomatic complexity");
         if (!runBuildWithRetry(workspace, job)) {
             fail(job, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
             return;
@@ -1509,6 +1524,61 @@ public class AgentRunner {
             }
         }
         return new LinterFixResult(true, lastResults);
+    }
+
+    /**
+     * Runs a focused self-review pass: the agent reads its own diff against the original task,
+     * checks for completeness, debug artefacts, unused imports, and edge cases, then fixes
+     * anything it finds before the linter and build gates run.
+     * <p>
+     * This step is entirely non-fatal — any error causes a warning log and the job continues.
+     */
+    private void runSelfReview(WorkspaceContext workspace, JobRecord job, String originalTask) {
+        if (!selfReviewEnabled) {
+            return;
+        }
+
+        String diff;
+        try {
+            diff = workspace.getWorkingDiff();
+        } catch (Exception e) {
+            LOG.warnf("Self-review: failed to get working diff (non-fatal): %s", e.getMessage());
+            return;
+        }
+
+        if (diff == null || diff.isBlank()) {
+            LOG.info("Self-review: no changes detected, skipping");
+            return;
+        }
+
+        if (diff.length() > selfReviewMaxDiffChars) {
+            diff = diff.substring(0, selfReviewMaxDiffChars)
+                    + "\n\n... [diff truncated at " + selfReviewMaxDiffChars + " chars] ...";
+        }
+
+        String filesChanged = diff.lines()
+                .filter(l -> l.startsWith("diff --git "))
+                .map(l -> {
+                    // "diff --git a/path/to/File.java b/path/to/File.java" -> "path/to/File.java"
+                    String[] parts = l.split(" ");
+                    return parts.length >= 4 ? parts[3].replaceFirst("^b/", "") : l;
+                })
+                .collect(Collectors.joining(", "));
+
+        String reviewPrompt = promptTemplates.resolve("self-review", Map.of(
+                "ORIGINAL_TASK", originalTask != null ? originalTask : "(not available)",
+                "DIFF", diff,
+                "FILES_CHANGED", filesChanged));
+
+        LOG.infof("Running self-review pass over %d changed file(s)...",
+                diff.lines().filter(l -> l.startsWith("diff --git ")).count());
+        try {
+            toolUseLoop.run(reviewPrompt, workspace, selfReviewMaxIterations,
+                    job.getJobId(), job.getJobType().name());
+        } catch (Exception e) {
+            LOG.warnf("Self-review loop error (non-fatal): %s", e.getMessage());
+        }
+        LOG.info("Self-review pass complete");
     }
 
     /**

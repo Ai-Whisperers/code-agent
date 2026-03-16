@@ -144,6 +144,16 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Get the full unified diff of all uncommitted changes in the working tree.
+     * Stages everything first (git add -A) then returns the staged diff.
+     * Used by the self-review step to show the agent what it has changed before committing.
+     */
+    public String getWorkingDiff() throws IOException, InterruptedException {
+        runGit(1, "add", "-A");
+        return runGitOutput(2, "diff", "--cached");
+    }
+
+    /**
      * Get the full SHA of the current HEAD commit.
      */
     public String getHeadSha() throws IOException, InterruptedException {
