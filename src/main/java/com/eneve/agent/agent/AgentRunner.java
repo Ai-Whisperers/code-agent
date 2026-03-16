@@ -90,6 +90,7 @@ public class AgentRunner {
     @Inject DocsEmbeddingService docsEmbeddingService;
     @Inject CodeMetricsCalculator codeMetricsCalculator;
     @Inject CodeMetricsStore codeMetricsStore;
+    @Inject PromptTemplateService promptTemplates;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -111,6 +112,9 @@ public class AgentRunner {
 
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
+
+    @ConfigProperty(name = "run-fix.max-build-retries", defaultValue = "2")
+    int maxBuildRetries;
 
     @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
     int generateTestsMaxIterations;
@@ -220,10 +224,8 @@ public class AgentRunner {
                 return;
             }
 
-            try {
-                buildValidator.validate(workspace);
-            } catch (Exception e) {
-                fail(job, "Build validation failed: " + e.getMessage());
+            if (!runBuildWithRetry(workspace, job)) {
+                fail(job, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
                 return;
             }
 
@@ -684,10 +686,8 @@ public class AgentRunner {
                 return;
             }
 
-            try {
-                buildValidator.validate(workspace);
-            } catch (Exception e) {
-                failFixPr(job, "Build validation failed: " + e.getMessage());
+            if (!runBuildWithRetry(workspace, job)) {
+                failFixPr(job, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
                 return;
             }
 
@@ -964,10 +964,8 @@ public class AgentRunner {
                 return;
             }
 
-            try {
-                buildValidator.validate(workspace);
-            } catch (Exception e) {
-                failFixComment(job, request, "Build validation failed: " + e.getMessage());
+            if (!runBuildWithRetry(workspace, job)) {
+                failFixComment(job, request, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
                 return;
             }
 
@@ -1121,11 +1119,10 @@ public class AgentRunner {
                     return;
                 }
             } else {
-                // No JaCoCo: fall back to plain build validation
-                try {
-                    buildValidator.validate(workspace);
-                } catch (Exception e) {
-                    failGenerateTests(job, "Build validation failed (generated tests did not pass): " + e.getMessage());
+                // No JaCoCo: fall back to plain build validation with retry
+                if (!runBuildWithRetry(workspace, job)) {
+                    failGenerateTests(job, "Build validation failed after " + maxBuildRetries
+                            + " retry attempt(s) (generated tests did not pass)");
                     return;
                 }
             }
@@ -1301,10 +1298,8 @@ public class AgentRunner {
      */
     private void finishFixJob(JobRecord job, RunFixRequest request, WorkspaceContext workspace, String summary) {
         RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
-        try {
-            buildValidator.validate(workspace);
-        } catch (Exception e) {
-            fail(job, "Build validation failed: " + e.getMessage());
+        if (!runBuildWithRetry(workspace, job)) {
+            fail(job, "Build validation failed after " + maxBuildRetries + " retry attempt(s)");
             return;
         }
 
@@ -1437,6 +1432,53 @@ public class AgentRunner {
             }
         }
         return true;
+    }
+
+    /**
+     * Runs build validation with automatic retries on failure.
+     * On each failure the build error output is fed back to the agent so it can
+     * fix its own mistakes before the next attempt.
+     *
+     * @return {@code true} if validation eventually passes,
+     *         {@code false} if all attempts are exhausted (caller must call fail())
+     */
+    private boolean runBuildWithRetry(WorkspaceContext workspace, JobRecord job) {
+        String jobId = job.getJobId();
+        String jobType = job.getJobType().name();
+        int attempts = 0;
+        while (true) {
+            try {
+                buildValidator.validate(workspace);
+                if (attempts > 0) {
+                    LOG.infof("Build validation passed on retry attempt %d", attempts);
+                }
+                return true;
+            } catch (Exception e) {
+                attempts++;
+                String buildError = e.getMessage() != null ? e.getMessage() : "Unknown build error";
+                if (attempts > maxBuildRetries) {
+                    LOG.warnf("Build validation failed after %d attempt(s), giving up: %s",
+                            attempts, buildError.length() > 200 ? buildError.substring(0, 200) + "..." : buildError);
+                    return false;
+                }
+
+                LOG.infof("Build validation failed (attempt %d/%d), feeding error back to agent: %s",
+                        attempts, maxBuildRetries,
+                        buildError.length() > 200 ? buildError.substring(0, 200) + "..." : buildError);
+
+                String retryPrompt = promptTemplates.resolve("build-retry", Map.of(
+                        "BUILD_OUTPUT", buildError,
+                        "ATTEMPT", String.valueOf(attempts),
+                        "MAX_ATTEMPTS", String.valueOf(maxBuildRetries)));
+
+                try {
+                    toolUseLoop.run(retryPrompt, workspace, 30, jobId, jobType);
+                } catch (Exception agentEx) {
+                    LOG.warnf("Agent fix loop error during build retry (attempt %d): %s", attempts, agentEx.getMessage());
+                    return false;
+                }
+            }
+        }
     }
 
     private String resolveRepoUrl(JobRecord job) {

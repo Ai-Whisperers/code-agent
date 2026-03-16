@@ -107,5 +107,11 @@
     "description": "Checks whether a single open review finding has been addressed in the current code",
     "placeholders": ["FILE", "LINE", "FINDING", "CODE_CONTEXT"],
     "content": "The following review finding was posted on a previous commit:\nFile: {{FILE}}, Line: {{LINE}}\nFinding: {{FINDING}}\n\nThe developer has since pushed new commits. Here is the current state of the code around line {{LINE}}:\n{{CODE_CONTEXT}}\n\nHas this finding been addressed? Reply with only YES or NO."
+  },
+
+  "build-retry": {
+    "description": "Prompt for fixing build or test failures introduced by the agent's own changes",
+    "placeholders": ["BUILD_OUTPUT", "ATTEMPT", "MAX_ATTEMPTS"],
+    "content": "The build/test validation failed after your recent changes (attempt {{ATTEMPT}} of {{MAX_ATTEMPTS}}).\n\nBuild output:\n```\n{{BUILD_OUTPUT}}\n```\n\n## Your task\nAnalyze the failure above and fix it. Follow this process:\n\n1. Read the build output carefully to identify the root cause — compilation error, test failure, or missing dependency.\n2. Use `read_file` to examine the files mentioned in the error.\n3. Use `search_code` or `list_files` if you need broader context.\n4. Apply the minimal fix needed to make the build pass.\n\n## Rules\n- Do NOT add `@Disabled`, `@Ignore`, or `@Test(enabled = false)` to skip failing tests — fix the actual code.\n- Do NOT delete tests to make them pass.\n- Do NOT modify the build system (pom.xml, build.gradle) unless the error is clearly a dependency or plugin issue.\n- Keep your fix as targeted as possible — only touch files directly related to the failure.\n- After fixing, the build will be re-validated automatically. Do not run the build yourself.\n\nProvide a brief summary of what you changed and why."
   }
 }
