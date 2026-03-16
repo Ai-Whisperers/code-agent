@@ -4,6 +4,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,6 +21,7 @@ import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
+import com.eneve.agent.linter.StaticAnalysisDiffReport;
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.FixPrRequest;
@@ -220,7 +222,8 @@ public class AgentRunner {
                 return;
             }
 
-            if (!runLinterFixLoop(workspace, linterBaseline, job)) {
+            LinterFixResult linterFixResult = runLinterFixLoop(workspace, linterBaseline, job);
+            if (!linterFixResult.canContinue()) {
                 return;
             }
 
@@ -242,6 +245,11 @@ public class AgentRunner {
                 return;
             }
 
+            // Build the static analysis diff report now that changes are committed
+            // (HEAD~1 is the original branch tip, HEAD is the agent's commit).
+            StaticAnalysisDiffReport linterDiffReport = buildLinterDiffReport(
+                    workspace, linterBaseline, linterFixResult.finalResults());
+
             try {
                 workspace.push(request.branchName(), jobTimeoutMinutes);
             } catch (Exception e) {
@@ -262,8 +270,11 @@ public class AgentRunner {
             String prId;
             try {
                 String title = request.jiraKey() + ": Automated fix";
+                String linterSummaryLine = linterDiffReport != null
+                        ? "\n\n" + buildLinterDiffSummaryLine(linterDiffReport)
+                        : "";
                 String description = "**Automated PR created by Code Agent Runner**\n\n"
-                        + "JIRA: " + request.jiraKey() + "\n\n" + summary;
+                        + "JIRA: " + request.jiraKey() + "\n\n" + summary + linterSummaryLine;
                 String[] prResult = platformService.createPullRequest(
                         coords.organization(), coords.project(), coords.repository(),
                         request.branchName(), request.targetBranchOrDefault(),
@@ -280,6 +291,17 @@ public class AgentRunner {
             job.setPrUrl(prUrl);
             job.setPrId(prId);
             jobStore.update(job);
+
+            // Post the full static analysis diff report as a standalone PR comment
+            if (linterDiffReport != null && linterService.getConfig().isReportOnPr()) {
+                final String capturedPrId = prId;
+                final StaticAnalysisDiffReport capturedReport = linterDiffReport;
+                CompletableFuture.runAsync(() -> safeComment(() ->
+                        platformService.addPrComment(
+                                coords.organization(), coords.project(), coords.repository(),
+                                capturedPrId, capturedReport.formatMarkdown())),
+                        REVIEW_PARALLEL_POOL);
+            }
 
             safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
             safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
@@ -1391,22 +1413,77 @@ public class AgentRunner {
     }
 
     /**
-     * Runs the post-change linter delta scan and fix loop.
-     * Returns false if the job should be aborted (fail already called).
+     * Builds a {@link StaticAnalysisDiffReport} from the baseline and final linter scans.
+     * Collects changed file names from the most recent commit to scope the report.
+     * Returns {@code null} if linting is disabled or no scan results are available.
      */
-    private boolean runLinterFixLoop(WorkspaceContext workspace, List<LinterResult> baseline, JobRecord job) {
+    private StaticAnalysisDiffReport buildLinterDiffReport(
+            WorkspaceContext workspace,
+            List<LinterResult> baseline,
+            List<LinterResult> finalResults) {
+
         if (!linterService.getConfig().isEnabled()) {
-            return true;
+            return null;
+        }
+        if (baseline.isEmpty() && finalResults.isEmpty()) {
+            return null;
+        }
+
+        Set<String> changedFiles = Collections.emptySet();
+        try {
+            changedFiles = workspace.getChangedFileNames();
+        } catch (Exception e) {
+            LOG.warnf("Could not retrieve changed file names for linter diff scoping: %s", e.getMessage());
+        }
+
+        StaticAnalysisDiffReport report = linterService.buildDiffReport(baseline, finalResults, changedFiles);
+        LOG.infof("Static analysis diff: verdict=%s, newIssues=%d, resolvedIssues=%d",
+                report.verdict(), report.newIssues().size(), report.resolvedIssues().size());
+        return report;
+    }
+
+    /**
+     * Produces a one-line Markdown summary of the static analysis verdict for the PR description.
+     */
+    private static String buildLinterDiffSummaryLine(StaticAnalysisDiffReport report) {
+        int newCount = report.newIssues().size();
+        int resolvedCount = report.resolvedIssues().size();
+        return switch (report.verdict()) {
+            case PASS     -> "**Static Analysis:** PASS — no new issues introduced.";
+            case IMPROVED -> "**Static Analysis:** IMPROVED — " + resolvedCount
+                    + " issue(s) resolved, " + newCount + " new issue(s).";
+            case DEGRADED -> "**Static Analysis:** DEGRADED — " + newCount
+                    + " new issue(s) introduced, " + resolvedCount + " resolved.";
+        };
+    }
+
+    /**
+     * Carries the outcome of the linter fix loop:
+     * whether the job may continue and the final scan results needed to build the diff report.
+     */
+    private record LinterFixResult(boolean canContinue, List<LinterResult> finalResults) {}
+
+    /**
+     * Runs the post-change linter delta scan and fix loop.
+     * Returns a {@link LinterFixResult} whose {@code canContinue} is {@code false}
+     * when the job should be aborted (fail() has already been called).
+     * The {@code finalResults} field always contains the last completed linter scan.
+     */
+    private LinterFixResult runLinterFixLoop(WorkspaceContext workspace, List<LinterResult> baseline, JobRecord job) {
+        if (!linterService.getConfig().isEnabled()) {
+            return new LinterFixResult(true, Collections.emptyList());
         }
         int maxLintFixes = linterService.getConfig().getMaxFixIterations();
+        List<LinterResult> lastResults = Collections.emptyList();
         for (int lintIter = 0; lintIter < maxLintFixes; lintIter++) {
             LOG.infof("Linter delta scan iteration %d/%d", lintIter + 1, maxLintFixes);
             List<LinterResult> current = linterService.runAll(workspace.getRoot());
+            lastResults = current;
             List<LinterFinding> newIssues = linterService.findNewIssues(baseline, current);
 
             if (newIssues.isEmpty()) {
                 LOG.info("No new linter issues introduced — linter gate passed");
-                return true;
+                return new LinterFixResult(true, lastResults);
             }
 
             LOG.infof("Found %d new linter issues, asking Claude to fix (iteration %d/%d)",
@@ -1419,19 +1496,19 @@ public class AgentRunner {
                             job.getJobId(), job.getJobType().name());
                 } catch (Exception e) {
                     LOG.warnf("Linter fix loop error (non-fatal): %s", e.getMessage());
-                    return true;
+                    return new LinterFixResult(true, lastResults);
                 }
             } else {
                 String issueList = linterService.buildFixPrompt(newIssues);
                 LOG.warnf("Linter fix iterations exhausted with %d remaining issues", newIssues.size());
                 if (linterService.getConfig().isFailOnNewIssues()) {
                     fail(job, "New linter/SAST issues introduced and could not be auto-fixed:\n" + issueList);
-                    return false;
+                    return new LinterFixResult(false, lastResults);
                 }
                 LOG.warn("fail-on-new-issues is false — continuing despite new linter issues");
             }
         }
-        return true;
+        return new LinterFixResult(true, lastResults);
     }
 
     /**

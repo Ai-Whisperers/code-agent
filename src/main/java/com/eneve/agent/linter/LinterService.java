@@ -3,6 +3,7 @@ package com.eneve.agent.linter;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.jboss.logging.Logger;
@@ -59,17 +60,64 @@ public class LinterService {
 
     /**
      * Compare current scan results against a baseline and return only findings
-     * that are new (not present in the baseline).
+     * that are new (not present in the baseline). Uses fuzzy line matching so
+     * that pre-existing issues shifted by nearby edits are not falsely flagged.
      */
     public List<LinterFinding> findNewIssues(List<LinterResult> baseline, List<LinterResult> current) {
+        int tolerance = config.getLineTolerance();
         List<LinterFinding> baselineFindings = baseline.stream()
                 .flatMap(r -> r.findings().stream())
                 .toList();
 
         return current.stream()
                 .flatMap(r -> r.findings().stream())
-                .filter(finding -> baselineFindings.stream().noneMatch(finding::matches))
+                .filter(finding -> baselineFindings.stream()
+                        .noneMatch(b -> finding.matchesLoose(b, tolerance)))
                 .toList();
+    }
+
+    /**
+     * Symmetric to {@link #findNewIssues}: returns findings present in the baseline
+     * that are absent from the current results (i.e., issues the agent resolved).
+     */
+    public List<LinterFinding> findResolvedIssues(List<LinterResult> baseline, List<LinterResult> current) {
+        int tolerance = config.getLineTolerance();
+        List<LinterFinding> currentFindings = current.stream()
+                .flatMap(r -> r.findings().stream())
+                .toList();
+
+        return baseline.stream()
+                .flatMap(r -> r.findings().stream())
+                .filter(finding -> currentFindings.stream()
+                        .noneMatch(c -> finding.matchesLoose(c, tolerance)))
+                .toList();
+    }
+
+    /**
+     * Build a {@link StaticAnalysisDiffReport} comparing the baseline and current scans.
+     * When {@code linter.scope-to-changed-files} is enabled and {@code changedFiles} is
+     * non-empty, the new/resolved issue lists are further filtered to only include
+     * findings in those files.
+     */
+    public StaticAnalysisDiffReport buildDiffReport(
+            List<LinterResult> baseline,
+            List<LinterResult> current,
+            Set<String> changedFiles) {
+
+        List<LinterFinding> newIssues = findNewIssues(baseline, current);
+        List<LinterFinding> resolvedIssues = findResolvedIssues(baseline, current);
+
+        boolean scoped = config.isScopeToChangedFiles() && !changedFiles.isEmpty();
+        if (scoped) {
+            newIssues = newIssues.stream()
+                    .filter(f -> changedFiles.contains(f.file()))
+                    .toList();
+            resolvedIssues = resolvedIssues.stream()
+                    .filter(f -> changedFiles.contains(f.file()))
+                    .toList();
+        }
+
+        return new StaticAnalysisDiffReport(baseline, current, newIssues, resolvedIssues, changedFiles, scoped);
     }
 
     /**

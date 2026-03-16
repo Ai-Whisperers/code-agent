@@ -24,4 +24,18 @@ public record LinterFinding(
                 && line == other.line
                 && Objects.equals(rule, other.rule);
     }
+
+    /**
+     * Loose match: same file, rule, and linter, with the line number allowed to
+     * shift by at most {@code lineTolerance} lines in either direction.
+     *
+     * This prevents pre-existing issues from appearing as "new" simply because
+     * an unrelated edit shifted surrounding code up or down.
+     */
+    public boolean matchesLoose(LinterFinding other, int lineTolerance) {
+        return Objects.equals(linterName, other.linterName)
+                && Objects.equals(file, other.file)
+                && Objects.equals(rule, other.rule)
+                && Math.abs(line - other.line) <= lineTolerance;
+    }
 }

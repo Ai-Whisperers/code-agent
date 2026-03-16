@@ -171,6 +171,18 @@ public class WorkspaceContext implements AutoCloseable {
         return (int) output.lines().filter(l -> !l.isBlank()).count();
     }
 
+    /**
+     * Returns the relative paths of files changed in the most recent commit,
+     * suitable for scoping linter reports to only agent-touched files.
+     */
+    public java.util.Set<String> getChangedFileNames() throws IOException, InterruptedException {
+        String output = runGitOutput(2, "diff", "--name-only", "HEAD~1");
+        return output.lines()
+                .map(String::trim)
+                .filter(l -> !l.isBlank())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
+    }
+
     public int countLinesChanged() throws IOException, InterruptedException {
         String output = runGitOutput(2, "diff", "--shortstat", "HEAD~1");
         int total = 0;
