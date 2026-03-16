@@ -124,6 +124,9 @@ public class AgentRunner {
     @ConfigProperty(name = "metrics.job-timeout-minutes", defaultValue = "30")
     long metricsTimeoutMinutes;
 
+    @ConfigProperty(name = "metrics.max-methods-per-fix", defaultValue = "10")
+    int metricsMaxMethodsPerFix;
+
     @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
     boolean prSummaryEnabled;
 
@@ -164,6 +167,24 @@ public class AgentRunner {
             }
 
             configureGitIfNeeded(workspace);
+
+            // Quality-improvement FIX jobs carry a planId; use the focused CC-reduction prompt.
+            if (request.planId() != null && !request.planId().isBlank()) {
+                String qualityPrompt = buildQualityFixPrompt(request.planId());
+                if (qualityPrompt != null) {
+                    String summary;
+                    try {
+                        summary = toolUseLoop.run(qualityPrompt, workspace,
+                                job.getJobId(), job.getJobType().name());
+                    } catch (Exception e) {
+                        fail(job, "Agent loop error: " + e.getMessage());
+                        return;
+                    }
+                    finishFixJob(job, request, workspace, summary);
+                    return;
+                }
+                LOG.warnf("No CC snapshot for plan %s, falling back to generic fix prompt", request.planId());
+            }
 
             // Linter baseline scan and prompt resolution (JIRA fetch) are independent — run in parallel
             CompletableFuture<List<LinterResult>> linterFuture = CompletableFuture.supplyAsync(
@@ -1259,6 +1280,92 @@ public class AgentRunner {
         }
     }
 
+    /**
+     * Builds the system prompt for a quality-improvement FIX job by looking up the latest
+     * CC snapshot for the plan and delegating to the focused metrics-fix prompt builder.
+     * Returns {@code null} if no snapshot exists yet (caller should fall back).
+     */
+    private String buildQualityFixPrompt(String planId) {
+        List<CodeMetricsCalculator.CodeMetricsSnapshot> snapshots = codeMetricsStore.findByPlan(planId);
+        if (snapshots.isEmpty()) {
+            LOG.warnf("Quality-fix job for plan %s: no CC snapshot found", planId);
+            return null;
+        }
+        CodeMetricsCalculator.CodeMetricsSnapshot latest = snapshots.get(snapshots.size() - 1);
+        return promptBuilder.buildMetricsFixPrompt(latest, metricsMaxMethodsPerFix);
+    }
+
+    /**
+     * Handles the post-agent steps for a quality-improvement FIX job:
+     * build validation, commit, push, guardrail check, and PR creation.
+     */
+    private void finishFixJob(JobRecord job, RunFixRequest request, WorkspaceContext workspace, String summary) {
+        RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
+        try {
+            buildValidator.validate(workspace);
+        } catch (Exception e) {
+            fail(job, "Build validation failed: " + e.getMessage());
+            return;
+        }
+
+        boolean hasChanges;
+        try {
+            hasChanges = workspace.commitAll("refactor: reduce cyclomatic complexity\n\n" + summary);
+        } catch (Exception e) {
+            fail(job, "Commit failed: " + e.getMessage());
+            return;
+        }
+
+        if (!hasChanges) {
+            fail(job, "Agent completed but made no file changes. Claude summary: " + summary);
+            return;
+        }
+
+        try {
+            workspace.push(request.branchName(), jobTimeoutMinutes);
+        } catch (Exception e) {
+            fail(job, "Push failed: " + e.getMessage());
+            return;
+        }
+
+        DiffStats stats = countChanges(workspace);
+        String violation = checkGuardrails(stats);
+        if (violation != null) {
+            fail(job, violation);
+            return;
+        }
+        job.setFilesChanged(stats.filesChanged);
+        job.setLinesChanged(stats.linesChanged);
+
+        String prUrl;
+        String prId;
+        try {
+            String title = "refactor: reduce cyclomatic complexity";
+            String description = "**Automated quality improvement by Code Agent**\n\n" + summary;
+            String[] prResult = platformService.createPullRequest(
+                    coords.organization(), coords.project(), coords.repository(),
+                    request.branchName(), request.targetBranchOrDefault(),
+                    title, description);
+            prUrl = prResult[0];
+            prId = prResult[1];
+        } catch (Exception e) {
+            fail(job, "Create PR failed: " + e.getMessage());
+            return;
+        }
+
+        job.setStatus(JobStatus.AWAITING_APPROVAL);
+        job.setSummary(summary);
+        job.setPrUrl(prUrl);
+        job.setPrId(prId);
+        jobStore.update(job);
+
+        RunResult result = buildResult(job, true);
+        teamsNotifier.sendNotification(result);
+        n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
+
+        LOG.infof("Quality-fix job %s completed successfully. PR: %s", job.getJobId(), prUrl);
+    }
+
     private String resolvePrompt(RunFixRequest request) {
         String prompt = request.prompt();
         if (prompt != null && !prompt.isBlank()) {
@@ -1647,7 +1754,8 @@ public class AgentRunner {
 
             String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             try {
-                workspace.cloneRepo(authUrl, request.branch(), metricsTimeoutMinutes);
+                // Depth-1 is sufficient: metrics only reads the current file tree
+                workspace.cloneRepoShallow(authUrl, request.branch(), metricsTimeoutMinutes);
             } catch (Exception e) {
                 failMetrics(job, "Clone failed: " + e.getMessage());
                 return;
@@ -1727,7 +1835,7 @@ public class AgentRunner {
             RunFixRequest fixRequest = new RunFixRequest(
                     request.repoUrl(), request.branchName(), null,
                     request.prompt(), request.targetBranch(), null, null,
-                    request.ruleNames(), request.extraRules());
+                    request.ruleNames(), request.extraRules(), null);
 
             String systemPrompt = promptBuilder.buildRunFixPrompt(fixRequest, request.prompt(), workspace, "");
 

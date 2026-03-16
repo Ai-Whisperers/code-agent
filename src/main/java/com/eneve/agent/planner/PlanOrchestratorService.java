@@ -358,12 +358,21 @@ public class PlanOrchestratorService {
         // Extract connection info from the latest metrics snapshot for the fix prompt
         String metricsContext = latest.formatForPrompt(defaultMaxMethodsPerFix);
 
+        // The new fix branch for this iteration
+        String fixBranch = "agent/quality/" + planId.substring(0, 8) + "-iter-" + iteration;
+        // Chain iterations: iter-N clones from iter-(N-1), iter-1 clones from the target branch
+        String prevBranch = iteration == 1
+                ? (plan.targetBranch() != null ? plan.targetBranch() : "main")
+                : "agent/quality/" + planId.substring(0, 8) + "-iter-" + (iteration - 1);
+
         PlanStep fixStep = new PlanStep(
                 fixStepId, "FIX",
                 "Reduce cyclomatic complexity (iteration " + iteration + ")",
                 metricsContext,
                 "PENDING", null,
-                Map.of("branchName", "agent/quality/" + planId.substring(0, 8) + "-iter-" + iteration));
+                Map.of(
+                        "branchName", fixBranch,
+                        "sourceBranch", prevBranch));
 
         PlanStep metricsStep = new PlanStep(
                 metricsStepId, "METRICS",
@@ -372,7 +381,8 @@ public class PlanOrchestratorService {
                 "PENDING", null,
                 Map.of(
                         "ccThreshold", String.valueOf(ccThreshold),
-                        "maxIterations", String.valueOf(maxIterations)));
+                        "maxIterations", String.valueOf(maxIterations),
+                        "branch", fixBranch));
 
         PlanPhase fixPhase = new PlanPhase(nextOrder, "Quality Fix (iteration " + iteration + ")", true,
                 List.of(fixStep));
@@ -400,16 +410,24 @@ public class PlanOrchestratorService {
             case "FIX" -> {
                 String branchName = param(step, "branchName",
                         "agent/plan/" + plan.planId().substring(0, 8) + "-" + step.stepId());
+                // For quality-improvement FIX steps, clone from the previous iteration's branch
+                // (sourceBranch param) rather than the plan's target branch so iterations chain.
+                String sourceBranch = param(step, "sourceBranch", null);
+                String effectiveTargetBranch = sourceBranch != null ? sourceBranch : plan.targetBranch();
+                // Quality FIX steps carry a sourceBranch param; pass the planId so AgentRunner
+                // can look up the latest CC snapshot and use the focused metrics-fix prompt.
+                String qualityPlanId = sourceBranch != null ? plan.planId() : null;
                 yield new JobRecord(jobId, new RunFixRequest(
                         plan.repoUrl(),
                         branchName,
                         plan.sourceRef(),
                         nullIfBlank(step.prompt()),
-                        plan.targetBranch(),
+                        effectiveTargetBranch,
                         null,  // n8nWebhookUrl
                         null,  // rulesRepoUrl
                         null,  // ruleNames
-                        null   // extraRules
+                        null,  // extraRules
+                        qualityPlanId
                 ));
             }
             case "GENERATE_TESTS" -> {

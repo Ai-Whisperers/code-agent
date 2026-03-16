@@ -56,6 +56,18 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Shallow clone (depth 1) suitable for read-only operations such as metrics scanning.
+     * Fetches only the latest tree, which is significantly faster for large repos with
+     * long histories compared to the standard depth-50 clone.
+     */
+    public void cloneRepoShallow(String authenticatedUrl, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+
+        runGit(timeoutMinutes, "clone", "--depth", "1", "--branch", branchName, authenticatedUrl, ".");
+        LOG.infof("Shallow-cloned repo into %s on branch %s", root, branchName);
+    }
+
+    /**
      * Clone, then create and checkout a new branch.
      * Useful when the branch doesn't exist on the remote yet.
      */

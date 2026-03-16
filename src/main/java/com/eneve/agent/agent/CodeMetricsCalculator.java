@@ -11,6 +11,12 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.StaticJavaParser;
@@ -69,32 +75,52 @@ public class CodeMetricsCalculator {
      */
     public CodeMetricsSnapshot calculate(Path root, String workspace, String repoSlug,
                                          String branch, int threshold) {
-        List<MethodMetric> methods = new ArrayList<>();
         List<Path> javaFiles = findJavaFiles(root);
 
         LOG.infof("CodeMetrics: found %d Java files to analyse for %s/%s", javaFiles.size(), workspace, repoSlug);
 
+        // Parse files in parallel using a bounded thread pool to speed up large repos.
+        // JavaParser instances are created per-thread (StaticJavaParser delegates to a
+        // thread-local parser), so concurrent parsing is safe.
+        int parallelism = Math.min(Runtime.getRuntime().availableProcessors(), 8);
+        ExecutorService pool = Executors.newFixedThreadPool(parallelism);
+        List<MethodMetric> methods = new CopyOnWriteArrayList<>();
+        AtomicInteger scanned = new AtomicInteger(0);
         long startTime = System.currentTimeMillis();
-        int scanned = 0;
+
+        List<Future<?>> futures = new ArrayList<>(javaFiles.size());
         for (Path file : javaFiles) {
-            if (System.currentTimeMillis() - startTime > MAX_SCAN_TIME_MS) {
-                LOG.warnf("CodeMetrics: scan time limit reached after %d files for %s/%s", scanned, workspace, repoSlug);
-                break;
-            }
-            String relativePath = root.relativize(file).toString();
-            try {
-                if (Files.size(file) > MAX_FILE_SIZE) {
-                    LOG.debugf("CodeMetrics: skipping large file %s", relativePath);
-                    continue;
+            futures.add(pool.submit(() -> {
+                if (System.currentTimeMillis() - startTime > MAX_SCAN_TIME_MS) {
+                    return;
                 }
-                analyseFile(file, relativePath, methods);
-            } catch (Exception e) {
-                LOG.debugf("CodeMetrics: skipping %s — %s", relativePath, e.getMessage());
-            }
-            scanned++;
+                String relativePath = root.relativize(file).toString();
+                try {
+                    if (Files.size(file) > MAX_FILE_SIZE) {
+                        LOG.debugf("CodeMetrics: skipping large file %s", relativePath);
+                        return;
+                    }
+                    analyseFile(file, relativePath, methods);
+                    scanned.incrementAndGet();
+                } catch (Exception e) {
+                    LOG.debugf("CodeMetrics: skipping %s — %s", relativePath, e.getMessage());
+                }
+            }));
         }
 
-        LOG.infof("CodeMetrics: analysed %d files, found %d methods for %s/%s", scanned, methods.size(), workspace, repoSlug);
+        pool.shutdown();
+        try {
+            // Wait for at most the scan time limit; stragglers are abandoned
+            pool.awaitTermination(MAX_SCAN_TIME_MS, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.warnf("CodeMetrics: scan interrupted for %s/%s", workspace, repoSlug);
+        }
+        // Cancel any still-running tasks after the deadline
+        futures.forEach(f -> f.cancel(true));
+
+        LOG.infof("CodeMetrics: analysed %d files, found %d methods for %s/%s",
+                scanned.get(), methods.size(), workspace, repoSlug);
 
         int methodsAbove = (int) methods.stream().filter(m -> m.cyclomaticComplexity() > threshold).count();
         double avg = methods.isEmpty() ? 0.0

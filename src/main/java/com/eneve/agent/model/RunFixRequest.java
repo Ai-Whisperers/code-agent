@@ -41,7 +41,12 @@ public record RunFixRequest(
 
         @Schema(description = "Inline extra rules to append to the system prompt",
                 example = "Do not modify test files")
-        String extraRules
+        String extraRules,
+
+        @Schema(description = "Plan ID for quality-improvement jobs — when set, the agent uses a " +
+                "focused cyclomatic-complexity refactoring prompt instead of the generic fix prompt.",
+                example = "a1b2c3d4-...")
+        String planId
 ) {
     public String targetBranchOrDefault() {
         return targetBranch != null && !targetBranch.isBlank() ? targetBranch : "main";

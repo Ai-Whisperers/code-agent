@@ -1,0 +1,10 @@
+image: alpine/git
+
+pipelines:
+  default:
+    - step:
+        name: Mirror to GitHub
+        clone:
+          depth: full
+        script:
+          - git push --mirror https://x-token-auth:$GITHUB_PAT@github.com/$GITHUB_REPO.git
