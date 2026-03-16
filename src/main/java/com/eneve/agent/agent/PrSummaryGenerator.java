@@ -4,9 +4,10 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
+import com.anthropic.errors.RateLimitException;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
@@ -61,9 +62,6 @@ public class PrSummaryGenerator {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
-
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
 
@@ -71,7 +69,13 @@ public class PrSummaryGenerator {
     boolean diagramUploadEnabled;
 
     @Inject
+    AnthropicClient client;
+
+    @Inject
     AiCallStore aiCallStore;
+
+    @Inject
+    TokenBudgetTracker tokenBudgetTracker;
 
     @Inject
     MermaidRenderer mermaidRenderer;
@@ -215,11 +219,10 @@ public class PrSummaryGenerator {
         return sb.toString();
     }
 
-    private String callClaude(String prompt, String jobId) {
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
+    private static final int MAX_RETRIES = 3;
+    private static final long INITIAL_BACKOFF_MS = 5_000;
 
+    private String callClaude(String prompt, String jobId) {
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(4096)
@@ -234,7 +237,7 @@ public class PrSummaryGenerator {
         long startNs = System.nanoTime();
         Message response;
         try {
-            response = client.messages().create(params);
+            response = callWithRetry(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
             aiCallStore.save(new AiCallRecord(
@@ -256,7 +259,6 @@ public class PrSummaryGenerator {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now()));
-
         LOG.infof("PR summary generated — tokens: in=%d, out=%d, duration=%dms",
                 usage.inputTokens(), usage.outputTokens(), durationMs);
 
@@ -266,6 +268,31 @@ public class PrSummaryGenerator {
             }
         }
         return null;
+    }
+
+    private Message callWithRetry(MessageCreateParams params) {
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                tokenBudgetTracker.waitIfNeeded();
+                return client.messages().create(params);
+            } catch (RateLimitException e) {
+                if (attempt == MAX_RETRIES) throw e;
+                long waitMs = INITIAL_BACKOFF_MS * (1L << attempt);
+                waitMs += (long) (waitMs * 0.5 * ThreadLocalRandom.current().nextDouble());
+                LOG.warnf("PR summary rate limited (attempt %d/%d), waiting %dms",
+                        attempt + 1, MAX_RETRIES, waitMs);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during rate limit backoff", ie);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for token budget", e);
+            }
+        }
+        throw new RuntimeException("Exhausted retries after rate limiting");
     }
 
     /**

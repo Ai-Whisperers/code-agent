@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Locale;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
@@ -29,11 +28,11 @@ public class IntentClassifier {
 
     private static final Logger LOG = Logger.getLogger(IntentClassifier.class);
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
+    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
+    String fastModelName;
 
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
+    @Inject
+    AnthropicClient client;
 
     @Inject
     AiCallStore aiCallStore;
@@ -65,10 +64,6 @@ public class IntentClassifier {
     }
 
     private CommentIntent classifyWithClaude(String humanMessage, String originalFinding) {
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
-
         String prompt = """
                 Given an AI code reviewer's finding and a developer's reply, classify the developer's intent.
 
@@ -85,7 +80,7 @@ public class IntentClassifier {
         );
 
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(modelName))
+                .model(Model.of(fastModelName))
                 .maxTokens(50)
                 .messages(List.of(
                         MessageParam.builder()
@@ -101,11 +96,11 @@ public class IntentClassifier {
             response = client.messages().create(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-            aiCallStore.save(new AiCallRecord(
-                    null, null, "INTENT_CLASSIFICATION", modelName, null,
-                    0, 0, 0, 0,
-                    null, null, durationMs,
-                    true, e.getMessage(), Instant.now()));
+        aiCallStore.save(new AiCallRecord(
+                null, null, "INTENT_CLASSIFICATION", fastModelName, null,
+                0, 0, 0, 0,
+                null, null, durationMs,
+                true, e.getMessage(), Instant.now()));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -113,7 +108,7 @@ public class IntentClassifier {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, null, "INTENT_CLASSIFICATION", modelName, null,
+                null, null, "INTENT_CLASSIFICATION", fastModelName, null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),

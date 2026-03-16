@@ -4,6 +4,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
@@ -50,6 +54,13 @@ import jakarta.inject.Inject;
 public class AgentRunner {
 
     private static final Logger LOG = Logger.getLogger(AgentRunner.class);
+
+    /** Dedicated pool for parallel review phases (code graph, finding resolution, PR summary). */
+    private static final ExecutorService REVIEW_PARALLEL_POOL = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "review-parallel-phase");
+        t.setDaemon(true);
+        return t;
+    });
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
@@ -353,16 +364,33 @@ public class AgentRunner {
                 headSha = null;
             }
 
-            // ── Resolution pass: auto-resolve findings addressed by new commits ──
-            int resolvedCount = 0;
+            // ── Parallel phase: finding resolution + code graph + PR summary ──
+            // Parse the diff once; used in multiple parallel branches.
+            final List<ParsedDiffFile> parsedDiff = DiffParser.parse(diff);
+            final List<String> changedFiles = parsedDiff.stream().map(ParsedDiffFile::path).toList();
+
+            // Effectively-final copies for lambda captures (some variables are assigned in try-catch
+            // blocks above, making them not automatically effectively-final in Java).
+            final List<AgentComment> existingComments = existingAgentComments;
+            final String targetBranchFinal = targetBranch;
+            final String prTitleFinal = prTitle;
+            final String jobIdFinal = job.getJobId();
+
+            workspace.putMetadata("workspace", coords.organization());
+            workspace.putMetadata("repoSlug", coords.repository());
+
+            // Future 1: Finding resolution (only when a previous reviewed SHA exists)
+            CompletableFuture<Integer> findingsFuture;
             if (lastReviewedSha != null) {
-                try {
-                    List<OpenFinding> openFindings = commentStore.findOpenInlineComments(
-                            request.prId(), coords.organization(), coords.repository());
-                    if (!openFindings.isEmpty()) {
-                        List<ParsedDiffFile> incrementalParsed = DiffParser.parse(diff);
+                findingsFuture = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        List<OpenFinding> openFindings = commentStore.findOpenInlineComments(
+                                request.prId(), coords.organization(), coords.repository());
+                        if (openFindings.isEmpty()) return 0;
+
                         List<Long> resolvedIds = findingResolver.resolveAddressedFindings(
-                                openFindings, incrementalParsed, workspace, job.getJobId());
+                                openFindings, parsedDiff, workspace, jobIdFinal);
+                        int count = 0;
                         for (long resolvedId : resolvedIds) {
                             try {
                                 platformService.replyToComment(
@@ -377,69 +405,85 @@ public class AgentRunner {
                                         resolvedId, e.getMessage());
                             }
                             commentStore.markResolved(resolvedId);
+                            count++;
                         }
-                        resolvedCount = resolvedIds.size();
-                        if (resolvedCount > 0) {
+                        if (count > 0) {
                             LOG.infof("Auto-resolved %d previously flagged finding(s) on PR #%s",
-                                    resolvedCount, request.prId());
+                                    count, request.prId());
+                        }
+                        return count;
+                    } catch (Exception e) {
+                        LOG.warnf("Finding resolution pass failed (non-fatal): %s", e.getMessage());
+                        return 0;
+                    }
+                }, REVIEW_PARALLEL_POOL);
+            } else {
+                findingsFuture = CompletableFuture.completedFuture(0);
+            }
+
+            // Future 2: Code graph indexing + impact section + PR summary
+            // PR summary runs after code graph so it can use the impact section for diagram context.
+            CompletableFuture<String> codeGraphFuture = CompletableFuture.supplyAsync(() -> {
+                String impact = "";
+                try {
+                    if (codeGraphStore.hasGraph(coords.organization(), coords.repository())) {
+                        codeGraphIndexer.indexIncremental(workspace,
+                                coords.organization(), coords.repository(), changedFiles);
+                        if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                            embeddingIndexer.indexIncremental(workspace,
+                                    coords.organization(), coords.repository(), changedFiles);
+                        }
+                    } else {
+                        codeGraphIndexer.indexFull(workspace, coords.organization(), coords.repository());
+                        if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
+                            embeddingIndexer.indexFull(workspace,
+                                    coords.organization(), coords.repository());
                         }
                     }
-                } catch (Exception e) {
-                    LOG.warnf("Finding resolution pass failed (non-fatal): %s", e.getMessage());
-                }
-            }
-
-            // ── Code graph: index and query impact surface ──
-            String impactSection = "";
-            try {
-                List<String> changedFiles = DiffParser.parse(diff).stream()
-                        .map(ParsedDiffFile::path).toList();
-                if (codeGraphStore.hasGraph(coords.organization(), coords.repository())) {
-                    codeGraphIndexer.indexIncremental(workspace,
+                    impact = codeGraphQueryService.buildImpactSection(
                             coords.organization(), coords.repository(), changedFiles);
-                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
-                        embeddingIndexer.indexIncremental(workspace,
-                                coords.organization(), coords.repository(), changedFiles);
-                    }
-                } else {
-                    codeGraphIndexer.indexFull(workspace,
-                            coords.organization(), coords.repository());
-                    if (repoSettingsStore.isVectorEnabled(coords.organization(), coords.repository())) {
-                        embeddingIndexer.indexFull(workspace,
-                                coords.organization(), coords.repository());
-                    }
-                }
-                impactSection = codeGraphQueryService.buildImpactSection(
-                        coords.organization(), coords.repository(), changedFiles);
-            } catch (Exception e) {
-                LOG.warnf("Code graph indexing/query failed (non-fatal): %s", e.getMessage());
-            }
-
-            workspace.putMetadata("workspace", coords.organization());
-            workspace.putMetadata("repoSlug", coords.repository());
-
-            // ── PR Summary / Walkthrough (posted early so devs see it while review runs) ──
-            if (prSummaryEnabled) {
-                try {
-                    List<ParsedDiffFile> summaryFiles = DiffParser.parse(diff);
-                    List<String> changedFilePaths = summaryFiles.stream()
-                            .map(ParsedDiffFile::path).toList();
-                    String diagramContext = null;
-                    if (sequenceDiagramsEnabled && !impactSection.isBlank()) {
-                        diagramContext = codeGraphQueryService.buildDiagramContext(
-                                coords.organization(), coords.repository(), changedFilePaths);
-                    }
-                    PrSummaryGenerator.SummaryResult summaryResult = prSummaryGenerator.generate(
-                            prTitle, targetBranch, summaryFiles, job.getJobId(), diagramContext,
-                            request.prId());
-                    if (summaryResult != null) {
-                        postOrUpdatePrSummary(coords, request.prId(), existingAgentComments,
-                                summaryResult, job.getJobId());
-                    }
                 } catch (Exception e) {
-                    LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
+                    LOG.warnf("Code graph indexing/query failed (non-fatal): %s", e.getMessage());
                 }
-            }
+
+                // PR summary follows immediately so it can use the impact section for diagrams.
+                if (prSummaryEnabled) {
+                    try {
+                        String diagramContext = null;
+                        if (sequenceDiagramsEnabled && !impact.isBlank()) {
+                            diagramContext = codeGraphQueryService.buildDiagramContext(
+                                    coords.organization(), coords.repository(), changedFiles);
+                        }
+                        PrSummaryGenerator.SummaryResult summaryResult = prSummaryGenerator.generate(
+                                prTitleFinal, targetBranchFinal, parsedDiff, jobIdFinal,
+                                diagramContext, request.prId());
+                        if (summaryResult != null) {
+                            postOrUpdatePrSummary(coords, request.prId(), existingComments,
+                                    summaryResult, jobIdFinal);
+                        }
+                    } catch (Exception e) {
+                        LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
+                    }
+                }
+                return impact;
+            }, REVIEW_PARALLEL_POOL);
+
+            // Wait for both parallel futures before building the main review prompt.
+            int resolvedCount = findingsFuture
+                    .orTimeout(5, TimeUnit.MINUTES)
+                    .exceptionally(e -> {
+                        LOG.warnf("Finding resolution phase timed out or failed: %s", e.getMessage());
+                        return 0;
+                    })
+                    .join();
+
+            String impactSection = codeGraphFuture
+                    .orTimeout(5, TimeUnit.MINUTES)
+                    .exceptionally(e -> {
+                        LOG.warnf("Code graph + PR summary phase timed out or failed: %s", e.getMessage());
+                        return "";
+                    })
+                    .join();
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 safeJira(() -> jiraService.commentStarted(request.jiraKey(),

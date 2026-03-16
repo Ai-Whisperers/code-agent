@@ -6,7 +6,6 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
@@ -37,14 +36,14 @@ public class PlannerService {
     private static final Logger LOG = Logger.getLogger(PlannerService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
-
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
 
     @ConfigProperty(name = "planner.max-tokens", defaultValue = "8192")
     long maxTokens;
+
+    @Inject
+    AnthropicClient client;
 
     @Inject
     AiCallStore aiCallStore;
@@ -188,10 +187,6 @@ public class PlannerService {
     }
 
     private String callClaude(String prompt, String planId) {
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
-
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(maxTokens)

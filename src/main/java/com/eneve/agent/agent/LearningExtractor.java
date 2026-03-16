@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Optional;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
@@ -32,12 +31,10 @@ public class LearningExtractor {
 
     private static final Logger LOG = Logger.getLogger(LearningExtractor.class);
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
+    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
+    String fastModelName;
 
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
-
+    @Inject AnthropicClient client;
     @Inject AiCallStore aiCallStore;
     @Inject MemoryStore memoryStore;
 
@@ -119,12 +116,8 @@ public class LearningExtractor {
                 conversationText
         );
 
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
-
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(modelName))
+                .model(Model.of(fastModelName))
                 .maxTokens(200)
                 .messages(List.of(
                         MessageParam.builder()
@@ -140,11 +133,11 @@ public class LearningExtractor {
             response = client.messages().create(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-            aiCallStore.save(new AiCallRecord(
-                    null, null, "LEARNING_EXTRACTION", modelName, null,
-                    0, 0, 0, 0,
-                    null, null, durationMs,
-                    true, e.getMessage(), Instant.now()));
+        aiCallStore.save(new AiCallRecord(
+                null, null, "LEARNING_EXTRACTION", fastModelName, null,
+                0, 0, 0, 0,
+                null, null, durationMs,
+                true, e.getMessage(), Instant.now()));
             LOG.warnf("Learning extraction failed: %s", e.getMessage());
             return Optional.empty();
         }
@@ -153,7 +146,7 @@ public class LearningExtractor {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, null, "LEARNING_EXTRACTION", modelName, null,
+                null, null, "LEARNING_EXTRACTION", fastModelName, null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),

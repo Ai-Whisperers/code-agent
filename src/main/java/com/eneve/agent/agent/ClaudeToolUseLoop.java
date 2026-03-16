@@ -5,9 +5,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.core.JsonValue;
 import com.anthropic.errors.RateLimitException;
 import com.anthropic.models.messages.CacheControlEphemeral;
@@ -42,9 +42,6 @@ public class ClaudeToolUseLoop {
 
     private static final Logger LOG = Logger.getLogger(ClaudeToolUseLoop.class);
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
-
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
 
@@ -55,10 +52,16 @@ public class ClaudeToolUseLoop {
     int maxIterations;
 
     @Inject
+    AnthropicClient client;
+
+    @Inject
     ToolRegistry toolRegistry;
 
     @Inject
     AiCallStore aiCallStore;
+
+    @Inject
+    TokenBudgetTracker tokenBudgetTracker;
 
     /**
      * Run the agentic tool-use loop with a custom tool set and initial user message.
@@ -105,10 +108,6 @@ public class ClaudeToolUseLoop {
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
                          String jobId, String jobType, int iterationCap) {
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
-
         List<MessageParam> messages = new ArrayList<>();
         messages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)
@@ -130,7 +129,7 @@ public class ClaudeToolUseLoop {
             long startNs = System.nanoTime();
             Message response;
             try {
-                response = callWithRetry(client, params);
+                response = callWithRetry(params);
             } catch (Exception e) {
                 long durationMs = (System.nanoTime() - startNs) / 1_000_000;
                 aiCallStore.save(new AiCallRecord(
@@ -142,6 +141,7 @@ public class ClaudeToolUseLoop {
             }
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
             logUsage(response, iteration + 1);
+            tokenBudgetTracker.recordUsage(response.usage().inputTokens(), response.usage().outputTokens());
 
             boolean hasToolUse = false;
             List<ContentBlockParam> toolResults = new ArrayList<>();
@@ -228,25 +228,31 @@ public class ClaudeToolUseLoop {
     }
 
     private static final int MAX_RETRIES = 5;
-    private static final long INITIAL_BACKOFF_MS = 30_000;
+    private static final long INITIAL_BACKOFF_MS = 5_000;
 
-    private Message callWithRetry(AnthropicClient client, MessageCreateParams params) {
+    private Message callWithRetry(MessageCreateParams params) {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             try {
+                tokenBudgetTracker.waitIfNeeded();
                 return client.messages().create(params);
             } catch (RateLimitException e) {
                 if (attempt == MAX_RETRIES) {
                     throw e;
                 }
                 long waitMs = INITIAL_BACKOFF_MS * (1L << attempt);
-                LOG.warnf("Rate limited (attempt %d/%d), waiting %ds before retry...",
-                        attempt + 1, MAX_RETRIES, waitMs / 1000);
+                // Add up to 50% jitter to prevent thundering herd when multiple jobs retry together
+                waitMs += (long) (waitMs * 0.5 * ThreadLocalRandom.current().nextDouble());
+                LOG.warnf("Rate limited (attempt %d/%d), waiting %dms before retry...",
+                        attempt + 1, MAX_RETRIES, waitMs);
                 try {
                     Thread.sleep(waitMs);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     throw new RuntimeException("Interrupted during rate limit backoff", ie);
                 }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for token budget", e);
             }
         }
         throw new RuntimeException("Exhausted retries after rate limiting");
