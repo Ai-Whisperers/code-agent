@@ -4,6 +4,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 import com.anthropic.client.AnthropicClient;
@@ -80,6 +81,9 @@ public class PrSummaryGenerator {
     @Inject
     MermaidRenderer mermaidRenderer;
 
+    @Inject
+    PromptTemplateService promptTemplates;
+
     /**
      * Generate a PR summary from the diff.
      * <p>
@@ -118,77 +122,27 @@ public class PrSummaryGenerator {
                                String compactDiff, String diagramContext) {
         boolean includeDiagrams = diagramContext != null && !diagramContext.isBlank();
 
-        String diagramSection = includeDiagrams ? """
+        String diagramSection = includeDiagrams
+                ? "\n## Code Relationships\n" + diagramContext + "\n"
+                : "";
 
-                ## Code Relationships
-                %s
-                """.formatted(diagramContext) : "";
+        String diagramOutputSpec = includeDiagrams
+                ? ",\n  \"diagrams\": [\n    {\n      \"title\": \"Short descriptive title\",\n      \"mermaid\": \"sequenceDiagram or classDiagram syntax here (no fences)\"\n    }\n  ]\n"
+                : "";
 
-        String diagramOutputSpec = includeDiagrams ? """
-                ,
-                  "diagrams": [
-                    {
-                      "title": "Short descriptive title",
-                      "mermaid": "sequenceDiagram or classDiagram syntax here (no fences)"
-                    }
-                  ]
-                """ : "";
+        String diagramRule = includeDiagrams
+                ? "- Include a \"diagrams\" array only when the PR affects component interactions (API calls, event flows, service chains) or type hierarchies. Omit it entirely for trivial single-file changes.\n- Each diagram must use valid Mermaid syntax (sequenceDiagram or classDiagram). Use the Code Relationships section above to ground the diagram in real call chains. Do not invent relationships that are not in the diff or the code graph.\n- Keep diagrams concise: max 10 participants or nodes.\n"
+                : "";
 
-        String diagramRule = includeDiagrams ? """
-                - Include a "diagrams" array only when the PR affects component interactions \
-                (API calls, event flows, service chains) or type hierarchies. \
-                Omit it entirely for trivial single-file changes.
-                - Each diagram must use valid Mermaid syntax (sequenceDiagram or classDiagram). \
-                Use the Code Relationships section above to ground the diagram in real call chains. \
-                Do not invent relationships that are not in the diff or the code graph.
-                - Keep diagrams concise: max 10 participants or nodes.
-                """ : "";
-
-        return """
-                Analyze this pull request diff and produce a JSON summary.
-
-                ## PR Information
-                - **Title**: %s
-                - **Target branch**: %s
-
-                ## Changed Files
-                %s
-                %s
-                ## Diff
-                ```
-                %s
-                ```
-
-                ## Output Format
-                Return ONLY a JSON object (no markdown fences, no extra text):
-                {
-                  "summary": "2-3 sentence high-level description of what this PR accomplishes and why. \
-                Write from the perspective of describing the PR to a reviewer.",
-                  "walkthrough": [
-                    {
-                      "file": "exact/path/to/file.java",
-                      "changes": "Concise one-line description of what changed in this file"
-                    }
-                  ]%s
-                }
-
-                Rules:
-                - The summary should describe the overall PURPOSE and IMPACT, not list individual files.
-                - Each walkthrough entry must correspond to a file in the diff.
-                - Keep walkthrough descriptions concise (one line, under 120 chars).
-                - Use technical but accessible language.
-                - For renamed/moved files, mention the rename.
-                - For deleted files, say "Removed" with a brief reason if discernible.
-                %s- Output ONLY the JSON object. No explanation, no markdown fences.
-                """.formatted(
-                prTitle != null ? prTitle : "(untitled)",
-                targetBranch != null ? targetBranch : "(unknown)",
-                fileList,
-                diagramSection,
-                compactDiff,
-                diagramOutputSpec,
-                diagramRule
-        );
+        return promptTemplates.resolve("pr-summary", Map.of(
+                "PR_TITLE", prTitle != null ? prTitle : "(untitled)",
+                "TARGET_BRANCH", targetBranch != null ? targetBranch : "(unknown)",
+                "FILE_LIST", fileList,
+                "DIAGRAM_SECTION", diagramSection,
+                "DIFF", compactDiff,
+                "DIAGRAM_OUTPUT_SPEC", diagramOutputSpec,
+                "DIAGRAM_RULE", diagramRule
+        ));
     }
 
     /**

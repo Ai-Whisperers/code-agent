@@ -3,6 +3,7 @@ package com.eneve.agent.agent;
 import java.time.Instant;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.ContentBlock;
@@ -37,6 +38,9 @@ public class IntentClassifier {
     @Inject
     AiCallStore aiCallStore;
 
+    @Inject
+    PromptTemplateService promptTemplates;
+
     /**
      * Classify the developer's reply. Returns FIX if the developer is requesting
      * the agent to apply the suggested code change, DISCUSS otherwise.
@@ -64,20 +68,10 @@ public class IntentClassifier {
     }
 
     private CommentIntent classifyWithClaude(String humanMessage, String originalFinding) {
-        String prompt = """
-                Given an AI code reviewer's finding and a developer's reply, classify the developer's intent.
-
-                Finding: %s
-                Reply: %s
-
-                Is the developer requesting that the suggested code change be implemented/applied, \
-                or are they asking a question / having a discussion?
-
-                Respond with exactly one word: FIX or DISCUSS
-                """.formatted(
-                originalFinding != null ? originalFinding : "(unknown)",
-                humanMessage
-        );
+        String prompt = promptTemplates.resolve("intent-classifier", Map.of(
+                "FINDING", originalFinding != null ? originalFinding : "(unknown)",
+                "REPLY", humanMessage
+        ));
 
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(fastModelName))

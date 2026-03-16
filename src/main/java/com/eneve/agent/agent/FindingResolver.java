@@ -63,6 +63,9 @@ public class FindingResolver {
     @Inject
     TokenBudgetTracker tokenBudgetTracker;
 
+    @Inject
+    PromptTemplateService promptTemplates;
+
     private record FindingCandidate(OpenFinding finding, String contextSnippet) {}
 
     /**
@@ -114,24 +117,20 @@ public class FindingResolver {
     // ── Batched resolution ────────────────────────────────────────────────────
 
     private List<Long> askClaudeIfFixedBatch(List<FindingCandidate> candidates, String jobId) {
-        StringBuilder prompt = new StringBuilder();
-        prompt.append("Review whether the following code findings have been addressed in the latest commits.\n");
-        prompt.append("For each finding, examine the current code context and determine if the issue is resolved.\n\n");
-
+        StringBuilder findingsSection = new StringBuilder();
         for (int i = 0; i < candidates.size(); i++) {
             FindingCandidate c = candidates.get(i);
-            prompt.append("---\n");
-            prompt.append("Finding ").append(i + 1).append(":\n");
-            prompt.append("File: ").append(c.finding().filePath())
+            findingsSection.append("---\n");
+            findingsSection.append("Finding ").append(i + 1).append(":\n");
+            findingsSection.append("File: ").append(c.finding().filePath())
                     .append(", Line: ").append(c.finding().line()).append("\n");
-            prompt.append("Issue: ").append(c.finding().findingText()).append("\n");
-            prompt.append("Current code:\n").append(c.contextSnippet()).append("\n");
+            findingsSection.append("Issue: ").append(c.finding().findingText()).append("\n");
+            findingsSection.append("Current code:\n").append(c.contextSnippet()).append("\n");
         }
 
-        prompt.append("---\n");
-        prompt.append("Respond with ONLY a JSON array. For each finding (1-indexed), state whether it is resolved.\n");
-        prompt.append("Example: [{\"index\":1,\"resolved\":true},{\"index\":2,\"resolved\":false}]\n");
-        prompt.append("Output only the JSON array, no explanation.");
+        String promptText = promptTemplates.resolve("finding-resolver.batch", Map.of(
+                "FINDINGS_SECTION", findingsSection.toString()
+        ));
 
         int maxTokens = Math.max(candidates.size() * 15 + 50, 256);
 
@@ -141,7 +140,7 @@ public class FindingResolver {
                 .messages(List.of(
                         MessageParam.builder()
                                 .role(MessageParam.Role.USER)
-                                .content(prompt.toString())
+                                .content(promptText)
                                 .build()
                 ))
                 .build();
@@ -230,17 +229,12 @@ public class FindingResolver {
     }
 
     private boolean askClaudeIfFixedSingle(OpenFinding finding, String contextSnippet, String jobId) {
-        String prompt = """
-                The following review finding was posted on a previous commit:
-                File: %s, Line: %d
-                Finding: %s
-
-                The developer has since pushed new commits. Here is the current state of the code around line %d:
-                %s
-
-                Has this finding been addressed? Reply with only YES or NO.""".formatted(
-                finding.filePath(), finding.line(), finding.findingText(),
-                finding.line(), contextSnippet);
+        String prompt = promptTemplates.resolve("finding-resolver.single", Map.of(
+                "FILE", finding.filePath(),
+                "LINE", String.valueOf(finding.line()),
+                "FINDING", finding.findingText(),
+                "CODE_CONTEXT", contextSnippet
+        ));
 
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(fastModelName))
