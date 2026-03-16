@@ -1,0 +1,206 @@
+package com.eneve.agent.agent.handlers;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+
+import com.eneve.agent.agent.AgentPromptBuilder;
+import com.eneve.agent.agent.ClaudeToolUseLoop;
+import com.eneve.agent.agent.DocsEmbeddingService;
+import com.eneve.agent.agent.GitWorkspaceHelper;
+import com.eneve.agent.agent.JobHandler;
+import com.eneve.agent.agent.JobLifecycleHelper;
+import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.RepoSettings;
+import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.ToolDefinitions;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.model.RunResult;
+import com.eneve.agent.notifications.N8nWebhookNotifier;
+import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.workspace.WorkspaceContext;
+
+@ApplicationScoped
+public class GenerateDocsHandler implements JobHandler {
+
+    private static final Logger LOG = Logger.getLogger(GenerateDocsHandler.class);
+
+    @Inject ClaudeToolUseLoop toolUseLoop;
+    @Inject AgentPromptBuilder promptBuilder;
+    @Inject GitPlatformService platformService;
+    @Inject DocsEmbeddingService docsEmbeddingService;
+    @Inject RepoSettingsStore repoSettingsStore;
+    @Inject JobStore jobStore;
+    @Inject GitWorkspaceHelper gitHelper;
+    @Inject JobLifecycleHelper lifecycle;
+    @Inject TeamsNotifier teamsNotifier;
+    @Inject N8nWebhookNotifier n8nNotifier;
+
+    @ConfigProperty(name = "git.username")
+    String gitUser;
+
+    @ConfigProperty(name = "git.password")
+    String gitPassword;
+
+    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
+    long jobTimeoutMinutes;
+
+    @ConfigProperty(name = "generate-docs.max-loop-iterations", defaultValue = "200")
+    int generateDocsMaxIterations;
+
+    @Override
+    public JobType jobType() {
+        return JobType.GENERATE_DOCS;
+    }
+
+    @Override
+    public void handle(JobRecord job) {
+        GenerateDocsRequest request = job.getGenerateDocsRequest();
+        job.setStatus(JobStatus.RUNNING);
+        jobStore.update(job);
+
+        LOG.infof("GenerateDocs job %s starting for %s (commitDirect=%s, branch=%s, target=%s)",
+                job.getJobId(), request.repoUrl(), request.isCommitDirect(),
+                request.branchName(), request.targetBranchOrDefault());
+
+        RepoCoordinates coords;
+        try {
+            coords = RepoCoordinates.parse(request.repoUrl());
+        } catch (IllegalArgumentException e) {
+            lifecycle.failGenerateDocs(job, "Invalid repo URL: " + e.getMessage());
+            return;
+        }
+
+        String ws = coords.organization();
+        String repoSlug = coords.repository();
+
+        RepoSettings settings = repoSettingsStore.find(ws, repoSlug)
+                .orElse(RepoSettings.defaults(ws, repoSlug));
+
+        if (!settings.docsEnabled()) {
+            lifecycle.failGenerateDocs(job,
+                    "Documentation generation is disabled for " + ws + "/" + repoSlug);
+            return;
+        }
+
+        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+
+            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String targetBranch = request.targetBranchOrDefault();
+
+            if (request.isCommitDirect()) {
+                try {
+                    workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
+                } catch (Exception e) {
+                    lifecycle.failGenerateDocs(job, "Clone failed: " + e.getMessage());
+                    return;
+                }
+            } else {
+                try {
+                    workspace.cloneAndCreateBranch(authUrl, targetBranch,
+                            request.branchName(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    lifecycle.failGenerateDocs(job, "Clone/branch failed: " + e.getMessage());
+                    return;
+                }
+            }
+
+            gitHelper.configureGitIfNeeded(workspace);
+
+            workspace.putMetadata("workspace", ws);
+            workspace.putMetadata("repoSlug", repoSlug);
+
+            String systemPrompt = promptBuilder.buildGenerateDocsPrompt(request, workspace, settings);
+
+            var tools = ToolDefinitions.docsGeneration();
+
+            String summary;
+            try {
+                summary = toolUseLoop.run(systemPrompt, workspace, tools,
+                        "Please generate comprehensive documentation for this repository. "
+                                + "Start by exploring the project structure, then create all doc files.",
+                        generateDocsMaxIterations, job.getJobId(), job.getJobType().name());
+            } catch (Exception e) {
+                lifecycle.failGenerateDocs(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            try {
+                docsEmbeddingService.indexDocs(workspace, ws, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Doc embedding failed (non-fatal): %s", e.getMessage());
+            }
+
+            String pushBranch = request.isCommitDirect() ? targetBranch : request.branchName();
+
+            boolean hasChanges;
+            try {
+                hasChanges = workspace.commitAll("docs: generate project documentation");
+            } catch (Exception e) {
+                lifecycle.failGenerateDocs(job, "Commit failed: " + e.getMessage());
+                return;
+            }
+
+            if (!hasChanges) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary("Documentation generation completed with no new files.");
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: no changes made", job.getJobId());
+                return;
+            }
+
+            if (request.isCommitDirect()) {
+                try {
+                    workspace.pullRebase(targetBranch, jobTimeoutMinutes);
+                } catch (Exception e) {
+                    LOG.warnf("Pull --rebase before push failed (non-fatal): %s", e.getMessage());
+                }
+            }
+
+            try {
+                workspace.push(pushBranch, jobTimeoutMinutes);
+            } catch (Exception e) {
+                lifecycle.failGenerateDocs(job, "Push failed: " + e.getMessage());
+                return;
+            }
+
+            if (request.isCommitDirect()) {
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary(summary);
+                jobStore.archive(job);
+                LOG.infof("GenerateDocs job %s completed: committed to %s", job.getJobId(), pushBranch);
+            } else {
+                try {
+                    String title = "docs: generate project documentation";
+                    String description = "**Automated documentation generated by code-agent**\n\n" + summary;
+                    String[] prResult = platformService.createPullRequest(
+                            coords.organization(), coords.project(), coords.repository(),
+                            request.branchName(), targetBranch,
+                            title, description);
+                    job.setStatus(JobStatus.AWAITING_APPROVAL);
+                    job.setSummary(summary);
+                    job.setPrUrl(prResult[0]);
+                    job.setPrId(prResult[1]);
+                    jobStore.update(job);
+                    LOG.infof("GenerateDocs job %s completed: PR %s created", job.getJobId(), prResult[0]);
+                } catch (Exception e) {
+                    lifecycle.failGenerateDocs(job, "Create PR failed: " + e.getMessage());
+                    return;
+                }
+            }
+
+            RunResult result = lifecycle.buildGenerateDocsResult(job, true);
+            lifecycle.notifyResult(result, request.n8nWebhookUrl());
+
+        } catch (Exception e) {
+            lifecycle.failGenerateDocs(job, "Unexpected error in doc generation: " + e.getMessage());
+        }
+    }
+}

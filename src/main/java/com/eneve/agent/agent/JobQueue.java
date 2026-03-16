@@ -171,18 +171,7 @@ public class JobQueue {
                 semaphore.acquire();
                 executor.submit(() -> {
                     try {
-                        switch (job.getJobType()) {
-                            case REVIEW -> agentRunner.executeReview(job);
-                            case FIX_PR -> agentRunner.executeFixPr(job);
-                            case REPLY -> agentRunner.executeReply(job);
-                            case FIX_COMMENT -> agentRunner.executeFixComment(job);
-                            case HOOK -> agentRunner.executeHook(job);
-                            case GENERATE_TESTS -> agentRunner.executeGenerateTests(job);
-                            case GENERATE_DOCS -> agentRunner.executeGenerateDocs(job);
-                            case SYNC_CONFLUENCE -> agentRunner.executeSyncConfluence(job);
-                            case METRICS -> agentRunner.executeMetrics(job);
-                            default -> agentRunner.execute(job);
-                        }
+                        agentRunner.dispatch(job);
                     } catch (Exception e) {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());
                         job.setStatus(JobStatus.FAILED);
