@@ -5,7 +5,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.core.JsonValue;
@@ -41,6 +45,13 @@ import jakarta.inject.Inject;
 public class ClaudeToolUseLoop {
 
     private static final Logger LOG = Logger.getLogger(ClaudeToolUseLoop.class);
+
+    /** Pool used to execute independent read-only tool calls in parallel within one iteration. */
+    private static final ExecutorService PARALLEL_TOOL_EXECUTOR = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "parallel-tool");
+        t.setDaemon(true);
+        return t;
+    });
 
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
@@ -143,24 +154,54 @@ public class ClaudeToolUseLoop {
             logUsage(response, iteration + 1);
             tokenBudgetTracker.recordUsage(response.usage().inputTokens(), response.usage().outputTokens());
 
-            boolean hasToolUse = false;
             List<ContentBlockParam> toolResults = new ArrayList<>();
             StringBuilder textAccumulator = new StringBuilder();
             List<ContentBlockParam> assistantBlocks = new ArrayList<>();
             List<String> toolNamesList = new ArrayList<>();
 
+            // Collect tool-use blocks first so we can decide whether to run them in parallel
+            List<ToolUseBlock> toolUseBlocks = response.content().stream()
+                    .filter(ContentBlock::isToolUse)
+                    .map(ContentBlock::asToolUse)
+                    .toList();
+
+            boolean hasToolUse = !toolUseBlocks.isEmpty();
+
+            // Run in parallel only when every tool in this batch is read-only
+            Map<String, String> toolResultMap;
+            if (toolUseBlocks.size() > 1
+                    && toolUseBlocks.stream().allMatch(t -> {
+                        ToolExecutor ex = toolRegistry.get(t.name());
+                        return ex != null && ex.isReadOnly();
+                    })) {
+                LOG.debugf("Executing %d read-only tools in parallel", toolUseBlocks.size());
+                List<CompletableFuture<Map.Entry<String, String>>> futures = toolUseBlocks.stream()
+                        .map(t -> CompletableFuture.supplyAsync(
+                                () -> Map.entry(t.id(), dispatchTool(t, workspace)),
+                                PARALLEL_TOOL_EXECUTOR))
+                        .toList();
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                toolResultMap = futures.stream()
+                        .map(CompletableFuture::join)
+                        .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            } else {
+                toolResultMap = new HashMap<>();
+                for (ToolUseBlock t : toolUseBlocks) {
+                    toolResultMap.put(t.id(), dispatchTool(t, workspace));
+                }
+            }
+
+            // Reconstruct assistant blocks and tool results in original response order
             for (ContentBlock block : response.content()) {
                 if (block.isText()) {
                     textAccumulator.append(block.asText().text());
                     assistantBlocks.add(ContentBlockParam.ofText(block.asText().toParam()));
                 } else if (block.isToolUse()) {
-                    hasToolUse = true;
                     ToolUseBlock toolUse = block.asToolUse();
                     toolNamesList.add(toolUse.name());
+                    String result = toolResultMap.get(toolUse.id());
 
                     LOG.infof("Tool call: %s (id=%s)", toolUse.name(), toolUse.id());
-
-                    String result = dispatchTool(toolUse, workspace);
                     LOG.debugf("Tool result for %s: %s", toolUse.name(),
                             result.length() > 200 ? result.substring(0, 200) + "..." : result);
 

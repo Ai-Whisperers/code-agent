@@ -66,6 +66,11 @@ public class FetchUrlTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         if (!enabled) {
             return "ERROR: fetch_url tool is disabled. Set tools.fetch-url.enabled=true to enable it.";

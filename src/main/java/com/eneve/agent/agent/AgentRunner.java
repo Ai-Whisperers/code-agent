@@ -160,10 +160,18 @@ public class AgentRunner {
 
             configureGitIfNeeded(workspace);
 
-            List<LinterResult> linterBaseline = runBaselineLinterScan(workspace);
+            // Linter baseline scan and prompt resolution (JIRA fetch) are independent — run in parallel
+            CompletableFuture<List<LinterResult>> linterFuture = CompletableFuture.supplyAsync(
+                    () -> runBaselineLinterScan(workspace), REVIEW_PARALLEL_POOL);
+            CompletableFuture<String> promptFuture = CompletableFuture.supplyAsync(
+                    () -> resolvePrompt(request), REVIEW_PARALLEL_POOL);
+
+            CompletableFuture.allOf(linterFuture, promptFuture).join();
+
+            List<LinterResult> linterBaseline = linterFuture.join();
             String baselineSummary = linterBaseline.isEmpty() ? "" : linterService.formatSummary(linterBaseline);
 
-            String effectivePrompt = resolvePrompt(request);
+            String effectivePrompt = promptFuture.join();
             if (effectivePrompt == null) {
                 fail(job, "No prompt provided and could not fetch JIRA issue description for " + request.jiraKey());
                 return;

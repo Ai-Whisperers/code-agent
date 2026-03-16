@@ -21,6 +21,11 @@ public class QueryCodeGraphTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String symbol = (String) input.get("symbol");
         String relation = (String) input.get("relation");

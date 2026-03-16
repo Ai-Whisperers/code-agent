@@ -24,6 +24,11 @@ public class ListFilesTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String directory = (String) input.getOrDefault("directory", ".");
         int depth = DEFAULT_DEPTH;

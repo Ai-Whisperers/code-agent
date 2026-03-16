@@ -31,6 +31,11 @@ public class SemanticSearchTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         if (!voyageService.isConfigured()) {
             return "ERROR: Semantic search is not configured (no Voyage API key set)";

@@ -26,6 +26,11 @@ public class SearchCodeTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String pattern = (String) input.get("pattern");
         if (pattern == null || pattern.isBlank()) {

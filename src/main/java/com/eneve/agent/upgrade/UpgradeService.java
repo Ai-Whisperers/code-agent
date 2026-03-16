@@ -3,7 +3,10 @@ package com.eneve.agent.upgrade;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.eneve.agent.agent.RepoSettings;
 import com.eneve.agent.agent.RepoSettingsStore;
@@ -84,10 +87,11 @@ public class UpgradeService {
         LOG.infof("UpgradeService: %d Quarkus repo(s) registered, latest version is %s",
                 repos.size(), latestVersion);
 
-        int outdated = 0;
         int plansCreated = 0;
         List<String> planIds = new ArrayList<>();
 
+        // Collect repos that actually need upgrading
+        List<RepoSettings> outdatedRepos = new ArrayList<>();
         for (RepoSettings repo : repos) {
             if (!repo.upgradeEnabled()) {
                 LOG.debugf("UpgradeService: %s/%s has auto-upgrade disabled — skipping",
@@ -99,15 +103,34 @@ public class UpgradeService {
                         repo.workspace(), repo.repoSlug(), repo.archetypeVersion());
                 continue;
             }
-
-            outdated++;
             LOG.infof("UpgradeService: %s/%s is on Quarkus %s, upgrading to %s",
                     repo.workspace(), repo.repoSlug(), repo.archetypeVersion(), latestVersion);
+            outdatedRepos.add(repo);
+        }
 
-            String planId = startUpgrade(repo, latestVersion, migrationNotes.orElse(null));
-            if (planId != null) {
-                plansCreated++;
-                planIds.add(planId);
+        int outdated = outdatedRepos.size();
+
+        // Generate upgrade plans in parallel (each involves an Aikido HTTP call + a Claude API call)
+        if (!outdatedRepos.isEmpty()) {
+            String migrationNotesStr = migrationNotes.orElse(null);
+            int poolSize = Math.min(outdatedRepos.size(), 3);
+            ExecutorService upgradeExec = Executors.newFixedThreadPool(poolSize);
+            try {
+                List<CompletableFuture<String>> futures = outdatedRepos.stream()
+                        .map(repo -> CompletableFuture.supplyAsync(
+                                () -> startUpgrade(repo, latestVersion, migrationNotesStr),
+                                upgradeExec))
+                        .toList();
+                CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                for (CompletableFuture<String> f : futures) {
+                    String planId = f.join();
+                    if (planId != null) {
+                        plansCreated++;
+                        planIds.add(planId);
+                    }
+                }
+            } finally {
+                upgradeExec.shutdown();
             }
         }
 
