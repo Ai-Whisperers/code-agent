@@ -158,6 +158,9 @@
                 <artifactId>quarkus-maven-plugin</artifactId>
                 <version>${quarkus.platform.version}</version>
                 <extensions>true</extensions>
+                <configuration>
+                    <jvmArgs>-Djavax.net.ssl.trustStoreType=KeychainStore</jvmArgs>
+                </configuration>
                 <executions>
                     <execution>
                         <goals>
