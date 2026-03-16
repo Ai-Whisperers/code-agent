@@ -7,6 +7,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import com.eneve.agent.agent.RepoSettings;
 import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.aikido.AikidoIssueInfo;
+import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.planner.ExecutionPlan;
@@ -51,6 +53,7 @@ public class UpgradeService {
     @Inject PlanOrchestratorService orchestratorService;
     @Inject TeamsNotifier teamsNotifier;
     @Inject GitPlatformService platformService;
+    @Inject AikidoService aikidoService;
 
     @ConfigProperty(name = "upgrade.scheduler.default-branch", defaultValue = "develop")
     String defaultBranch;
@@ -167,7 +170,17 @@ public class UpgradeService {
         String cleanUrl = UrlUtils.stripCredentials(cloneUrl);
 
         String branchName = "agent/upgrade-quarkus-" + latestVersion;
-        String specText = buildSpecText(currentVersion, latestVersion, branchName, migrationNotes);
+
+        List<AikidoIssueInfo> aikidoFindings = List.of();
+        if (aikidoService.isEnabled()) {
+            aikidoFindings = aikidoService.findOpenIssuesForRepo(repo.repoSlug());
+            if (!aikidoFindings.isEmpty()) {
+                LOG.infof("UpgradeService: %d Aikido finding(s) found for %s/%s — appending to upgrade spec",
+                        aikidoFindings.size(), repo.workspace(), repo.repoSlug());
+            }
+        }
+
+        String specText = buildSpecText(currentVersion, latestVersion, branchName, migrationNotes, aikidoFindings);
 
         // Pass the authenticated clone URL so the orchestrator can clone/push, but the
         // prompt and any stored plan metadata use the clean URL.
@@ -238,13 +251,14 @@ public class UpgradeService {
     }
 
     private String buildSpecText(String currentVersion, String latestVersion,
-                                  String branchName, String migrationNotes) {
+                                  String branchName, String migrationNotes,
+                                  List<AikidoIssueInfo> aikidoFindings) {
         String migrationSection = migrationNotes != null && !migrationNotes.isBlank()
                 ? migrationNotes
                 : "No migration guide was available. Check https://quarkus.io/guides/migration-guide-"
                         + QuarkusMigrationFetcher.extractMajorMinor(latestVersion) + " manually.";
 
-        return """
+        StringBuilder sb = new StringBuilder("""
                 Upgrade Quarkus from %s to %s in this repository.
 
                 Steps:
@@ -266,7 +280,19 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 currentVersion, latestVersion,
                 branchName, defaultBranch,
-                migrationSection);
+                migrationSection));
+
+        if (aikidoFindings != null && !aikidoFindings.isEmpty()) {
+            sb.append("\n## Aikido Security Findings\n");
+            sb.append("The following open vulnerabilities were found for this repository. ");
+            sb.append("Include steps to resolve each of them as part of this upgrade plan.\n\n");
+            for (AikidoIssueInfo finding : aikidoFindings) {
+                sb.append(finding.toPromptSection());
+                sb.append("\n");
+            }
+        }
+
+        return sb.toString();
     }
 
     /**
