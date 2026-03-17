@@ -13,6 +13,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import com.eneve.agent.model.JobStatusResponse;
 import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;
@@ -263,6 +264,90 @@ public class JobStore {
             LOG.errorf("Failed to query processed keys: %s", e.getMessage());
         }
         return keys;
+    }
+
+    /**
+     * Search jobs across both the active {@code jobs} table and {@code job_history},
+     * with optional filtering by status and/or job type.
+     *
+     * @param status  filter by a specific status, or {@code null} for all statuses
+     * @param jobType filter by a specific job type, or {@code null} for all types
+     * @param limit   maximum number of results (capped at 200)
+     * @param offset  zero-based row offset for pagination
+     * @return list of lightweight response objects ordered by {@code created_at DESC}
+     */
+    public List<JobStatusResponse> search(JobStatus status, JobType jobType, int limit, int offset) {
+        int safeLimit = Math.min(Math.max(1, limit), 200);
+        int safeOffset = Math.max(0, offset);
+
+        StringBuilder where = new StringBuilder();
+        List<String> params = new ArrayList<>();
+
+        if (status != null) {
+            where.append(" AND status = ?");
+            params.add(status.name());
+        }
+        if (jobType != null) {
+            where.append(" AND job_type = ?");
+            params.add(jobType.name());
+        }
+
+        String cte = """
+                SELECT job_id, job_type, status, created_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
+                FROM jobs WHERE 1=1
+                """ + where + """
+
+                UNION ALL
+                SELECT job_id, job_type, status, created_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
+                FROM job_history WHERE 1=1
+                """ + where;
+
+        String sql = "SELECT * FROM (" + cte + ") combined ORDER BY created_at DESC LIMIT ? OFFSET ?";
+
+        List<JobStatusResponse> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            int idx = 1;
+            for (String p : params) { ps.setString(idx++, p); }
+            for (String p : params) { ps.setString(idx++, p); }
+            ps.setInt(idx++, safeLimit);
+            ps.setInt(idx, safeOffset);
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    JobType type;
+                    try {
+                        type = JobType.valueOf(rs.getString("job_type"));
+                    } catch (IllegalArgumentException e) {
+                        continue;
+                    }
+                    JobStatus jobStatus;
+                    try {
+                        jobStatus = JobStatus.valueOf(rs.getString("status"));
+                    } catch (IllegalArgumentException e) {
+                        jobStatus = JobStatus.FAILED;
+                    }
+                    results.add(new JobStatusResponse(
+                            rs.getString("job_id"),
+                            type,
+                            jobStatus,
+                            rs.getTimestamp("created_at").toInstant(),
+                            rs.getString("summary"),
+                            rs.getString("error_message"),
+                            rs.getString("pr_url"),
+                            rs.getInt("files_changed"),
+                            rs.getInt("lines_changed"),
+                            0
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to search jobs: %s", e.getMessage());
+        }
+        return results;
     }
 
     /**

@@ -97,6 +97,12 @@
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
 
+        <!-- Keycloak OIDC (Bearer token validation for UI) -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-oidc</artifactId>
+        </dependency>
+
         <!-- PostgreSQL JDBC + Connection Pool + Flyway -->
         <dependency>
             <groupId>io.quarkus</groupId>
