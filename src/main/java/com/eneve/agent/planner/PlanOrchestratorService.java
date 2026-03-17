@@ -70,6 +70,15 @@ public class PlanOrchestratorService {
     private final ConcurrentHashMap<String, String> planPrUrl = new ConcurrentHashMap<>();
 
     /**
+     * Tracks the branch name of the most-recently-completed FIX step per plan.
+     * Used to automatically chain sequential FIX phases: when the planner did not
+     * explicitly set a {@code sourceBranch} param on a FIX step, the orchestrator
+     * injects the previous FIX step's branch so that changes accumulate rather than
+     * each step branching independently from the base branch.
+     */
+    private final ConcurrentHashMap<String, String> planLastFixBranch = new ConcurrentHashMap<>();
+
+    /**
      * Tracks how many quality-improvement iterations (FIX→METRICS cycles) have been
      * completed per quality-improvement plan. Used to enforce {@code maxIterations}.
      */
@@ -150,6 +159,22 @@ public class PlanOrchestratorService {
         // awaiting human merge — the step itself is done from the orchestrator's view.
         String stepStatus = isSuccess(event.status()) ? "SUCCESS" : "FAILED";
         planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId());
+
+        // When a FIX step succeeds, remember its branch so the next FIX phase can
+        // automatically chain from it if the planner did not set sourceBranch explicitly.
+        if (isSuccess(event.status())) {
+            ExecutionPlan planForBranch = planStore.find(tracked.planId()).orElse(null);
+            if (planForBranch != null) {
+                PlanStep completedStep = findStep(planForBranch, tracked.stepId());
+                if (completedStep != null && "FIX".equalsIgnoreCase(completedStep.jobType())) {
+                    String fixBranch = param(completedStep, "branchName",
+                            "agent/plan/" + tracked.planId().substring(0, 8) + "-" + completedStep.stepId());
+                    planLastFixBranch.put(tracked.planId(), fixBranch);
+                    LOG.debugf("Orchestrator: recorded last FIX branch '%s' for plan %s",
+                            fixBranch, tracked.planId());
+                }
+            }
+        }
 
         // When a METRICS step succeeds, evaluate whether the quality loop should continue
         // or terminate. This must happen before checkPhaseCompletion advances the plan.
@@ -253,12 +278,28 @@ public class PlanOrchestratorService {
             return;
         }
 
+        // Safety-net: if the planner did not set sourceBranch on a FIX step but a
+        // prior FIX step completed in this plan, inject the previous branch so that
+        // sequential phases chain correctly instead of all branching from the base.
+        String lastFixBranch = planLastFixBranch.get(plan.planId());
+
         // Track job IDs submitted in this phase so we can remove them if a later
         // step fails to enqueue (partial-submit cleanup).
         List<String> submittedJobIds = new ArrayList<>();
 
         for (PlanStep step : phase.steps()) {
-            JobRecord job = mapStepToJob(step, plan);
+            PlanStep effectiveStep = step;
+            if ("FIX".equalsIgnoreCase(step.jobType())
+                    && lastFixBranch != null
+                    && param(step, "sourceBranch", null) == null) {
+                Map<String, String> updatedParams = new java.util.LinkedHashMap<>(
+                        step.params() != null ? step.params() : Map.of());
+                updatedParams.put("sourceBranch", lastFixBranch);
+                effectiveStep = step.withUpdates(null, null, null, updatedParams);
+                LOG.infof("Orchestrator: auto-injected sourceBranch='%s' for step %s in plan %s",
+                        lastFixBranch, step.stepId(), plan.planId());
+            }
+            JobRecord job = mapStepToJob(effectiveStep, plan);
             if (job == null) {
                 LOG.warnf("Orchestrator: could not map step %s (jobType=%s) in plan %s — skipping step",
                         step.stepId(), step.jobType(), plan.planId());
@@ -560,6 +601,15 @@ public class PlanOrchestratorService {
                 .orElse(null);
     }
 
+    private static PlanStep findStep(ExecutionPlan plan, String stepId) {
+        if (plan.planData() == null || plan.planData().phases() == null) return null;
+        return plan.planData().phases().stream()
+                .flatMap(p -> p.steps().stream())
+                .filter(s -> stepId.equals(s.stepId()))
+                .findFirst()
+                .orElse(null);
+    }
+
     private static PlanData resetAllSteps(PlanData data) {
         if (data == null || data.phases() == null) return data;
         List<PlanPhase> phases = new ArrayList<>();
@@ -600,6 +650,7 @@ public class PlanOrchestratorService {
         planPrUrl.remove(planId);
         planLocks.remove(planId);
         planIterationCount.remove(planId);
+        planLastFixBranch.remove(planId);
     }
 
     private Object lockFor(String planId) {
