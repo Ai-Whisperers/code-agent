@@ -103,7 +103,7 @@ public class RepoSettingsStore {
                               disabled_hooks           = EXCLUDED.disabled_hooks,
                               confluence_space_key     = EXCLUDED.confluence_space_key,
                               confluence_parent_page_id = EXCLUDED.confluence_parent_page_id,
-                              git_platform_url         = EXCLUDED.git_platform_url,
+                              git_platform_url         = COALESCE(EXCLUDED.git_platform_url, repo_settings.git_platform_url),
                               updated_at               = now()
                 """;
         try (Connection conn = dataSource.getConnection();
