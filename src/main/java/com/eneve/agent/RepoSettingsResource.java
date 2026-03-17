@@ -102,9 +102,11 @@ public class RepoSettingsResource {
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
         String confluenceSpaceKey = request.confluenceSpaceKey();
         String confluenceParentPageId = request.confluenceParentPageId();
+        String gitPlatformUrl = request.gitPlatformUrl();
 
         settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
-                qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
+                qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId,
+                gitPlatformUrl);
 
         return Response.ok(Map.of(
                 "action", "saved",
@@ -476,6 +478,7 @@ public class RepoSettingsResource {
             String reviewPrompt,
             List<String> disabledHooks,
             String confluenceSpaceKey,
-            String confluenceParentPageId
+            String confluenceParentPageId,
+            String gitPlatformUrl
     ) {}
 }

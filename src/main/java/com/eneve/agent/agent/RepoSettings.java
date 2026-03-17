@@ -23,6 +23,7 @@ public record RepoSettings(
         List<String> disabledHooks,
         String confluenceSpaceKey,
         String confluenceParentPageId,
+        String gitPlatformUrl,
         String archetype,
         String archetypeVersion,
         Instant createdAt,
@@ -31,6 +32,6 @@ public record RepoSettings(
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
         return new RepoSettings(null, workspace, repoSlug, true, false, true, true, false, false,
-                List.of(), null, List.of(), null, null, null, null, Instant.now(), Instant.now());
+                List.of(), null, List.of(), null, null, null, null, null, Instant.now(), Instant.now());
     }
 }
