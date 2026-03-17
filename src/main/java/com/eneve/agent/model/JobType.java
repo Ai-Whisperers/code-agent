@@ -10,5 +10,6 @@ public enum JobType {
     GENERATE_TESTS,
     GENERATE_DOCS,
     SYNC_CONFLUENCE,
-    METRICS
+    METRICS,
+    QUALITY_REPORT
 }

@@ -16,6 +16,7 @@ public record RepoSettings(
         boolean vectorEnabled,
         boolean docsEnabled,
         boolean upgradeEnabled,
+        boolean qualityReportEnabled,
         List<String> ruleNames,
         String reviewPrompt,
         List<String> disabledHooks,
@@ -28,7 +29,7 @@ public record RepoSettings(
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
-        return new RepoSettings(null, workspace, repoSlug, true, false, true, true,
+        return new RepoSettings(null, workspace, repoSlug, true, false, true, true, false,
                 List.of(), null, List.of(), null, null, null, null, Instant.now(), Instant.now());
     }
 }

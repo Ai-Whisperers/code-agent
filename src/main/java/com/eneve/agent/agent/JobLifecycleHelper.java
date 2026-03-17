@@ -144,6 +144,13 @@ public class JobLifecycleHelper {
         teamsNotifier.sendNotification(buildMetricsResult(job, false));
     }
 
+    public void failQualityReport(JobRecord job, String message) {
+        LOG.errorf("QualityReport job %s failed: %s", job.getJobId(), message);
+        job.setStatus(JobStatus.FAILED);
+        job.setErrorMessage(message);
+        jobStore.archive(job);
+    }
+
     public void failReply(JobRecord job, String message) {
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);

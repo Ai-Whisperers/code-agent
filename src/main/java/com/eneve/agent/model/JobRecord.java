@@ -14,6 +14,7 @@ public class JobRecord {
     private final GenerateDocsRequest generateDocsRequest;
     private final SyncConfluenceRequest syncConfluenceRequest;
     private final MetricsJobRequest metricsRequest;
+    private final QualityReportJobRequest qualityReportRequest;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -35,6 +36,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -51,6 +53,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -67,6 +70,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -87,6 +91,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -103,6 +108,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -119,6 +125,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.GENERATE_TESTS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -135,6 +142,7 @@ public class JobRecord {
         this.generateDocsRequest = generateDocsRequest;
         this.syncConfluenceRequest = null;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.GENERATE_DOCS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -151,6 +159,7 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = syncConfluenceRequest;
         this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.SYNC_CONFLUENCE;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -167,7 +176,25 @@ public class JobRecord {
         this.generateDocsRequest = null;
         this.syncConfluenceRequest = null;
         this.metricsRequest = metricsRequest;
+        this.qualityReportRequest = null;
         this.jobType = JobType.METRICS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, QualityReportJobRequest qualityReportRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = qualityReportRequest;
+        this.jobType = JobType.QUALITY_REPORT;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -182,6 +209,7 @@ public class JobRecord {
     public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
     public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
     public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
+    public QualityReportJobRequest getQualityReportRequest() { return qualityReportRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 

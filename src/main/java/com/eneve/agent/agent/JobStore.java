@@ -21,6 +21,7 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.MetricsJobRequest;
+import com.eneve.agent.model.QualityReportJobRequest;
 import com.eneve.agent.model.ReplyCommentRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
@@ -376,6 +377,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, SyncConfluenceRequest.class));
                 case METRICS -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, MetricsJobRequest.class));
+                case QUALITY_REPORT -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, QualityReportJobRequest.class));
             };
         } catch (Exception e) {
             LOG.errorf("Failed to deserialize request payload for job %s (type=%s): %s",
@@ -395,6 +398,7 @@ public class JobStore {
             case GENERATE_DOCS -> job.getGenerateDocsRequest();
             case SYNC_CONFLUENCE -> job.getSyncConfluenceRequest();
             case METRICS -> job.getMetricsRequest();
+            case QUALITY_REPORT -> job.getQualityReportRequest();
         };
         if (request == null) return "{}";
         try {

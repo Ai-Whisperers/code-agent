@@ -35,7 +35,7 @@ public class RepoSettingsStore {
     public Optional<RepoSettings> find(String workspace, String repoSlug) {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       upgrade_enabled, quality_report_enabled, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id,
                        archetype, archetype_version, created_at, updated_at
                 FROM repo_settings
@@ -59,7 +59,7 @@ public class RepoSettingsStore {
     public List<RepoSettings> listAll() {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       upgrade_enabled, quality_report_enabled, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id,
                        archetype, archetype_version, created_at, updated_at
                 FROM repo_settings
@@ -80,20 +80,22 @@ public class RepoSettingsStore {
 
     public void upsert(String workspace, String repoSlug, boolean reviewEnabled,
                        boolean vectorEnabled, boolean docsEnabled, boolean upgradeEnabled,
+                       boolean qualityReportEnabled,
                        List<String> ruleNames, String reviewPrompt,
                        List<String> disabledHooks,
                        String confluenceSpaceKey, String confluenceParentPageId) {
         String sql = """
                 INSERT INTO repo_settings
                     (workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                     upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                     upgrade_enabled, quality_report_enabled, rule_names, review_prompt, disabled_hooks,
                      confluence_space_key, confluence_parent_page_id, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (workspace, repo_slug)
                 DO UPDATE SET review_enabled           = EXCLUDED.review_enabled,
                               vector_enabled           = EXCLUDED.vector_enabled,
                               docs_enabled             = EXCLUDED.docs_enabled,
                               upgrade_enabled          = EXCLUDED.upgrade_enabled,
+                              quality_report_enabled   = EXCLUDED.quality_report_enabled,
                               rule_names               = EXCLUDED.rule_names,
                               review_prompt            = EXCLUDED.review_prompt,
                               disabled_hooks           = EXCLUDED.disabled_hooks,
@@ -109,14 +111,15 @@ public class RepoSettingsStore {
             ps.setBoolean(4, vectorEnabled);
             ps.setBoolean(5, docsEnabled);
             ps.setBoolean(6, upgradeEnabled);
-            setNullableString(ps, 7, toJson(ruleNames));
-            setNullableString(ps, 8, reviewPrompt);
-            setNullableString(ps, 9, toJson(disabledHooks));
-            setNullableString(ps, 10, confluenceSpaceKey);
-            setNullableString(ps, 11, confluenceParentPageId);
+            ps.setBoolean(7, qualityReportEnabled);
+            setNullableString(ps, 8, toJson(ruleNames));
+            setNullableString(ps, 9, reviewPrompt);
+            setNullableString(ps, 10, toJson(disabledHooks));
+            setNullableString(ps, 11, confluenceSpaceKey);
+            setNullableString(ps, 12, confluenceParentPageId);
             ps.executeUpdate();
-            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s, docsEnabled=%s, upgradeEnabled=%s)",
-                    workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled);
+            LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s, docsEnabled=%s, upgradeEnabled=%s, qualityReportEnabled=%s)",
+                    workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled, qualityReportEnabled);
         } catch (SQLException e) {
             LOG.errorf("Failed to upsert repo settings for %s/%s: %s", workspace, repoSlug, e.getMessage());
         }
@@ -331,7 +334,7 @@ public class RepoSettingsStore {
     public List<RepoSettings> listByArchetype(String archetype) {
         String sql = """
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
-                       upgrade_enabled, rule_names, review_prompt, disabled_hooks,
+                       upgrade_enabled, quality_report_enabled, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id,
                        archetype, archetype_version, created_at, updated_at
                 FROM repo_settings
@@ -355,6 +358,62 @@ public class RepoSettingsStore {
 
     // ─── Private helpers ────────────────────────────────────────────────
 
+    public boolean isQualityReportEnabled(String workspace, String repoSlug) {
+        String sql = "SELECT quality_report_enabled FROM repo_settings WHERE workspace = ? AND repo_slug = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return rs.getBoolean("quality_report_enabled");
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to check quality_report_enabled for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+        return false;
+    }
+
+    public void setQualityReportEnabled(String workspace, String repoSlug, boolean enabled) {
+        String sql = """
+                UPDATE repo_settings SET quality_report_enabled = ?, updated_at = now()
+                WHERE workspace = ? AND repo_slug = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setBoolean(1, enabled);
+            ps.setString(2, workspace);
+            ps.setString(3, repoSlug);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to set quality_report_enabled for %s/%s: %s", workspace, repoSlug, e.getMessage());
+        }
+    }
+
+    public List<RepoSettings> listQualityReportEnabled() {
+        String sql = """
+                SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
+                       upgrade_enabled, quality_report_enabled, rule_names, review_prompt, disabled_hooks,
+                       confluence_space_key, confluence_parent_page_id,
+                       archetype, archetype_version, created_at, updated_at
+                FROM repo_settings
+                WHERE quality_report_enabled = TRUE
+                ORDER BY workspace, repo_slug
+                """;
+        List<RepoSettings> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                results.add(mapRow(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list quality-report-enabled repos: %s", e.getMessage());
+        }
+        return results;
+    }
+
     private RepoSettings mapRow(ResultSet rs) throws SQLException {
         Timestamp createdTs = rs.getTimestamp("created_at");
         Timestamp updatedTs = rs.getTimestamp("updated_at");
@@ -366,6 +425,7 @@ public class RepoSettingsStore {
                 rs.getBoolean("vector_enabled"),
                 rs.getBoolean("docs_enabled"),
                 rs.getBoolean("upgrade_enabled"),
+                rs.getBoolean("quality_report_enabled"),
                 fromJson(rs.getString("rule_names")),
                 rs.getString("review_prompt"),
                 fromJson(rs.getString("disabled_hooks")),

@@ -95,6 +95,7 @@ public class RepoSettingsResource {
         boolean vectorEnabled = request.vectorEnabled() != null ? request.vectorEnabled() : false;
         boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
         boolean upgradeEnabled = request.upgradeEnabled() != null ? request.upgradeEnabled() : true;
+        boolean qualityReportEnabled = request.qualityReportEnabled() != null ? request.qualityReportEnabled() : false;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
@@ -102,7 +103,7 @@ public class RepoSettingsResource {
         String confluenceParentPageId = request.confluenceParentPageId();
 
         settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
-                ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
+                qualityReportEnabled, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
 
         return Response.ok(Map.of(
                 "action", "saved",
@@ -111,7 +112,8 @@ public class RepoSettingsResource {
                 "reviewEnabled", enabled,
                 "vectorEnabled", vectorEnabled,
                 "docsEnabled", docsEnabled,
-                "upgradeEnabled", upgradeEnabled
+                "upgradeEnabled", upgradeEnabled,
+                "qualityReportEnabled", qualityReportEnabled
         )).build();
     }
 
@@ -328,6 +330,60 @@ public class RepoSettingsResource {
         return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/quality-report/enable")
+    @Operation(
+            operationId = "enableRepoQualityReport",
+            summary = "Enable quality report collection for a repository",
+            description = "Turns on automated quality report collection for the specified repository. "
+                    + "The repo will be included in the next scheduled quality report run."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Quality report enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableQualityReport(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setQualityReportEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "quality_report_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/quality-report/disable")
+    @Operation(
+            operationId = "disableRepoQualityReport",
+            summary = "Disable quality report collection for a repository",
+            description = "Prevents the quality report scheduler from collecting reports for this repository. "
+                    + "Existing report history is retained."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Quality report disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableQualityReport(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setQualityReportEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
     @DELETE
     @Path("/{workspace}/{repoSlug}")
     @Operation(
@@ -359,6 +415,7 @@ public class RepoSettingsResource {
             Boolean vectorEnabled,
             Boolean docsEnabled,
             Boolean upgradeEnabled,
+            Boolean qualityReportEnabled,
             List<String> ruleNames,
             String reviewPrompt,
             List<String> disabledHooks,
