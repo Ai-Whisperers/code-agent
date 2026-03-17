@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -25,23 +26,39 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Detects the primary framework archetype (e.g. Quarkus, WildFly) and its version
- * from a Maven {@code pom.xml} and/or a {@code Dockerfile} in the project root.
+ * Detects the primary framework archetype (e.g. Quarkus, WildFly, React, Angular) and its
+ * version from a Maven {@code pom.xml}, a {@code Dockerfile}, or a {@code package.json}.
  *
  * <p>Detection order:
  * <ol>
- *   <li>POM-based: parent groupId, BOM in {@code dependencyManagement}, known {@code <properties>}
- *       keys, and the {@code wildfly-maven-plugin} presence.</li>
- *   <li>Dockerfile-based (WildFly fallback): scans well-known Dockerfile paths for a
- *       {@code FROM quay.io/wildfly/wildfly:X.Y.Z.Final} line.</li>
+ *   <li><b>Maven projects</b> ({@code pom.xml} present):
+ *     <ol>
+ *       <li>POM-based: parent groupId, BOM in {@code dependencyManagement}, known
+ *           {@code <properties>} keys, and the {@code wildfly-maven-plugin} presence.</li>
+ *       <li>Dockerfile-based WildFly fallback: scans the project tree for a
+ *           {@code FROM quay.io/wildfly/wildfly:X.Y.Z.Final} line.</li>
+ *     </ol>
+ *   </li>
+ *   <li><b>TypeScript frontend projects</b> (no {@code pom.xml}):
+ *     <ol>
+ *       <li>{@code package.json}-based: checks {@code dependencies} and
+ *           {@code devDependencies} for {@code @angular/core} (Angular) or {@code react}
+ *           (React), in that priority order.</li>
+ *       <li>Dockerfile-based WildFly fallback (for non-Maven server images).</li>
+ *     </ol>
+ *   </li>
  * </ol>
  *
- * <p>Detection is intentionally lightweight: it reads only the root {@code pom.xml} and a
- * small set of Dockerfile candidates, resolves {@code ${property}} references within the
- * same file, and does not fetch parent POMs from Maven Central.
+ * <p>Detection is intentionally lightweight: it reads only the root {@code pom.xml},
+ * {@code package.json}, and a small set of Dockerfile candidates; it resolves Maven
+ * {@code ${property}} references within the same file and does not fetch parent POMs
+ * from Maven Central or remote npm registries.
  */
 @ApplicationScoped
 public class ArchetypeDetector {
@@ -84,9 +101,10 @@ public class ArchetypeDetector {
      *
      * <p>Strategy:
      * <ol>
-     *   <li>POM-based detection (Quarkus, then WildFly) when {@code pom.xml} is present.</li>
-     *   <li>Dockerfile-based WildFly detection as a fallback when the POM check yielded
-     *       no result or when no {@code pom.xml} exists.</li>
+     *   <li>If {@code pom.xml} is present: POM-based detection (Quarkus, then WildFly),
+     *       followed by a WildFly Dockerfile fallback.</li>
+     *   <li>Otherwise: TypeScript frontend detection via {@code package.json}
+     *       (Angular, then React), followed by a WildFly Dockerfile fallback.</li>
      * </ol>
      *
      * @param projectRoot root directory of the cloned repository
@@ -131,10 +149,17 @@ public class ArchetypeDetector {
             } catch (Exception e) {
                 LOG.warnf("ArchetypeDetector: failed to parse pom.xml at %s: %s", pomPath, e.getMessage());
             }
+
+            // Dockerfile fallback — useful when the POM alone is not conclusive
+            // (e.g. no explicit BOM but the server image tag is present in the Dockerfile).
+            return detectWildFlyFromDockerfiles(projectRoot);
         }
 
-        // Dockerfile fallback — useful when the POM alone is not conclusive
-        // (e.g. no explicit BOM but the server image tag is present in the Dockerfile).
+        // No pom.xml — try TypeScript frontend projects first, then WildFly Dockerfile.
+        ArchetypeInfo tsResult = detectTypeScriptFrontend(projectRoot);
+        if (tsResult != null) {
+            return tsResult;
+        }
         return detectWildFlyFromDockerfiles(projectRoot);
     }
 
@@ -359,6 +384,85 @@ public class ArchetypeDetector {
         if (groupId == null || artifactId == null) return false;
         return (groupId.equals("org.wildfly.plugins") || groupId.equals("org.jboss.as.plugins"))
                 && artifactId.contains("wildfly");
+    }
+
+    // ─── TypeScript frontend (React / Angular) ───────────────────────────────────
+
+    /**
+     * Detects React or Angular from a {@code package.json} in the project root.
+     *
+     * <p>Detection priority: Angular ({@code @angular/core}) is checked before React
+     * ({@code react}) so that a project that depends on both (rare but possible) is
+     * always classified as Angular.  Version strings are stripped of semver range
+     * prefixes ({@code ^}, {@code ~}, {@code >=}, …) before being stored.
+     *
+     * <p>All three dependency sections are consulted in order:
+     * {@code dependencies}, {@code devDependencies}, {@code peerDependencies}.
+     *
+     * @param projectRoot root directory of the cloned repository
+     * @return detected archetype info, or {@code null} if not detected or on parse error
+     */
+    ArchetypeInfo detectTypeScriptFrontend(Path projectRoot) {
+        Path pkgJson = projectRoot.resolve("package.json");
+        if (!Files.exists(pkgJson)) {
+            return null;
+        }
+
+        try {
+            JsonNode root = new ObjectMapper().readTree(pkgJson.toFile());
+
+            Map<String, String> allDeps = new LinkedHashMap<>();
+            for (String section : List.of("dependencies", "devDependencies", "peerDependencies")) {
+                JsonNode node = root.get(section);
+                if (node != null && node.isObject()) {
+                    node.fieldNames().forEachRemaining(key ->
+                            allDeps.putIfAbsent(key, node.get(key).asText()));
+                }
+            }
+
+            String angularVersion = allDeps.get("@angular/core");
+            if (angularVersion != null) {
+                String version = stripVersionRange(angularVersion);
+                LOG.debugf("Detected Angular via package.json: %s", version);
+                return new ArchetypeInfo("angular", version);
+            }
+
+            String reactVersion = allDeps.get("react");
+            if (reactVersion != null) {
+                String version = stripVersionRange(reactVersion);
+                LOG.debugf("Detected React via package.json: %s", version);
+                return new ArchetypeInfo("react", version);
+            }
+
+        } catch (Exception e) {
+            LOG.warnf("ArchetypeDetector: failed to parse package.json at %s: %s", pkgJson, e.getMessage());
+        }
+
+        return null;
+    }
+
+    /**
+     * Strips leading semver range specifiers ({@code ^}, {@code ~}, {@code >=}, {@code >},
+     * {@code <=}, {@code <}, {@code =}) from a version string and returns the first
+     * contiguous version token.
+     *
+     * <p>Examples:
+     * <ul>
+     *   <li>{@code ^18.2.0} → {@code 18.2.0}</li>
+     *   <li>{@code ~17.0.0} → {@code 17.0.0}</li>
+     *   <li>{@code >=16.0.0 <17.0.0} → {@code 16.0.0}</li>
+     *   <li>{@code 19.0.0} → {@code 19.0.0}</li>
+     *   <li>{@code latest} → {@code latest}</li>
+     * </ul>
+     */
+    static String stripVersionRange(String version) {
+        if (version == null) return null;
+        String v = version.trim().replaceAll("^[~^>=<*]+", "").trim();
+        int spaceIdx = v.indexOf(' ');
+        if (spaceIdx > 0) {
+            v = v.substring(0, spaceIdx).trim();
+        }
+        return v.isEmpty() ? version.trim() : v;
     }
 
     // ─── XML helpers ─────────────────────────────────────────────────────────────

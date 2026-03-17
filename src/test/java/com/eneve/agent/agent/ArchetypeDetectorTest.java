@@ -449,6 +449,234 @@ class ArchetypeDetectorTest {
         assertEquals("unknown", info.version());
     }
 
+    // ─── React ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsReactViaDependencies() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "name": "my-react-app",
+                  "version": "1.0.0",
+                  "dependencies": {
+                    "react": "^18.2.0",
+                    "react-dom": "^18.2.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
+        assertEquals("18.2.0", info.version());
+    }
+
+    @Test
+    void detectsReactVersionStripsCaretPrefix() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": { "react": "^19.0.0" }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
+        assertEquals("19.0.0", info.version());
+    }
+
+    @Test
+    void detectsReactVersionStripsTildePrefix() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": { "react": "~17.0.2" }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
+        assertEquals("17.0.2", info.version());
+    }
+
+    @Test
+    void detectsReactInDevDependencies() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "name": "my-lib",
+                  "devDependencies": {
+                    "react": "^18.0.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
+        assertEquals("18.0.0", info.version());
+    }
+
+    @Test
+    void detectsReactWithExactVersion() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": { "react": "16.14.0" }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
+        assertEquals("16.14.0", info.version());
+    }
+
+    // ─── Angular ──────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsAngularViaDependencies() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "name": "my-angular-app",
+                  "dependencies": {
+                    "@angular/core": "^17.0.0",
+                    "@angular/common": "^17.0.0",
+                    "@angular/router": "^17.0.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("angular", info.archetype());
+        assertEquals("17.0.0", info.version());
+    }
+
+    @Test
+    void detectsAngularVersionStripsCaretPrefix() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": { "@angular/core": "^19.2.1" }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("angular", info.archetype());
+        assertEquals("19.2.1", info.version());
+    }
+
+    @Test
+    void detectsAngularInDevDependencies() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "devDependencies": {
+                    "@angular/core": "~16.2.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("angular", info.archetype());
+        assertEquals("16.2.0", info.version());
+    }
+
+    @Test
+    void angularTakesPriorityOverReact() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": {
+                    "react": "^18.2.0",
+                    "@angular/core": "^17.0.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("angular", info.archetype(), "Angular should take priority over React");
+        assertEquals("17.0.0", info.version());
+    }
+
+    @Test
+    void packageJsonWithoutFrameworkReturnsNull() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "name": "plain-node-app",
+                  "dependencies": {
+                    "express": "^4.18.2",
+                    "lodash": "^4.17.21"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNull(info, "A package.json without React or Angular should return null");
+    }
+
+    @Test
+    void typeScriptDetectionSkippedWhenPomPresent() throws IOException {
+        // A Java project with a package.json (e.g. for end-to-end tests) must not
+        // be classified as a TypeScript frontend project.
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>java-app-with-frontend</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                </project>
+                """);
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": { "react": "^18.2.0" }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNull(info, "pom.xml presence should suppress TypeScript frontend detection");
+    }
+
+    // ─── stripVersionRange unit tests ────────────────────────────────────────────
+
+    @Test
+    void stripVersionRangeHandlesCaretAndTilde() {
+        assertEquals("18.2.0", ArchetypeDetector.stripVersionRange("^18.2.0"));
+        assertEquals("17.0.0", ArchetypeDetector.stripVersionRange("~17.0.0"));
+    }
+
+    @Test
+    void stripVersionRangeHandlesGteLt() {
+        assertEquals("16.0.0", ArchetypeDetector.stripVersionRange(">=16.0.0"));
+        assertEquals("16.0.0", ArchetypeDetector.stripVersionRange(">=16.0.0 <17.0.0"));
+    }
+
+    @Test
+    void stripVersionRangeLeavesExactVersionUnchanged() {
+        assertEquals("19.0.0", ArchetypeDetector.stripVersionRange("19.0.0"));
+    }
+
+    @Test
+    void stripVersionRangeLeavesNonSemverTagsUnchanged() {
+        assertEquals("latest", ArchetypeDetector.stripVersionRange("latest"));
+        assertEquals("next", ArchetypeDetector.stripVersionRange("next"));
+    }
+
+    @Test
+    void stripVersionRangeHandlesNull() {
+        assertNull(ArchetypeDetector.stripVersionRange(null));
+    }
+
     // ─── Negative cases ───────────────────────────────────────────────────────────
 
     @Test
