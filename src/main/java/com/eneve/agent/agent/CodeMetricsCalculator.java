@@ -18,8 +18,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParserConfiguration;
-import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
@@ -49,10 +49,13 @@ import org.jboss.logging.Logger;
 @ApplicationScoped
 public class CodeMetricsCalculator {
 
-    static {
-        StaticJavaParser.getParserConfiguration()
-                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
-    }
+    /**
+     * Shared, immutable parser configuration. Using an explicit JavaParser instance
+     * (rather than StaticJavaParser) avoids the global-state race condition when parsing
+     * files in parallel across multiple worker threads.
+     */
+    private static final ParserConfiguration PARSER_CONFIG = new ParserConfiguration()
+            .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_21);
 
     private static final Logger LOG = Logger.getLogger(CodeMetricsCalculator.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200 KB
@@ -167,7 +170,9 @@ public class CodeMetricsCalculator {
     // ─── AST analysis ────────────────────────────────────────────────────
 
     private void analyseFile(Path file, String relativePath, List<MethodMetric> out) throws Exception {
-        CompilationUnit cu = StaticJavaParser.parse(file);
+        CompilationUnit cu = new JavaParser(PARSER_CONFIG).parse(file)
+                .getResult()
+                .orElseThrow(() -> new IllegalStateException("Parse returned empty result"));
 
         cu.findAll(ClassOrInterfaceDeclaration.class).forEach(cls -> {
             String className = cls.getFullyQualifiedName().orElse(cls.getNameAsString());
