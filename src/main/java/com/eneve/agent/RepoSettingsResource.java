@@ -96,6 +96,7 @@ public class RepoSettingsResource {
         boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
         boolean upgradeEnabled = request.upgradeEnabled() != null ? request.upgradeEnabled() : true;
         boolean qualityReportEnabled = request.qualityReportEnabled() != null ? request.qualityReportEnabled() : false;
+        boolean archived = request.archived() != null ? request.archived() : false;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
@@ -103,7 +104,7 @@ public class RepoSettingsResource {
         String confluenceParentPageId = request.confluenceParentPageId();
 
         settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
-                qualityReportEnabled, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
+                qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId);
 
         return Response.ok(Map.of(
                 "action", "saved",
@@ -113,7 +114,8 @@ public class RepoSettingsResource {
                 "vectorEnabled", vectorEnabled,
                 "docsEnabled", docsEnabled,
                 "upgradeEnabled", upgradeEnabled,
-                "qualityReportEnabled", qualityReportEnabled
+                "qualityReportEnabled", qualityReportEnabled,
+                "archived", archived
         )).build();
     }
 
@@ -384,6 +386,59 @@ public class RepoSettingsResource {
         return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/archive")
+    @Operation(
+            operationId = "archiveRepo",
+            summary = "Archive a repository",
+            description = "Marks the repository as archived. Archived repositories are excluded from "
+                    + "scheduled jobs and can be filtered out in the frontend."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Repository archived"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response archive(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setArchived(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/unarchive")
+    @Operation(
+            operationId = "unarchiveRepo",
+            summary = "Unarchive a repository",
+            description = "Removes the archived flag from the repository, making it visible and active again."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Repository unarchived"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response unarchive(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setArchived(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
     @DELETE
     @Path("/{workspace}/{repoSlug}")
     @Operation(
@@ -416,6 +471,7 @@ public class RepoSettingsResource {
             Boolean docsEnabled,
             Boolean upgradeEnabled,
             Boolean qualityReportEnabled,
+            Boolean archived,
             List<String> ruleNames,
             String reviewPrompt,
             List<String> disabledHooks,
