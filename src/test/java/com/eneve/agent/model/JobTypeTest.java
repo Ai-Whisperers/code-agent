@@ -1,0 +1,77 @@
+package com.eneve.agent.model;
+
+import org.junit.jupiter.api.Test;
+
+import static org.junit.jupiter.api.Assertions.*;
+
+class JobTypeTest {
+
+    @Test
+    void enumHasExpectedValues() {
+        JobType[] values = JobType.values();
+        
+        assertEquals(6, values.length);
+        assertEquals(JobType.FIX, values[0]);
+        assertEquals(JobType.REVIEW, values[1]);
+        assertEquals(JobType.FIX_PR, values[2]);
+        assertEquals(JobType.REPLY, values[3]);
+        assertEquals(JobType.FIX_COMMENT, values[4]);
+        assertEquals(JobType.HOOK, values[5]);
+    }
+
+    @Test
+    void enumValuesHaveCorrectNames() {
+        assertEquals("FIX", JobType.FIX.name());
+        assertEquals("REVIEW", JobType.REVIEW.name());
+        assertEquals("FIX_PR", JobType.FIX_PR.name());
+        assertEquals("REPLY", JobType.REPLY.name());
+        assertEquals("FIX_COMMENT", JobType.FIX_COMMENT.name());
+        assertEquals("HOOK", JobType.HOOK.name());
+    }
+
+    @Test
+    void enumValueOfWorks() {
+        assertEquals(JobType.FIX, JobType.valueOf("FIX"));
+        assertEquals(JobType.REVIEW, JobType.valueOf("REVIEW"));
+        assertEquals(JobType.FIX_PR, JobType.valueOf("FIX_PR"));
+        assertEquals(JobType.REPLY, JobType.valueOf("REPLY"));
+        assertEquals(JobType.FIX_COMMENT, JobType.valueOf("FIX_COMMENT"));
+        assertEquals(JobType.HOOK, JobType.valueOf("HOOK"));
+    }
+
+    @Test
+    void enumValueOfThrowsExceptionForInvalidValue() {
+        assertThrows(IllegalArgumentException.class, () -> JobType.valueOf("INVALID"));
+        assertThrows(IllegalArgumentException.class, () -> JobType.valueOf("fix")); // case sensitive
+        assertThrows(IllegalArgumentException.class, () -> JobType.valueOf(""));
+    }
+
+    @Test
+    void enumValueOfThrowsExceptionForNull() {
+        assertThrows(NullPointerException.class, () -> JobType.valueOf(null));
+    }
+
+    @Test
+    void enumOrdinals() {
+        assertEquals(0, JobType.FIX.ordinal());
+        assertEquals(1, JobType.REVIEW.ordinal());
+        assertEquals(2, JobType.FIX_PR.ordinal());
+        assertEquals(3, JobType.REPLY.ordinal());
+        assertEquals(4, JobType.FIX_COMMENT.ordinal());
+        assertEquals(5, JobType.HOOK.ordinal());
+    }
+
+    @Test
+    void enumEquality() {
+        assertEquals(JobType.FIX, JobType.FIX);
+        assertNotEquals(JobType.FIX, JobType.REVIEW);
+        assertNotEquals(JobType.HOOK, JobType.REPLY);
+    }
+
+    @Test
+    void enumToString() {
+        assertEquals("FIX", JobType.FIX.toString());
+        assertEquals("REVIEW", JobType.REVIEW.toString());
+        assertEquals("FIX_COMMENT", JobType.FIX_COMMENT.toString());
+    }
+}
