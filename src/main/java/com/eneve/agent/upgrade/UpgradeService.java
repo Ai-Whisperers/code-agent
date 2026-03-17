@@ -360,6 +360,8 @@ public class UpgradeService {
                 : "No migration guide was available. Check https://quarkus.io/guides/migration-guide-"
                         + QuarkusMigrationFetcher.extractMajorMinor(latestVersion) + " manually.";
 
+        String javaNote = FrameworkJavaRequirements.javaVersionNote("quarkus", latestVersion, currentVersion);
+
         return """
                 Upgrade Quarkus from %s to %s in this repository.
 
@@ -368,8 +370,9 @@ public class UpgradeService {
                 properties, dependencyManagement).
                 2. Run `./mvnw quarkus:update` (or `mvn quarkus:update` if no wrapper) if the Quarkus Maven plugin is present.
                 3. Apply any breaking changes listed in the Migration Guide section below.
-                4. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists in the project root, otherwise `mvn compile`
-                5. Run tests: run `./mvnw test` if ./mvnw exists in the project root, otherwise `mvn test`
+                4. Java version check: %s
+                5. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists in the project root, otherwise `mvn compile`
+                6. Run tests: run `./mvnw test` if ./mvnw exists in the project root, otherwise `mvn test`
 
                 Current version: %s
                 Target version: %s
@@ -380,6 +383,7 @@ public class UpgradeService {
                 %s
                 """.formatted(
                 currentVersion, latestVersion,
+                javaNote,
                 currentVersion, latestVersion,
                 branchName, defaultBranch,
                 migrationSection);
@@ -412,6 +416,8 @@ public class UpgradeService {
     }
 
     private String buildWildflySpec(String currentVersion, String latestVersion, String branchName) {
+        String javaNote = FrameworkJavaRequirements.javaVersionNote("wildfly", latestVersion, currentVersion);
+
         return """
                 Upgrade WildFly from %s to %s in this repository.
 
@@ -421,11 +427,12 @@ public class UpgradeService {
                 2. Update the wildfly-maven-plugin version in pom.xml if present.
                 3. If a Dockerfile exists that references a WildFly base image \
                 (FROM quay.io/wildfly/wildfly:... or FROM jboss/wildfly:...), update the image tag to %s.
-                4. Review the WildFly %s release notes for breaking changes or deprecated subsystems: \
+                4. Java version check: %s
+                5. Review the WildFly %s release notes for breaking changes or deprecated subsystems: \
                 https://www.wildfly.org/news/
-                5. Update any WildFly-specific server configuration files (standalone.xml, domain.xml) if needed.
-                6. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists, otherwise `mvn compile`
-                7. Run tests: run `./mvnw test` if ./mvnw exists, otherwise `mvn test`
+                6. Update any WildFly-specific server configuration files (standalone.xml, domain.xml) if needed.
+                7. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists, otherwise `mvn compile`
+                8. Run tests: run `./mvnw test` if ./mvnw exists, otherwise `mvn test`
 
                 Current version: %s
                 Target version: %s
@@ -433,7 +440,8 @@ public class UpgradeService {
                 Target branch (PR base): %s
                 """.formatted(
                 currentVersion, latestVersion,
-                latestVersion, latestVersion,
+                latestVersion,
+                javaNote, latestVersion,
                 currentVersion, latestVersion,
                 branchName, defaultBranch);
     }
