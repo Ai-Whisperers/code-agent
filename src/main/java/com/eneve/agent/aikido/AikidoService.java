@@ -25,6 +25,16 @@ import jakarta.enterprise.context.ApplicationScoped;
 @ApplicationScoped
 public class AikidoService {
 
+    /**
+     * Issue types that the agent can actually fix (SAST findings and open-source dependency
+     * vulnerabilities). Secrets and container issues are excluded from automated fix flows
+     * but are still included in quality reports.
+     */
+    private static final java.util.Set<String> ACTIONABLE_ISSUE_TYPES = java.util.Set.of(
+            "sca", "dependency", "dependencies", "open_source", "software_composition_analysis",
+            "sast", "code", "static_analysis", "code_security"
+    );
+
     private static final Logger LOG = Logger.getLogger(AikidoService.class);
 
     @ConfigProperty(name = "aikido.base.url", defaultValue = "https://app.aikido.dev")
@@ -194,6 +204,74 @@ public class AikidoService {
         return results;
     }
 
+    /**
+     * Returns only actionable Aikido issues for the given repo: SAST findings and open-source
+     * dependency vulnerabilities. Secrets and container issues are excluded because they cannot
+     * be reliably auto-remediated by the agent.
+     *
+     * <p>Applies a best-effort two-level filter:
+     * <ol>
+     *   <li>Group level: skips the detail API call if the group JSON already has a non-actionable type.</li>
+     *   <li>Detail level: drops the issue after {@link #getIssueGroupDetail} if the parsed type is non-actionable.</li>
+     * </ol>
+     */
+    public List<AikidoIssueInfo> findActionableIssuesForRepo(String repoSlug) {
+        if (repoSlug == null || repoSlug.isBlank()) return List.of();
+
+        String json = get("/api/public/v1/open-issue-groups", "list open issues for repo (actionable)");
+        if (json == null) return List.of();
+
+        List<AikidoIssueInfo> results = new ArrayList<>();
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode groups = root.isArray() ? root : root.path("data");
+            if (!groups.isArray()) {
+                groups = root.path("groups");
+            }
+            if (!groups.isArray()) {
+                LOG.warnf("Aikido: unexpected response shape when listing open issues");
+                return List.of();
+            }
+
+            String slugLower = repoSlug.toLowerCase();
+            for (JsonNode group : groups) {
+                if (!groupMatchesRepo(group, slugLower)) continue;
+
+                // Group-level type filter: avoid the detail API call for non-actionable types
+                String groupType = extractIssueType(group);
+                if (!"unknown".equals(groupType) && !isActionableType(groupType)) {
+                    LOG.debugf("Aikido: skipping non-actionable group (type=%s) for repo '%s'", groupType, repoSlug);
+                    continue;
+                }
+
+                int groupId = group.path("id").asInt(-1);
+                if (groupId < 0) continue;
+
+                AikidoIssueInfo info = getIssueGroupDetail(groupId);
+                if (info == null) continue;
+
+                // Detail-level type filter: drop if type became known and is not actionable
+                if (!isActionableType(info.issueType())) {
+                    LOG.debugf("Aikido: dropping non-actionable issue group %d (type=%s) for repo '%s'",
+                            groupId, info.issueType(), repoSlug);
+                    continue;
+                }
+
+                results.add(info);
+            }
+            LOG.infof("Aikido: found %d actionable issue(s) (SAST/dependency) for repo '%s'",
+                    results.size(), repoSlug);
+        } catch (Exception e) {
+            LOG.errorf("Aikido: failed to parse actionable issues for repo '%s': %s", repoSlug, e.getMessage());
+        }
+        return results;
+    }
+
+    private boolean isActionableType(String issueType) {
+        if (issueType == null || issueType.isBlank() || "unknown".equals(issueType)) return true;
+        return ACTIONABLE_ISSUE_TYPES.contains(issueType.toLowerCase());
+    }
+
     private boolean groupMatchesRepo(JsonNode group, String slugLower) {
         // Check repo_name / repository_name / code_repo.name
         for (String field : new String[]{"repo_name", "repository_name"}) {
@@ -229,6 +307,9 @@ public class AikidoService {
 
         try {
             JsonNode root = objectMapper.readTree(json);
+
+            String issueType = extractIssueType(root);
+            LOG.debugf("Aikido issue group %d: issueType=%s", issueGroupId, issueType);
 
             String severity = extractText(root, "severity", "medium");
             String packageName = extractText(root, "affected_package",
@@ -268,7 +349,7 @@ public class AikidoService {
             }
 
             return new AikidoIssueInfo(
-                    issueGroupId, severity, packageName, currentVersion, fixedVersion,
+                    issueGroupId, issueType, severity, packageName, currentVersion, fixedVersion,
                     cveId, cveDescription, cvssScore, repoName, repoUrl, containerImage, changelogSummary
             );
         } catch (Exception e) {
@@ -417,6 +498,18 @@ public class AikidoService {
             LOG.errorf("Aikido %s error: %s", operation, e.getMessage());
             return null;
         }
+    }
+
+    private static String extractIssueType(JsonNode node) {
+        for (String field : new String[]{
+                "type", "issue_type", "category", "scanner", "rule_type",
+                "detection_type", "scan_type", "finding_type"}) {
+            JsonNode n = node.path(field);
+            if (!n.isMissingNode() && !n.isNull() && !n.asText("").isBlank()) {
+                return n.asText("").toLowerCase();
+            }
+        }
+        return "unknown";
     }
 
     private static String extractText(JsonNode node, String field, String fallback) {

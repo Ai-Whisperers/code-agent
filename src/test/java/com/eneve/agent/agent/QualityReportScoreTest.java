@@ -26,7 +26,7 @@ class QualityReportScoreTest {
     }
 
     private static AikidoSection aikido(int critical, int high, int medium, int low) {
-        return new AikidoSection(critical + high + medium + low, critical, high, medium, low);
+        return new AikidoSection(critical + high + medium + low, critical, high, medium, low, 0, 0, 0, 0, 0);
     }
 
     private static ComplexitySection complexity(int methodsAbove, int totalMethods) {

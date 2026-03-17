@@ -196,9 +196,9 @@ public class UpgradeService {
 
         List<AikidoIssueInfo> aikidoFindings = List.of();
         if (aikidoService.isEnabled()) {
-            aikidoFindings = aikidoService.findOpenIssuesForRepo(repo.repoSlug());
+            aikidoFindings = aikidoService.findActionableIssuesForRepo(repo.repoSlug());
             if (!aikidoFindings.isEmpty()) {
-                LOG.infof("UpgradeService: %d Aikido finding(s) found for %s/%s — appending to upgrade spec",
+                LOG.infof("UpgradeService: %d actionable Aikido finding(s) (SAST/dependency) found for %s/%s — appending to upgrade spec",
                         aikidoFindings.size(), repo.workspace(), repo.repoSlug());
             }
         }

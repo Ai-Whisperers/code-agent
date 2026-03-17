@@ -56,7 +56,12 @@ public record QualityReport(
             int criticalCount,
             int highCount,
             int mediumCount,
-            int lowCount
+            int lowCount,
+            int sastCount,
+            int dependencyCount,
+            int secretCount,
+            int containerCount,
+            int otherCount
     ) {}
 
     public record ComplexitySection(

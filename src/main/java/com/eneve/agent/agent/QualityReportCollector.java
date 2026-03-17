@@ -155,16 +155,28 @@ public class QualityReportCollector {
             if (issues == null) return null;
 
             int critical = 0, high = 0, medium = 0, low = 0;
+            int sast = 0, dependency = 0, secret = 0, container = 0, other = 0;
             for (AikidoIssueInfo issue : issues) {
-                if (issue.severity() == null) continue;
-                switch (issue.severity().toLowerCase()) {
-                    case "critical" -> critical++;
-                    case "high" -> high++;
-                    case "medium" -> medium++;
-                    case "low" -> low++;
+                if (issue.severity() != null) {
+                    switch (issue.severity().toLowerCase()) {
+                        case "critical" -> critical++;
+                        case "high" -> high++;
+                        case "medium" -> medium++;
+                        case "low" -> low++;
+                    }
+                }
+                String t = issue.issueType() == null ? "unknown" : issue.issueType().toLowerCase();
+                switch (t) {
+                    case "sast", "code", "static_analysis", "code_security" -> sast++;
+                    case "sca", "dependency", "dependencies", "open_source",
+                         "software_composition_analysis" -> dependency++;
+                    case "secret", "secrets", "exposed_secret", "hardcoded_secret" -> secret++;
+                    case "container", "container_image", "docker", "image" -> container++;
+                    default -> other++;
                 }
             }
-            return new AikidoSection(issues.size(), critical, high, medium, low);
+            return new AikidoSection(issues.size(), critical, high, medium, low,
+                    sast, dependency, secret, container, other);
         } catch (Exception e) {
             LOG.warnf("QualityReportCollector: Aikido collection failed for %s: %s", repoSlug, e.getMessage());
             return null;
