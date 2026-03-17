@@ -24,6 +24,7 @@ import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.ConstructorDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.RecordDeclaration;
 import com.github.javaparser.ast.expr.BinaryExpr;
 import com.github.javaparser.ast.expr.ConditionalExpr;
 import com.github.javaparser.ast.stmt.CatchClause;
@@ -174,28 +175,33 @@ public class CodeMetricsCalculator {
                 .getResult()
                 .orElseThrow(() -> new IllegalStateException("Parse returned empty result"));
 
-        cu.findAll(ClassOrInterfaceDeclaration.class).forEach(cls -> {
-            String className = cls.getFullyQualifiedName().orElse(cls.getNameAsString());
+        cu.findAll(ClassOrInterfaceDeclaration.class).forEach(cls ->
+                collectTypeMembers(cls.getFullyQualifiedName().orElse(cls.getNameAsString()),
+                        cls.getMethods(), cls.getConstructors(), relativePath, out));
 
-            cls.getMethods().forEach(method -> {
-                int cc = computeCC(method);
-                int lineStart = method.getBegin().map(p -> p.line).orElse(0);
-                int lineEnd = method.getEnd().map(p -> p.line).orElse(0);
-                out.add(new MethodMetric(
-                        relativePath, className, method.getNameAsString(),
-                        cc, lineEnd - lineStart + 1, method.getParameters().size(),
-                        lineStart, lineEnd));
-            });
+        // Records can have custom methods and compact constructors with non-trivial logic
+        cu.findAll(RecordDeclaration.class).forEach(rec ->
+                collectTypeMembers(rec.getFullyQualifiedName().orElse(rec.getNameAsString()),
+                        rec.getMethods(), rec.getConstructors(), relativePath, out));
+    }
 
-            cls.getConstructors().forEach(ctor -> {
-                int cc = computeCC(ctor);
-                int lineStart = ctor.getBegin().map(p -> p.line).orElse(0);
-                int lineEnd = ctor.getEnd().map(p -> p.line).orElse(0);
-                out.add(new MethodMetric(
-                        relativePath, className, "<init>",
-                        cc, lineEnd - lineStart + 1, ctor.getParameters().size(),
-                        lineStart, lineEnd));
-            });
+    private void collectTypeMembers(String className,
+                                    java.util.List<MethodDeclaration> methods,
+                                    java.util.List<ConstructorDeclaration> constructors,
+                                    String relativePath, List<MethodMetric> out) {
+        methods.forEach(method -> {
+            int cc = computeCC(method);
+            int lineStart = method.getBegin().map(p -> p.line).orElse(0);
+            int lineEnd   = method.getEnd().map(p -> p.line).orElse(0);
+            out.add(new MethodMetric(relativePath, className, method.getNameAsString(),
+                    cc, lineEnd - lineStart + 1, method.getParameters().size(), lineStart, lineEnd));
+        });
+        constructors.forEach(ctor -> {
+            int cc = computeCC(ctor);
+            int lineStart = ctor.getBegin().map(p -> p.line).orElse(0);
+            int lineEnd   = ctor.getEnd().map(p -> p.line).orElse(0);
+            out.add(new MethodMetric(relativePath, className, "<init>",
+                    cc, lineEnd - lineStart + 1, ctor.getParameters().size(), lineStart, lineEnd));
         });
     }
 
