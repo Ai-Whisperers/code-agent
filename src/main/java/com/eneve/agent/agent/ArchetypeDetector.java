@@ -32,33 +32,33 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Detects the primary framework archetype (e.g. Quarkus, WildFly, React, Angular) and its
- * version from a Maven {@code pom.xml}, a {@code Dockerfile}, or a {@code package.json}.
+ * Detects the primary framework archetype and its version from project files.
  *
  * <p>Detection order:
  * <ol>
  *   <li><b>Maven projects</b> ({@code pom.xml} present):
  *     <ol>
- *       <li>POM-based: parent groupId, BOM in {@code dependencyManagement}, known
- *           {@code <properties>} keys, and the {@code wildfly-maven-plugin} presence.</li>
- *       <li>Dockerfile-based WildFly fallback: scans the project tree for a
- *           {@code FROM quay.io/wildfly/wildfly:X.Y.Z.Final} line.</li>
+ *       <li>Quarkus — parent groupId, BOM in {@code dependencyManagement}, known properties.</li>
+ *       <li>WildFly — POM parent/BOM/properties/plugin, then Dockerfile fallback.</li>
+ *       <li>Maven packaging — {@code <packaging>pom</packaging>} → {@code "pom"},
+ *           {@code jar} or absent → {@code "jar"}.</li>
  *     </ol>
  *   </li>
- *   <li><b>TypeScript frontend projects</b> (no {@code pom.xml}):
+ *   <li><b>Non-Maven projects</b> (no {@code pom.xml}):
  *     <ol>
- *       <li>{@code package.json}-based: checks {@code dependencies} and
- *           {@code devDependencies} for {@code @angular/core} (Angular) or {@code react}
- *           (React), in that priority order.</li>
- *       <li>Dockerfile-based WildFly fallback (for non-Maven server images).</li>
+ *       <li>.NET — {@code .csproj}, {@code .fsproj}, {@code .vbproj}, or {@code .sln}.</li>
+ *       <li>Angular / React — {@code package.json} dependencies.</li>
+ *       <li>WildFly Dockerfile fallback.</li>
+ *       <li>Docker — any {@code Dockerfile} or {@code docker-compose.yml} at root.</li>
+ *       <li>Terraform — {@code *.tf} files (up to depth 2).</li>
+ *       <li>SQL — {@code *.sql} files (up to depth 3).</li>
+ *       <li>Shell — {@code *.sh} files at root.</li>
  *     </ol>
  *   </li>
  * </ol>
  *
- * <p>Detection is intentionally lightweight: it reads only the root {@code pom.xml},
- * {@code package.json}, and a small set of Dockerfile candidates; it resolves Maven
- * {@code ${property}} references within the same file and does not fetch parent POMs
- * from Maven Central or remote npm registries.
+ * <p>Detection is intentionally lightweight: it reads only a small, well-known set of files
+ * and does not fetch remote metadata.
  */
 @ApplicationScoped
 public class ArchetypeDetector {
@@ -97,15 +97,9 @@ public class ArchetypeDetector {
     );
 
     /**
-     * Attempts to detect the framework and version for the given project.
+     * Attempts to detect the primary archetype and version for the given project root.
      *
-     * <p>Strategy:
-     * <ol>
-     *   <li>If {@code pom.xml} is present: POM-based detection (Quarkus, then WildFly),
-     *       followed by a WildFly Dockerfile fallback.</li>
-     *   <li>Otherwise: TypeScript frontend detection via {@code package.json}
-     *       (Angular, then React), followed by a WildFly Dockerfile fallback.</li>
-     * </ol>
+     * <p>See the class-level Javadoc for the full detection hierarchy.
      *
      * @param projectRoot root directory of the cloned repository
      * @return detected archetype info, or {@code null} if not detected or on parse error
@@ -114,6 +108,8 @@ public class ArchetypeDetector {
         Path pomPath = projectRoot.resolve("pom.xml");
 
         if (Files.exists(pomPath)) {
+            Document doc = null;
+            Map<String, String> properties = Map.of();
             try (InputStream in = Files.newInputStream(pomPath)) {
                 DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
                 factory.setNamespaceAware(false);
@@ -131,36 +127,55 @@ public class ArchetypeDetector {
                     // FEATURE_SECURE_PROCESSING above is sufficient for our purposes.
                 }
                 DocumentBuilder builder = factory.newDocumentBuilder();
-                Document doc = builder.parse(in);
+                doc = builder.parse(in);
                 doc.getDocumentElement().normalize();
-
-                Map<String, String> properties = extractProperties(doc);
-
-                ArchetypeInfo quarkus = detectQuarkus(doc, properties);
-                if (quarkus != null) {
-                    return quarkus;
-                }
-
-                ArchetypeInfo wildfly = detectWildFlyFromPom(doc, properties);
-                if (wildfly != null) {
-                    return wildfly;
-                }
-
+                properties = extractProperties(doc);
             } catch (Exception e) {
                 LOG.warnf("ArchetypeDetector: failed to parse pom.xml at %s: %s", pomPath, e.getMessage());
             }
 
-            // Dockerfile fallback — useful when the POM alone is not conclusive
-            // (e.g. no explicit BOM but the server image tag is present in the Dockerfile).
-            return detectWildFlyFromDockerfiles(projectRoot);
+            if (doc != null) {
+                ArchetypeInfo quarkus = detectQuarkus(doc, properties);
+                if (quarkus != null) return quarkus;
+
+                ArchetypeInfo wildfly = detectWildFlyFromPom(doc, properties);
+                if (wildfly != null) return wildfly;
+            }
+
+            // Dockerfile fallback — useful when the POM alone is not conclusive.
+            ArchetypeInfo wildflyDocker = detectWildFlyFromDockerfiles(projectRoot);
+            if (wildflyDocker != null) return wildflyDocker;
+
+            // Generic Maven packaging — must come after all framework-specific checks.
+            if (doc != null) {
+                return detectMavenPackaging(doc, properties);
+            }
+            return null;
         }
 
-        // No pom.xml — try TypeScript frontend projects first, then WildFly Dockerfile.
+        // No pom.xml — non-Java project.
+        ArchetypeInfo dotnet = detectDotnet(projectRoot);
+        if (dotnet != null) return dotnet;
+
+        ArchetypeInfo phpResult = detectPhpFramework(projectRoot);
+        if (phpResult != null) return phpResult;
+
         ArchetypeInfo tsResult = detectTypeScriptFrontend(projectRoot);
-        if (tsResult != null) {
-            return tsResult;
-        }
-        return detectWildFlyFromDockerfiles(projectRoot);
+        if (tsResult != null) return tsResult;
+
+        ArchetypeInfo wildflyDocker = detectWildFlyFromDockerfiles(projectRoot);
+        if (wildflyDocker != null) return wildflyDocker;
+
+        ArchetypeInfo docker = detectDockerProject(projectRoot);
+        if (docker != null) return docker;
+
+        ArchetypeInfo terraform = detectTerraform(projectRoot);
+        if (terraform != null) return terraform;
+
+        ArchetypeInfo sql = detectSql(projectRoot);
+        if (sql != null) return sql;
+
+        return detectShell(projectRoot);
     }
 
     // ─── Quarkus ─────────────────────────────────────────────────────────────────
@@ -438,6 +453,413 @@ public class ArchetypeDetector {
             LOG.warnf("ArchetypeDetector: failed to parse package.json at %s: %s", pkgJson, e.getMessage());
         }
 
+        return null;
+    }
+
+    // ─── Maven packaging (jar / pom) ─────────────────────────────────────────────
+
+    /**
+     * Classifies a Maven project that did not match any framework-specific archetype.
+     *
+     * <ul>
+     *   <li>{@code <packaging>pom</packaging>} → {@code "pom"} (multi-module parent or BOM)</li>
+     *   <li>{@code <packaging>jar</packaging>} or no {@code <packaging>} element → {@code "jar"}</li>
+     * </ul>
+     *
+     * <p>Version is taken from the project's own {@code <version>} element.
+     */
+    private ArchetypeInfo detectMavenPackaging(Document doc, Map<String, String> properties) {
+        String packaging = firstText(doc, "project > packaging");
+        String version   = resolve(firstText(doc, "project > version"), properties);
+        if (version == null) {
+            version = "unknown";
+        }
+
+        if ("pom".equalsIgnoreCase(packaging)) {
+            LOG.debugf("Detected Maven pom (multi-module / BOM): version %s", version);
+            return new ArchetypeInfo("pom", version);
+        }
+
+        if (packaging == null || "jar".equalsIgnoreCase(packaging)) {
+            LOG.debugf("Detected Maven jar: version %s", version);
+            return new ArchetypeInfo("jar", version);
+        }
+
+        // war, ear, rar, etc. — not yet classified as a named archetype
+        return null;
+    }
+
+    // ─── .NET ────────────────────────────────────────────────────────────────────
+
+    /**
+     * Project-file extensions that indicate a .NET SDK project.
+     */
+    private static final Set<String> DOTNET_PROJECT_EXTENSIONS = Set.of(
+            ".csproj", ".fsproj", ".vbproj"
+    );
+
+    /**
+     * Detects a .NET project from {@code *.csproj}, {@code *.fsproj}, {@code *.vbproj}, or
+     * {@code *.sln} files at the project root, then reads {@code <TargetFramework>} (or
+     * {@code <TargetFrameworks>} taking the first entry) from the project file. Falls back to
+     * {@code global.json} {@code sdk.version} when no project file contains a target framework.
+     */
+    ArchetypeInfo detectDotnet(Path projectRoot) {
+        // 1. Look for SDK project files at root depth only
+        try (Stream<Path> stream = Files.list(projectRoot)) {
+            List<Path> projectFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> {
+                        String name = p.getFileName().toString().toLowerCase();
+                        return DOTNET_PROJECT_EXTENSIONS.stream().anyMatch(name::endsWith);
+                    })
+                    .sorted()
+                    .toList();
+
+            for (Path proj : projectFiles) {
+                String version = readDotnetTargetFramework(proj);
+                if (version != null) {
+                    LOG.debugf("Detected .NET via %s: %s", proj.getFileName(), version);
+                    return new ArchetypeInfo("dotnet", version);
+                }
+            }
+
+            // No SDK project files with a target framework — check for a .sln and treat
+            // the presence itself as a signal; version comes from global.json if available.
+            boolean hasSln = Files.list(projectRoot)
+                    .anyMatch(p -> p.getFileName().toString().toLowerCase().endsWith(".sln"));
+            if (!hasSln && projectFiles.isEmpty()) {
+                return null;
+            }
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot list root dir for .NET detection: %s", e.getMessage());
+            return null;
+        }
+
+        // 2. Fall back to global.json sdk.version
+        Path globalJson = projectRoot.resolve("global.json");
+        if (Files.exists(globalJson)) {
+            try {
+                JsonNode root = new ObjectMapper().readTree(globalJson.toFile());
+                JsonNode sdk = root.get("sdk");
+                if (sdk != null) {
+                    JsonNode sdkVersion = sdk.get("version");
+                    if (sdkVersion != null && !sdkVersion.asText().isBlank()) {
+                        String v = sdkVersion.asText().trim();
+                        LOG.debugf("Detected .NET via global.json sdk.version: %s", v);
+                        return new ArchetypeInfo("dotnet", v);
+                    }
+                }
+            } catch (Exception e) {
+                LOG.debugf("ArchetypeDetector: failed to parse global.json: %s", e.getMessage());
+            }
+        }
+
+        LOG.debugf("Detected .NET project (no target framework found)");
+        return new ArchetypeInfo("dotnet", "unknown");
+    }
+
+    /**
+     * Reads a {@code .csproj}/{@code .fsproj}/{@code .vbproj} file and returns the value of
+     * the first {@code <TargetFramework>} or the first token of {@code <TargetFrameworks>},
+     * or {@code null} if neither element is present.
+     */
+    private String readDotnetTargetFramework(Path projectFile) {
+        try {
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(false);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            // Suppress SAX error output for malformed project files
+            builder.setErrorHandler(null);
+            try (InputStream in = Files.newInputStream(projectFile)) {
+                Document doc = builder.parse(in);
+                doc.getDocumentElement().normalize();
+
+                NodeList tf = doc.getElementsByTagName("TargetFramework");
+                if (tf.getLength() > 0) {
+                    String text = tf.item(0).getTextContent().trim();
+                    return text.isEmpty() ? null : text;
+                }
+
+                NodeList tfs = doc.getElementsByTagName("TargetFrameworks");
+                if (tfs.getLength() > 0) {
+                    String text = tfs.item(0).getTextContent().trim();
+                    if (!text.isEmpty()) {
+                        // Take the first framework in a semicolon-separated list
+                        return text.split(";")[0].trim();
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.debugf("ArchetypeDetector: cannot read .NET project file %s: %s",
+                    projectFile.getFileName(), e.getMessage());
+        }
+        return null;
+    }
+
+    // ─── PHP (Laravel / Symfony) ─────────────────────────────────────────────────
+
+    /**
+     * Detects the PHP framework from {@code composer.json}.
+     *
+     * <p>Detection priority:
+     * <ol>
+     *   <li>Laravel ({@code laravel/framework} in require)</li>
+     *   <li>Symfony ({@code symfony/framework-bundle} in require)</li>
+     *   <li>Generic PHP ({@code composer.json} present but no recognised framework)</li>
+     * </ol>
+     */
+    ArchetypeInfo detectPhpFramework(Path projectRoot) {
+        Path composerJson = projectRoot.resolve("composer.json");
+        if (!Files.exists(composerJson)) {
+            return null;
+        }
+
+        try {
+            JsonNode root = new ObjectMapper().readTree(composerJson.toFile());
+
+            Map<String, String> allDeps = new java.util.LinkedHashMap<>();
+            for (String section : List.of("require", "require-dev")) {
+                JsonNode node = root.get(section);
+                if (node != null && node.isObject()) {
+                    node.fieldNames().forEachRemaining(key ->
+                            allDeps.putIfAbsent(key, node.get(key).asText()));
+                }
+            }
+
+            String laravelVersion = allDeps.get("laravel/framework");
+            if (laravelVersion != null) {
+                String version = stripVersionRange(laravelVersion);
+                LOG.debugf("Detected Laravel via composer.json: %s", version);
+                return new ArchetypeInfo("laravel", version);
+            }
+
+            String symfonyVersion = allDeps.get("symfony/framework-bundle");
+            if (symfonyVersion != null) {
+                String version = stripVersionRange(symfonyVersion);
+                LOG.debugf("Detected Symfony via composer.json: %s", version);
+                return new ArchetypeInfo("symfony", version);
+            }
+
+            // Generic PHP project
+            JsonNode phpVersion = root.path("require").path("php");
+            if (!phpVersion.isMissingNode()) {
+                String version = stripVersionRange(phpVersion.asText());
+                LOG.debugf("Detected generic PHP via composer.json: %s", version);
+                return new ArchetypeInfo("php", version);
+            }
+
+            // composer.json exists but no "php" constraint — still a PHP project
+            LOG.debugf("Detected generic PHP project (no framework or php version constraint found)");
+            return new ArchetypeInfo("php", "unknown");
+
+        } catch (Exception e) {
+            LOG.warnf("ArchetypeDetector: failed to parse composer.json at %s: %s",
+                    composerJson, e.getMessage());
+        }
+        return null;
+    }
+
+    // ─── Docker ──────────────────────────────────────────────────────────────────
+
+    /**
+     * Pattern that matches the first {@code FROM} instruction in a Dockerfile and captures
+     * the image tag. Matches {@code FROM image:tag} and {@code FROM image:tag AS alias}.
+     * Does NOT match multi-stage {@code FROM scratch} (no tag).
+     */
+    private static final Pattern DOCKER_FROM_TAG_PATTERN = Pattern.compile(
+            "^\\s*FROM\\s+[^:\\s]+:([^\\s]+)(?:\\s+AS\\s+\\S+)?\\s*$",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * Detects a generic Docker project when no higher-priority archetype was found.
+     *
+     * <p>Looks for a {@code Dockerfile} or {@code docker-compose.yml}/{@code docker-compose.yaml}
+     * at the project root. Extracts the image tag from the first {@code FROM} line as the
+     * version; falls back to {@code "unknown"} when no tag is present.
+     */
+    ArchetypeInfo detectDockerProject(Path projectRoot) {
+        // 1. Root-level Dockerfile
+        for (String name : List.of("Dockerfile", "Dockerfile.jvm", "Dockerfile.native")) {
+            Path candidate = projectRoot.resolve(name);
+            if (Files.isRegularFile(candidate)) {
+                String version = extractDockerFromTag(candidate);
+                LOG.debugf("Detected Docker project via %s: %s", name, version);
+                return new ArchetypeInfo("docker", version);
+            }
+        }
+
+        // 2. docker-compose at root
+        for (String name : List.of("docker-compose.yml", "docker-compose.yaml",
+                                   "compose.yml", "compose.yaml")) {
+            if (Files.isRegularFile(projectRoot.resolve(name))) {
+                LOG.debugf("Detected Docker project via %s", name);
+                return new ArchetypeInfo("docker", "unknown");
+            }
+        }
+
+        return null;
+    }
+
+    private String extractDockerFromTag(Path dockerfile) {
+        try {
+            for (String line : Files.readAllLines(dockerfile, StandardCharsets.UTF_8)) {
+                Matcher m = DOCKER_FROM_TAG_PATTERN.matcher(line);
+                if (m.matches()) {
+                    return m.group(1);
+                }
+            }
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot read %s: %s", dockerfile.getFileName(), e.getMessage());
+        }
+        return "unknown";
+    }
+
+    // ─── Terraform ───────────────────────────────────────────────────────────────
+
+    /**
+     * Pattern matching {@code required_version = "..."} inside a {@code terraform} block.
+     */
+    private static final Pattern TERRAFORM_REQUIRED_VERSION = Pattern.compile(
+            "required_version\\s*=\\s*\"([^\"]+)\"",
+            Pattern.CASE_INSENSITIVE
+    );
+
+    /**
+     * Detects a Terraform project from {@code *.tf} files (scanned up to depth 2) or a
+     * {@code .terraform-version} pin file at root.
+     *
+     * <p>Version is the {@code required_version} constraint from the {@code terraform {}} block
+     * (e.g. {@code ">= 1.5.0"}), the content of {@code .terraform-version}, or {@code "unknown"}.
+     */
+    ArchetypeInfo detectTerraform(Path projectRoot) {
+        // 1. .terraform-version pin file takes precedence as an explicit lock
+        Path pinFile = projectRoot.resolve(".terraform-version");
+        if (Files.isRegularFile(pinFile)) {
+            try {
+                String v = Files.readString(pinFile, StandardCharsets.UTF_8).trim();
+                if (!v.isEmpty()) {
+                    LOG.debugf("Detected Terraform via .terraform-version: %s", v);
+                    return new ArchetypeInfo("terraform", v);
+                }
+            } catch (IOException e) {
+                LOG.debugf("ArchetypeDetector: cannot read .terraform-version: %s", e.getMessage());
+            }
+        }
+
+        // 2. Scan for *.tf files up to depth 2
+        try (Stream<Path> stream = Files.walk(projectRoot, 2)) {
+            List<Path> tfFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".tf"))
+                    .filter(p -> !isInSkippedDir(projectRoot, p))
+                    .sorted()
+                    .toList();
+
+            if (tfFiles.isEmpty()) return null;
+
+            // Look for required_version in any .tf file
+            for (Path tf : tfFiles) {
+                try {
+                    String content = Files.readString(tf, StandardCharsets.UTF_8);
+                    Matcher m = TERRAFORM_REQUIRED_VERSION.matcher(content);
+                    if (m.find()) {
+                        String v = m.group(1).trim();
+                        LOG.debugf("Detected Terraform via required_version in %s: %s",
+                                tf.getFileName(), v);
+                        return new ArchetypeInfo("terraform", v);
+                    }
+                } catch (IOException e) {
+                    LOG.debugf("ArchetypeDetector: cannot read %s: %s", tf.getFileName(), e.getMessage());
+                }
+            }
+
+            // .tf files present but no required_version found
+            LOG.debugf("Detected Terraform project (no required_version constraint found)");
+            return new ArchetypeInfo("terraform", "unknown");
+
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot walk project for Terraform detection: %s", e.getMessage());
+            return null;
+        }
+    }
+
+    // ─── SQL ─────────────────────────────────────────────────────────────────────
+
+    /**
+     * Pattern matching Flyway/Liquibase versioned migration file names such as
+     * {@code V12__create_table.sql} or {@code V3_1__fix.sql}.
+     */
+    private static final Pattern SQL_MIGRATION_VERSION = Pattern.compile(
+            "^[Vv](\\d+(?:[._]\\d+)*)__.*\\.sql$"
+    );
+
+    /**
+     * Detects a SQL-centric project from {@code *.sql} files scanned up to depth 3.
+     *
+     * <p>Attempts to infer a version from the highest Flyway/Liquibase migration number
+     * ({@code V<n>__<description>.sql}); falls back to {@code "unknown"} when no versioned
+     * migrations are present.
+     */
+    ArchetypeInfo detectSql(Path projectRoot) {
+        try (Stream<Path> stream = Files.walk(projectRoot, DOCKERFILE_SCAN_MAX_DEPTH)) {
+            List<Path> sqlFiles = stream
+                    .filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".sql"))
+                    .filter(p -> !isInSkippedDir(projectRoot, p))
+                    .toList();
+
+            if (sqlFiles.isEmpty()) return null;
+
+            // Find the highest numeric migration version
+            int maxVersion = -1;
+            for (Path sql : sqlFiles) {
+                Matcher m = SQL_MIGRATION_VERSION.matcher(sql.getFileName().toString());
+                if (m.matches()) {
+                    try {
+                        int n = Integer.parseInt(m.group(1).replace("_", "").replace(".", ""));
+                        if (n > maxVersion) maxVersion = n;
+                    } catch (NumberFormatException ignored) {
+                        // non-numeric segment — skip
+                    }
+                }
+            }
+
+            String version = maxVersion >= 0 ? "V" + maxVersion : "unknown";
+            LOG.debugf("Detected SQL project: highest migration version %s", version);
+            return new ArchetypeInfo("sql", version);
+
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot walk project for SQL detection: %s", e.getMessage());
+            return null;
+        }
+    }
+
+    // ─── Shell ───────────────────────────────────────────────────────────────────
+
+    /**
+     * Detects a shell-script project from {@code *.sh} files present directly at the
+     * project root (depth 1 only, to avoid false positives from build tooling scripts).
+     *
+     * <p>Version is always {@code "unknown"} — shell scripts have no reliable framework
+     * version comparable to a language runtime or framework BOM.
+     */
+    ArchetypeInfo detectShell(Path projectRoot) {
+        try (Stream<Path> stream = Files.list(projectRoot)) {
+            boolean hasShell = stream
+                    .filter(Files::isRegularFile)
+                    .anyMatch(p -> p.getFileName().toString().endsWith(".sh"));
+            if (hasShell) {
+                LOG.debugf("Detected shell-script project");
+                return new ArchetypeInfo("shell", "unknown");
+            }
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot list root dir for shell detection: %s", e.getMessage());
+        }
         return null;
     }
 

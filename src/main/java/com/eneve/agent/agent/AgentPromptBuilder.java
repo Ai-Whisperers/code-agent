@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -51,7 +53,7 @@ public class AgentPromptBuilder {
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
         String guardrailText = resolveWritableGuardrails(
-                "Stop as soon as the task is complete. Do not refactor unrelated code.");
+                "Stop as soon as the task is complete. Do not refactor unrelated code.", workspace.getRoot());
 
         if (baselineLinterSummary != null && !baselineLinterSummary.isBlank()) {
             guardrailText += """
@@ -139,7 +141,7 @@ public class AgentPromptBuilder {
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
         return buildFixPrPrompt(request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
-                sharedRules, repoRules);
+                sharedRules, repoRules, workspace.getRoot());
     }
 
     /**
@@ -150,6 +152,19 @@ public class AgentPromptBuilder {
                                    String sourceBranch, String targetBranch,
                                    String diff, List<String> reviewComments,
                                    List<String> sharedRules, List<String> repoRules) {
+        return buildFixPrPrompt(request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
+                sharedRules, repoRules, null);
+    }
+
+    /**
+     * Core fix-PR prompt builder. Accepts an optional {@code workspaceRoot} for
+     * language-aware test command resolution.
+     */
+    public String buildFixPrPrompt(FixPrRequest request, String prTitle,
+                                   String sourceBranch, String targetBranch,
+                                   String diff, List<String> reviewComments,
+                                   List<String> sharedRules, List<String> repoRules,
+                                   Path workspaceRoot) {
         StringBuilder commentsSection = new StringBuilder();
         for (int i = 0; i < reviewComments.size(); i++) {
             commentsSection.append(i + 1).append(". ").append(reviewComments.get(i)).append("\n");
@@ -160,11 +175,13 @@ public class AgentPromptBuilder {
                 "SOURCE_BRANCH", sourceBranch,
                 "TARGET_BRANCH", targetBranch,
                 "COMMENTS", commentsSection.toString(),
-                "DIFF", diff.isEmpty() ? "(diff not available)" : diff
+                "DIFF", diff.isEmpty() ? "(diff not available)" : diff,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
         ));
 
         String guardrailText = resolveWritableGuardrails(
-                "Stop as soon as all review comments are addressed. Do not refactor unrelated code.");
+                "Stop as soon as all review comments are addressed. Do not refactor unrelated code.",
+                workspaceRoot);
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, fixInstructions);
@@ -182,6 +199,11 @@ public class AgentPromptBuilder {
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
+        Path workspaceRoot = workspace.getRoot();
+        String testCommand = resolveTestCommand(workspaceRoot);
+        String sourceDir = resolveSourceDir(workspaceRoot);
+        String testDir = resolveTestDir(workspaceRoot);
+
         String targetFilesSection;
         if (request.targetFiles() != null && !request.targetFiles().isEmpty()) {
             StringBuilder sb = new StringBuilder();
@@ -191,14 +213,14 @@ public class AgentPromptBuilder {
             }
             targetFilesSection = sb.toString();
         } else if (baseline != null) {
-            targetFilesSection = "Scan `src/main/java` to find classes that currently have low or no test coverage. " +
+            targetFilesSection = "Scan `" + sourceDir + "` to find source files that currently have low or no test coverage. " +
                     "Use the coverage baseline below to identify the highest-impact targets. " +
-                    "Prioritize service classes, utility classes, and classes with non-trivial business logic. " +
-                    "Skip generated code (e.g. Panache entities, mappers).\n";
+                    "Prioritize service classes, utility classes, and files with non-trivial business logic. " +
+                    "Skip generated/compiled code.\n";
         } else {
-            targetFilesSection = "Scan `src/main/java` to find classes that currently have no corresponding test file " +
-                    "in `src/test/java`. Prioritize service classes, utility classes, and classes with " +
-                    "non-trivial business logic. Skip generated code (e.g. Panache entities, mappers).\n";
+            targetFilesSection = "Scan `" + sourceDir + "` to find source files that currently have no corresponding test file " +
+                    "in `" + testDir + "`. Prioritize service classes, utility classes, and files with " +
+                    "non-trivial business logic. Skip generated/compiled code.\n";
         }
 
         String coverageSection = baseline != null
@@ -207,12 +229,16 @@ public class AgentPromptBuilder {
 
         String generateTestsInstructions = promptTemplates.resolve("generate-tests", Map.of(
                 "COVERAGE_SECTION", coverageSection,
-                "TARGET_FILES_SECTION", targetFilesSection
+                "TARGET_FILES_SECTION", targetFilesSection,
+                "BUILD_AND_TEST_COMMAND", testCommand
         ));
 
         String guardrailText = promptTemplates.resolve("guardrails.tests", Map.of(
                 "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
-                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands())
+                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands()),
+                "BUILD_AND_TEST_COMMAND", testCommand,
+                "SOURCE_DIR", sourceDir,
+                "TEST_DIR", testDir
         ));
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
@@ -236,6 +262,11 @@ public class AgentPromptBuilder {
 
     public String buildFixCommentPrompt(CommentContext ctx, List<ThreadComment> thread,
                                         String humanMessage) {
+        return buildFixCommentPrompt(ctx, thread, humanMessage, null);
+    }
+
+    public String buildFixCommentPrompt(CommentContext ctx, List<ThreadComment> thread,
+                                        String humanMessage, Path workspaceRoot) {
         String threadSection = formatThreadSection(thread);
 
         return promptTemplates.resolve("fix-comment", Map.of(
@@ -245,7 +276,8 @@ public class AgentPromptBuilder {
                 "CATEGORY", ctx.category() != null ? ctx.category() : "General",
                 "FINDING", ctx.findingText(),
                 "HUMAN_MESSAGE", humanMessage != null ? humanMessage : "(no additional instructions)",
-                "THREAD", threadSection.isBlank() ? "(no previous thread)" : threadSection
+                "THREAD", threadSection.isBlank() ? "(no previous thread)" : threadSection,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
         ));
     }
 
@@ -286,11 +318,12 @@ public class AgentPromptBuilder {
 
         String instructions = promptTemplates.resolve("metrics-fix", Map.of(
                 "METRICS_SECTION", metricsSection,
-                "THRESHOLD", String.valueOf(snapshot.threshold())
+                "THRESHOLD", String.valueOf(snapshot.threshold()),
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(null)
         ));
 
         String guardrailText = resolveWritableGuardrails(
-                "Stop as soon as all listed high-CC methods have been refactored and tests pass.");
+                "Stop as soon as all listed high-CC methods have been refactored and tests pass.", null);
 
         return rulesLoader.buildSystemPrompt(sharedRules, Collections.emptyList(),
                 null, guardrailText, instructions);
@@ -298,14 +331,88 @@ public class AgentPromptBuilder {
 
     // ─── Private helpers ────────────────────────────────────────────────
 
-    private String resolveWritableGuardrails(String stopCondition) {
+    private String resolveWritableGuardrails(String stopCondition, Path workspaceRoot) {
         return promptTemplates.resolve("guardrails.writable", Map.of(
                 "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
                 "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands()),
                 "MAX_FILES", String.valueOf(guardrails.getMaxFilesChanged()),
                 "MAX_LINES", String.valueOf(guardrails.getMaxLinesChanged()),
-                "STOP_CONDITION", stopCondition
+                "STOP_CONDITION", stopCondition,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
         ));
+    }
+
+    /**
+     * Resolves the appropriate test command for the given workspace root.
+     * Falls back to a human-readable instruction when workspace is null or detection fails.
+     */
+    static String resolveTestCommand(Path workspaceRoot) {
+        if (workspaceRoot == null) {
+            return "run the appropriate test command for this project's build system";
+        }
+        if (Files.exists(workspaceRoot.resolve("mvnw"))) {
+            return "./mvnw test";
+        }
+        if (Files.exists(workspaceRoot.resolve("pom.xml"))) {
+            return "mvn test";
+        }
+        if (Files.exists(workspaceRoot.resolve("build.gradle"))
+                || Files.exists(workspaceRoot.resolve("build.gradle.kts"))) {
+            return "gradle test";
+        }
+        if (Files.exists(workspaceRoot.resolve("package.json"))) {
+            return "npm test";
+        }
+        if (hasDotnetProject(workspaceRoot)) {
+            return "dotnet test";
+        }
+        if (Files.exists(workspaceRoot.resolve("composer.json"))) {
+            // Check for Laravel Artisan first, fall back to direct PHPUnit
+            if (Files.exists(workspaceRoot.resolve("artisan"))) {
+                return "php artisan test";
+            }
+            return "vendor/bin/phpunit";
+        }
+        return "run the appropriate test command for this project's build system";
+    }
+
+    /**
+     * Resolves the primary source directory for test generation scoping.
+     */
+    static String resolveSourceDir(Path workspaceRoot) {
+        if (workspaceRoot == null) return "src";
+        if (Files.exists(workspaceRoot.resolve("src/main/java"))) return "src/main/java";
+        if (Files.exists(workspaceRoot.resolve("src/main"))) return "src/main";
+        if (Files.exists(workspaceRoot.resolve("src"))) return "src";
+        if (Files.exists(workspaceRoot.resolve("app"))) return "app";   // Laravel convention
+        if (Files.exists(workspaceRoot.resolve("lib"))) return "lib";
+        return "src";
+    }
+
+    /**
+     * Resolves the primary test directory for test generation scoping.
+     */
+    static String resolveTestDir(Path workspaceRoot) {
+        if (workspaceRoot == null) return "tests";
+        if (Files.exists(workspaceRoot.resolve("src/test/java"))) return "src/test/java";
+        if (Files.exists(workspaceRoot.resolve("src/test"))) return "src/test";
+        if (Files.exists(workspaceRoot.resolve("tests"))) return "tests";
+        if (Files.exists(workspaceRoot.resolve("test"))) return "test";
+        if (Files.exists(workspaceRoot.resolve("__tests__"))) return "__tests__";
+        if (Files.exists(workspaceRoot.resolve("spec"))) return "spec";
+        return "tests";
+    }
+
+    private static boolean hasDotnetProject(Path workspaceRoot) {
+        try (var stream = Files.list(workspaceRoot)) {
+            return stream.anyMatch(p -> {
+                String name = p.getFileName().toString().toLowerCase();
+                return name.endsWith(".sln") || name.endsWith(".csproj")
+                        || name.endsWith(".fsproj") || name.endsWith(".vbproj");
+            });
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     private RepoSettings loadRepoSettings(String workspace, String repoSlug) {

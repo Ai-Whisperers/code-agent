@@ -25,6 +25,9 @@ public class LinterConfig {
     @ConfigProperty(name = "linter.dotnet-format.enabled", defaultValue = "true")
     boolean dotnetFormatEnabled;
 
+    @ConfigProperty(name = "linter.phpstan.enabled", defaultValue = "true")
+    boolean phpstanEnabled;
+
     @ConfigProperty(name = "linter.max-fix-iterations", defaultValue = "2")
     int maxFixIterations;
 
@@ -49,6 +52,7 @@ public class LinterConfig {
     public boolean isSpotbugsEnabled() { return spotbugsEnabled; }
     public boolean isEslintEnabled() { return eslintEnabled; }
     public boolean isDotnetFormatEnabled() { return dotnetFormatEnabled; }
+    public boolean isPhpstanEnabled() { return phpstanEnabled; }
     public int getMaxFixIterations() { return maxFixIterations; }
     public boolean isFailOnNewIssues() { return failOnNewIssues; }
     public long getTimeoutMinutes() { return timeoutMinutes; }
@@ -63,6 +67,7 @@ public class LinterConfig {
             case "spotbugs" -> spotbugsEnabled;
             case "eslint" -> eslintEnabled;
             case "dotnet-format" -> dotnetFormatEnabled;
+            case "phpstan" -> phpstanEnabled;
             default -> false;
         };
     }

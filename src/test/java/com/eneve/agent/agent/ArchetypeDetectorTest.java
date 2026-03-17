@@ -396,7 +396,8 @@ class ArchetypeDetectorTest {
     }
 
     @Test
-    void dockerfileWithoutWildFlyFromDoesNotTriggerDetection() throws IOException {
+    void dockerfileWithoutWildFlyFromDetectedAsDockerArchetype() throws IOException {
+        // A non-WildFly Dockerfile is now classified as a generic "docker" archetype.
         writeDockerfile("Dockerfile",
                 "FROM eclipse-temurin:17-jre\n" +
                 "COPY target/app.jar /app.jar\n" +
@@ -404,7 +405,9 @@ class ArchetypeDetectorTest {
 
         ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
 
-        assertNull(info, "Non-WildFly Dockerfile should return null");
+        assertNotNull(info);
+        assertEquals("docker", info.archetype());
+        assertEquals("17-jre", info.version());
     }
 
     /**
@@ -626,7 +629,7 @@ class ArchetypeDetectorTest {
     @Test
     void typeScriptDetectionSkippedWhenPomPresent() throws IOException {
         // A Java project with a package.json (e.g. for end-to-end tests) must not
-        // be classified as a TypeScript frontend project.
+        // be classified as a TypeScript frontend project — it should be "jar".
         writePom("""
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project>
@@ -644,7 +647,10 @@ class ArchetypeDetectorTest {
 
         ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
 
-        assertNull(info, "pom.xml presence should suppress TypeScript frontend detection");
+        assertNotNull(info, "pom.xml project should still be detected (as jar)");
+        assertNotEquals("react", info.archetype(), "pom.xml presence should suppress TypeScript frontend detection");
+        assertNotEquals("angular", info.archetype(), "pom.xml presence should suppress TypeScript frontend detection");
+        assertEquals("jar", info.archetype());
     }
 
     // ─── stripVersionRange unit tests ────────────────────────────────────────────
@@ -677,10 +683,413 @@ class ArchetypeDetectorTest {
         assertNull(ArchetypeDetector.stripVersionRange(null));
     }
 
+    // ─── Maven jar / pom packaging ───────────────────────────────────────────────
+
+    @Test
+    void detectsJarViaExplicitPackaging() throws IOException {
+        Path root = writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>plain-service</artifactId>
+                    <version>2.3.0</version>
+                    <packaging>jar</packaging>
+                </project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(root);
+
+        assertNotNull(info);
+        assertEquals("jar", info.archetype());
+        assertEquals("2.3.0", info.version());
+    }
+
+    @Test
+    void detectsJarWhenPackagingAbsent() throws IOException {
+        Path root = writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>plain-service</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                </project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(root);
+
+        assertNotNull(info);
+        assertEquals("jar", info.archetype());
+        assertEquals("1.0.0-SNAPSHOT", info.version());
+    }
+
+    @Test
+    void detectsPomPackaging() throws IOException {
+        Path root = writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>parent-pom</artifactId>
+                    <version>3.0.0</version>
+                    <packaging>pom</packaging>
+                    <modules>
+                        <module>service-a</module>
+                    </modules>
+                </project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(root);
+
+        assertNotNull(info);
+        assertEquals("pom", info.archetype());
+        assertEquals("3.0.0", info.version());
+    }
+
+    @Test
+    void jarNotDetectedForQuarkusProject() throws IOException {
+        // Quarkus should take priority over the generic Maven jar fallback
+        Path root = writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>my-service</artifactId>
+                    <version>1.0.0-SNAPSHOT</version>
+                    <packaging>jar</packaging>
+                    <properties>
+                        <quarkus.platform.version>3.25.4</quarkus.platform.version>
+                    </properties>
+                </project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(root);
+
+        assertNotNull(info);
+        assertEquals("quarkus", info.archetype(), "Quarkus must take priority over jar");
+    }
+
+    // ─── .NET ─────────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsDotnetViaCsproj() throws IOException {
+        Files.writeString(tempDir.resolve("MyApp.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <OutputType>Exe</OutputType>
+                    <TargetFramework>net9.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("dotnet", info.archetype());
+        assertEquals("net9.0", info.version());
+    }
+
+    @Test
+    void detectsDotnetViaFsproj() throws IOException {
+        Files.writeString(tempDir.resolve("MyLib.fsproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFramework>net8.0</TargetFramework>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("dotnet", info.archetype());
+        assertEquals("net8.0", info.version());
+    }
+
+    @Test
+    void detectsDotnetWithMultipleTargetFrameworks() throws IOException {
+        Files.writeString(tempDir.resolve("MultiTarget.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup>
+                    <TargetFrameworks>net8.0;net9.0</TargetFrameworks>
+                  </PropertyGroup>
+                </Project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("dotnet", info.archetype());
+        assertEquals("net8.0", info.version(), "Should take the first framework in the list");
+    }
+
+    @Test
+    void detectsDotnetViaGlobalJson() throws IOException {
+        // .sln present but no project file — falls back to global.json
+        Files.writeString(tempDir.resolve("MySolution.sln"), "");
+        Files.writeString(tempDir.resolve("global.json"), """
+                {
+                  "sdk": {
+                    "version": "8.0.300",
+                    "rollForward": "latestMinor"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("dotnet", info.archetype());
+        assertEquals("8.0.300", info.version());
+    }
+
+    @Test
+    void dotnetNotDetectedWhenPomPresent() throws IOException {
+        // A Java project with a stray .csproj must not be classified as dotnet
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>java-app</artifactId>
+                    <version>1.0.0</version>
+                </project>
+                """);
+        Files.writeString(tempDir.resolve("tool.csproj"), """
+                <Project Sdk="Microsoft.NET.Sdk">
+                  <PropertyGroup><TargetFramework>net9.0</TargetFramework></PropertyGroup>
+                </Project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertNotEquals("dotnet", info.archetype(), "pom.xml presence must suppress dotnet detection");
+    }
+
+    // ─── Docker ───────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsDockerViaRootDockerfile() throws IOException {
+        writeDockerfile("Dockerfile",
+                "FROM eclipse-temurin:21-jre\n" +
+                "COPY target/app.jar /app.jar\n" +
+                "ENTRYPOINT [\"java\", \"-jar\", \"/app.jar\"]\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("docker", info.archetype());
+        assertEquals("21-jre", info.version());
+    }
+
+    @Test
+    void detectsDockerViaDockerCompose() throws IOException {
+        Files.writeString(tempDir.resolve("docker-compose.yml"), """
+                version: "3.8"
+                services:
+                  app:
+                    image: my-app:latest
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("docker", info.archetype());
+        assertEquals("unknown", info.version());
+    }
+
+    @Test
+    void dockerVersionIsUnknownWhenFromHasNoTag() throws IOException {
+        writeDockerfile("Dockerfile",
+                "FROM scratch\n" +
+                "COPY app /app\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("docker", info.archetype());
+        assertEquals("unknown", info.version(), "FROM scratch has no tag — version should be unknown");
+    }
+
+    @Test
+    void dockerNotDetectedWhenAlreadyWildFly() throws IOException {
+        writeDockerfile("Dockerfile",
+                "FROM quay.io/wildfly/wildfly:31.0.0.Final-jdk17\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("wildfly", info.archetype(), "WildFly Dockerfile must take priority over generic docker");
+    }
+
+    // ─── Terraform ────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsTerraformViaTfFile() throws IOException {
+        Files.writeString(tempDir.resolve("main.tf"), """
+                provider "aws" {
+                  region = "eu-west-1"
+                }
+
+                resource "aws_s3_bucket" "my_bucket" {
+                  bucket = "my-bucket"
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("terraform", info.archetype());
+        assertEquals("unknown", info.version());
+    }
+
+    @Test
+    void detectsTerraformVersionFromRequiredVersion() throws IOException {
+        Files.writeString(tempDir.resolve("versions.tf"), """
+                terraform {
+                  required_version = ">= 1.5.0"
+
+                  required_providers {
+                    aws = {
+                      source  = "hashicorp/aws"
+                      version = "~> 5.0"
+                    }
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("terraform", info.archetype());
+        assertEquals(">= 1.5.0", info.version());
+    }
+
+    @Test
+    void detectsTerraformViaTerraformVersionFile() throws IOException {
+        Files.writeString(tempDir.resolve(".terraform-version"), "1.7.3\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("terraform", info.archetype());
+        assertEquals("1.7.3", info.version());
+    }
+
+    @Test
+    void terraformVersionFileTakesPriorityOverTfFile() throws IOException {
+        Files.writeString(tempDir.resolve(".terraform-version"), "1.8.0");
+        Files.writeString(tempDir.resolve("main.tf"), """
+                terraform {
+                  required_version = ">= 1.5.0"
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("terraform", info.archetype());
+        assertEquals("1.8.0", info.version(), ".terraform-version pin should take priority");
+    }
+
+    // ─── SQL ──────────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsSqlViaSqlFile() throws IOException {
+        Files.createDirectories(tempDir.resolve("db"));
+        Files.writeString(tempDir.resolve("db/schema.sql"), "CREATE TABLE foo (id INT);");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("sql", info.archetype());
+    }
+
+    @Test
+    void detectsSqlWithFlywayVersionPrefix() throws IOException {
+        Path migrations = tempDir.resolve("src/main/resources/db/migration");
+        Files.createDirectories(migrations);
+        Files.writeString(migrations.resolve("V1__init.sql"), "CREATE TABLE foo (id INT);");
+        Files.writeString(migrations.resolve("V2__add_column.sql"), "ALTER TABLE foo ADD COLUMN name VARCHAR(255);");
+        Files.writeString(migrations.resolve("V12__latest.sql"), "CREATE INDEX idx ON foo(name);");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("sql", info.archetype());
+        assertEquals("V12", info.version(), "Highest Flyway migration version should be returned");
+    }
+
+    @Test
+    void sqlNotDetectedWhenPomPresent() throws IOException {
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>java-app</artifactId>
+                    <version>1.0.0</version>
+                </project>
+                """);
+        Files.writeString(tempDir.resolve("schema.sql"), "CREATE TABLE foo (id INT);");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertNotEquals("sql", info.archetype(), "pom.xml presence must suppress SQL detection");
+    }
+
+    // ─── Shell ────────────────────────────────────────────────────────────────────
+
+    @Test
+    void detectsShellViaShFile() throws IOException {
+        Files.writeString(tempDir.resolve("deploy.sh"), "#!/bin/bash\necho 'deploying'\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("shell", info.archetype());
+        assertEquals("unknown", info.version());
+    }
+
+    @Test
+    void shellNotDetectedWhenPomPresent() throws IOException {
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>java-app</artifactId>
+                    <version>1.0.0</version>
+                </project>
+                """);
+        Files.writeString(tempDir.resolve("build.sh"), "#!/bin/bash\nmvn clean package\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertNotEquals("shell", info.archetype(), "pom.xml presence must suppress shell detection");
+    }
+
+    @Test
+    void shellNotDetectedFromNestedShFiles() throws IOException {
+        // Shell files in subdirectories should not trigger detection (depth 1 only)
+        Files.createDirectories(tempDir.resolve("scripts"));
+        Files.writeString(tempDir.resolve("scripts/util.sh"), "#!/bin/bash\necho 'util'\n");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNull(info, "Shell files in subdirectories should not trigger detection");
+    }
+
     // ─── Negative cases ───────────────────────────────────────────────────────────
 
     @Test
-    void returnsNullForUnrecognisedPom() throws IOException {
+    void unrecognisedPomIsClassifiedAsJar() throws IOException {
+        // A plain Maven project (e.g. Spring Boot, plain library) is classified as "jar"
+        // since no framework-specific archetype matched.
         Path root = writePom("""
                 <?xml version="1.0" encoding="UTF-8"?>
                 <project>
@@ -697,12 +1106,108 @@ class ArchetypeDetectorTest {
 
         ArchetypeDetector.ArchetypeInfo info = detector.detect(root);
 
-        assertNull(info, "Non-Quarkus/WildFly project should return null");
+        assertNotNull(info, "Plain Maven project should be detected as jar");
+        assertEquals("jar", info.archetype());
+        assertEquals("1.0.0-SNAPSHOT", info.version());
     }
 
     @Test
     void returnsNullWhenNoPomAndNoDockerfile() {
         ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
         assertNull(info, "Missing pom.xml and Dockerfile should return null");
+    }
+
+    // ─── PHP — Laravel / Symfony / Generic ────────────────────────────────────────
+
+    @Test
+    void detectsLaravelFromComposerJson() throws IOException {
+        Files.writeString(tempDir.resolve("composer.json"), """
+                {
+                  "require": {
+                    "laravel/framework": "^11.0",
+                    "php": "^8.2"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+
+        assertNotNull(info, "Expected Laravel to be detected");
+        assertEquals("laravel", info.archetype());
+        assertEquals("11.0", info.version());
+    }
+
+    @Test
+    void detectsSymfonyFromComposerJson() throws IOException {
+        Files.writeString(tempDir.resolve("composer.json"), """
+                {
+                  "require": {
+                    "symfony/framework-bundle": "^6.4",
+                    "php": "^8.1"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+
+        assertNotNull(info, "Expected Symfony to be detected");
+        assertEquals("symfony", info.archetype());
+        assertEquals("6.4", info.version());
+    }
+
+    @Test
+    void detectsGenericPhpProjectWithPhpConstraint() throws IOException {
+        Files.writeString(tempDir.resolve("composer.json"), """
+                {
+                  "require": {
+                    "php": ">=8.0",
+                    "monolog/monolog": "^3.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+
+        assertNotNull(info, "Expected generic PHP to be detected");
+        assertEquals("php", info.archetype());
+    }
+
+    @Test
+    void detectsGenericPhpProjectWithoutPhpConstraint() throws IOException {
+        Files.writeString(tempDir.resolve("composer.json"), """
+                {
+                  "require": {
+                    "monolog/monolog": "^3.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+
+        assertNotNull(info, "Expected generic PHP to be detected when composer.json present");
+        assertEquals("php", info.archetype());
+        assertEquals("unknown", info.version());
+    }
+
+    @Test
+    void phpFrameworkDetectionReturnsNullWhenNoComposerJson() {
+        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        assertNull(info, "Should return null when composer.json is absent");
+    }
+
+    @Test
+    void detectDetectsLaravelViaTopLevelDetect() throws IOException {
+        Files.writeString(tempDir.resolve("composer.json"), """
+                {
+                  "require": {
+                    "laravel/framework": "^10.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("laravel", info.archetype());
     }
 }

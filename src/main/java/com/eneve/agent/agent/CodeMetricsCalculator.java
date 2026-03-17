@@ -17,6 +17,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParserConfiguration;
@@ -63,7 +65,57 @@ public class CodeMetricsCalculator {
     private static final long MAX_SCAN_TIME_MS = 120_000;  // 2 minutes
 
     private static final Set<String> SKIP_DIRS = Set.of(
-            ".git", "node_modules", "target", "build", ".gradle", "bin", "obj");
+            ".git", "node_modules", "target", "build", ".gradle", "bin", "obj",
+            "vendor", "dist", "out", ".next", ".nuxt");
+
+    // ── Regex-based CC patterns (shared across non-Java languages) ───────
+
+    // C# method detection
+    private static final Pattern CS_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|private|protected|internal|static|virtual|override|abstract|async|new|sealed|partial)\\s+)*"
+                    + "(?:[\\w<>\\[\\],\\s?]+?)\\s+(?<name>\\w+)\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Set<String> CS_KEYWORDS = Set.of(
+            "if", "else", "for", "foreach", "while", "do", "switch", "case", "return",
+            "try", "catch", "finally", "throw", "using", "lock", "yield", "await",
+            "var", "new", "typeof", "sizeof", "nameof", "default", "checked", "unchecked",
+            "this", "base", "null", "true", "false", "void", "string", "int", "long",
+            "bool", "double", "float", "decimal", "byte", "char", "short", "object",
+            "get", "set", "value", "namespace", "class", "interface", "struct", "enum", "record");
+
+    // TypeScript method/function detection
+    private static final Pattern TS_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|private|protected|static|async|readonly|abstract|override)\\s+)*"
+                    + "(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?::\\s*[\\w<>\\[\\]|&?,\\s]+?)?\\s*(?:\\{|=>)",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_FUNCTION_DECL = Pattern.compile(
+            "^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Set<String> TS_KEYWORDS = Set.of(
+            "if", "else", "for", "while", "do", "switch", "case", "return", "break", "continue",
+            "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "in", "of",
+            "this", "super", "null", "undefined", "true", "false", "void", "let", "const", "var",
+            "async", "await", "yield", "from", "import", "export", "default", "class", "extends",
+            "implements", "interface", "type", "enum", "namespace", "module", "declare", "abstract",
+            "get", "set", "static", "public", "private", "protected", "readonly", "override",
+            "console", "Math", "Object", "Array", "String", "Number", "Boolean", "Promise",
+            "require", "constructor");
+
+    // PHP method/function detection
+    private static final Pattern PHP_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|protected|private|static|abstract|final)\\s+)*function\\s+(?<name>\\w+)\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Set<String> PHP_KEYWORDS = Set.of(
+            "if", "else", "elseif", "for", "foreach", "while", "do", "switch", "case", "return",
+            "break", "continue", "try", "catch", "finally", "throw", "new", "clone", "echo", "print",
+            "isset", "empty", "unset", "list", "array", "null", "true", "false", "self", "parent",
+            "static", "abstract", "final", "class", "interface", "trait", "enum", "extends",
+            "implements", "namespace", "use", "require", "require_once", "include", "include_once",
+            "match", "fn", "yield", "this", "string", "int", "float", "bool", "void", "mixed");
 
     // ─── Public API ──────────────────────────────────────────────────────
 
@@ -79,9 +131,9 @@ public class CodeMetricsCalculator {
      */
     public CodeMetricsSnapshot calculate(Path root, String workspace, String repoSlug,
                                          String branch, int threshold) {
-        List<Path> javaFiles = findJavaFiles(root);
+        List<Path> javaFiles = findSourceFiles(root);
 
-        LOG.infof("CodeMetrics: found %d Java files to analyse for %s/%s", javaFiles.size(), workspace, repoSlug);
+        LOG.infof("CodeMetrics: found %d source files to analyse for %s/%s", javaFiles.size(), workspace, repoSlug);
 
         // Parse files in parallel using a bounded thread pool to speed up large repos.
         // JavaParser instances are created per-thread (StaticJavaParser delegates to a
@@ -93,7 +145,7 @@ public class CodeMetricsCalculator {
         long startTime = System.currentTimeMillis();
 
         List<Future<?>> futures = new ArrayList<>(javaFiles.size());
-        for (Path file : javaFiles) {
+        for (Path file : javaFiles) {  // variable is now all source files
             futures.add(pool.submit(() -> {
                 if (System.currentTimeMillis() - startTime > MAX_SCAN_TIME_MS) {
                     return;
@@ -137,7 +189,7 @@ public class CodeMetricsCalculator {
 
     // ─── File walking ────────────────────────────────────────────────────
 
-    private List<Path> findJavaFiles(Path root) {
+    private List<Path> findSourceFiles(Path root) {
         List<Path> files = new ArrayList<>();
         try {
             Files.walkFileTree(root, new SimpleFileVisitor<>() {
@@ -151,8 +203,13 @@ public class CodeMetricsCalculator {
 
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-                    if (file.toString().endsWith(".java")) {
-                        files.add(file);
+                    String name = file.toString();
+                    if (name.endsWith(".java") || name.endsWith(".cs")
+                            || name.endsWith(".ts") || name.endsWith(".tsx")
+                            || name.endsWith(".php")) {
+                        if (!name.endsWith(".d.ts")) {
+                            files.add(file);
+                        }
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -168,9 +225,24 @@ public class CodeMetricsCalculator {
         return files;
     }
 
-    // ─── AST analysis ────────────────────────────────────────────────────
+    // ─── Analysis dispatcher ─────────────────────────────────────────────
 
     private void analyseFile(Path file, String relativePath, List<MethodMetric> out) throws Exception {
+        String name = file.toString();
+        if (name.endsWith(".java")) {
+            analyseJavaFile(file, relativePath, out);
+        } else if (name.endsWith(".cs")) {
+            analyseRegexFile(file, relativePath, "C#", CS_METHOD_DECL, CS_KEYWORDS, out);
+        } else if (name.endsWith(".ts") || name.endsWith(".tsx")) {
+            analyseTypeScriptFile(file, relativePath, out);
+        } else if (name.endsWith(".php")) {
+            analyseRegexFile(file, relativePath, "PHP", PHP_METHOD_DECL, PHP_KEYWORDS, out);
+        }
+    }
+
+    // ─── Java AST analysis ───────────────────────────────────────────────
+
+    private void analyseJavaFile(Path file, String relativePath, List<MethodMetric> out) throws Exception {
         CompilationUnit cu = new JavaParser(PARSER_CONFIG).parse(file)
                 .getResult()
                 .orElseThrow(() -> new IllegalStateException("Parse returned empty result"));
@@ -249,6 +321,204 @@ public class CodeMetricsCalculator {
                 .filter(e -> e.getOperator() == BinaryExpr.Operator.AND
                         || e.getOperator() == BinaryExpr.Operator.OR)
                 .count();
+    }
+
+    // ─── Regex-based analysis (C#, TypeScript, PHP) ───────────────────────
+
+    /**
+     * Generic regex-based CC analyser for C# and PHP.
+     * Detects method boundaries by brace counting and counts decision keywords in the body.
+     */
+    private void analyseRegexFile(Path file, String relativePath, String language,
+                                  Pattern methodPattern, Set<String> keywords,
+                                  List<MethodMetric> out) throws IOException {
+        String source = Files.readString(file);
+
+        Matcher methodMatcher = methodPattern.matcher(source);
+        while (methodMatcher.find()) {
+            String methodName = methodMatcher.group("name");
+            if (keywords.contains(methodName)) continue;
+
+            int lineStart = lineNumberAt(source, methodMatcher.start());
+            int bodyStart = source.indexOf('{', methodMatcher.end());
+            if (bodyStart < 0) continue;
+
+            int bodyEnd = findClosingBrace(source, bodyStart);
+            String body = source.substring(bodyStart, Math.min(bodyEnd + 1, source.length()));
+            int lineEnd = lineNumberAt(source, Math.min(bodyEnd, source.length() - 1));
+
+            int cc = computeRegexCC(body, language);
+            int lineCount = lineEnd - lineStart + 1;
+
+            out.add(new MethodMetric(relativePath, language, methodName, cc, lineCount, 0, lineStart, lineEnd));
+        }
+    }
+
+    /**
+     * TypeScript analysis: handles both class methods and top-level functions.
+     *
+     * <p>Note: {@code TS_METHOD_DECL} ends with {@code (?:\{|=>)}, which means the opening
+     * brace is part of the match. {@link #findBodyOpenBrace} accounts for this by checking
+     * whether the match already consumed the brace.
+     */
+    private void analyseTypeScriptFile(Path file, String relativePath, List<MethodMetric> out)
+            throws IOException {
+        String source = Files.readString(file);
+
+        // Class methods
+        Matcher methodMatcher = TS_METHOD_DECL.matcher(source);
+        while (methodMatcher.find()) {
+            String methodName = methodMatcher.group("name");
+            if (TS_KEYWORDS.contains(methodName)) continue;
+
+            int lineStart = lineNumberAt(source, methodMatcher.start());
+            int bodyStart = findBodyOpenBrace(source, methodMatcher.end());
+            if (bodyStart < 0) continue;
+
+            int bodyEnd = findClosingBrace(source, bodyStart);
+            String body = source.substring(bodyStart, Math.min(bodyEnd + 1, source.length()));
+            int lineEnd = lineNumberAt(source, Math.min(bodyEnd, source.length() - 1));
+
+            int cc = computeRegexCC(body, "TypeScript");
+            out.add(new MethodMetric(relativePath, "TypeScript", methodName, cc,
+                    lineEnd - lineStart + 1, 0, lineStart, lineEnd));
+        }
+
+        // Top-level functions
+        Matcher funcMatcher = TS_FUNCTION_DECL.matcher(source);
+        while (funcMatcher.find()) {
+            String funcName = funcMatcher.group("name");
+            if (TS_KEYWORDS.contains(funcName)) continue;
+
+            int lineStart = lineNumberAt(source, funcMatcher.start());
+            int bodyStart = source.indexOf('{', funcMatcher.end());
+            if (bodyStart < 0) continue;
+
+            int bodyEnd = findClosingBrace(source, bodyStart);
+            String body = source.substring(bodyStart, Math.min(bodyEnd + 1, source.length()));
+            int lineEnd = lineNumberAt(source, Math.min(bodyEnd, source.length() - 1));
+
+            int cc = computeRegexCC(body, "TypeScript");
+            out.add(new MethodMetric(relativePath, "TypeScript", funcName, cc,
+                    lineEnd - lineStart + 1, 0, lineStart, lineEnd));
+        }
+    }
+
+    /**
+     * Finds the opening brace of a method body.
+     *
+     * <p>Some patterns (e.g. {@code TS_METHOD_DECL}) end with the literal {@code {}, so
+     * {@code matchEnd} is already past the brace. This helper checks one character back
+     * before falling back to a forward search.
+     */
+    private static int findBodyOpenBrace(String source, int matchEnd) {
+        if (matchEnd > 0 && source.charAt(matchEnd - 1) == '{') {
+            return matchEnd - 1;
+        }
+        return source.indexOf('{', matchEnd);
+    }
+
+    /**
+     * Counts decision points in a method body using language-aware keyword matching.
+     * Base CC = 1, plus one point per branch keyword or logical operator.
+     */
+    private int computeRegexCC(String body, String language) {
+        int cc = 1;
+
+        // Strip string literals and comments to avoid false matches
+        String cleaned = body
+                .replaceAll("//[^\n]*", " ")           // single-line comments
+                .replaceAll("/\\*.*?\\*/", " ")         // block comments
+                .replaceAll("\"(?:[^\"\\\\]|\\\\.)*\"", "\"\"")  // double-quoted strings
+                .replaceAll("'(?:[^'\\\\]|\\\\.)*'", "''");       // single-quoted strings
+
+        // Common branch keywords for all supported languages
+        cc += countKeyword(cleaned, "if");
+        cc += countKeyword(cleaned, "else if");
+        cc += countKeyword(cleaned, "elseif");   // PHP
+        cc += countKeyword(cleaned, "for");
+        cc += countKeyword(cleaned, "foreach");
+        cc += countKeyword(cleaned, "while");
+        cc += countKeyword(cleaned, "do");
+        cc += countKeyword(cleaned, "catch");
+        cc += countSwitchCases(cleaned);
+
+        // Logical operators
+        cc += countOccurrences(cleaned, "&&");
+        cc += countOccurrences(cleaned, "||");
+        cc += countOccurrences(cleaned, "??");   // null coalescing (TS/C#)
+        cc += countOccurrences(cleaned, "?.");   // optional chaining (TS)
+
+        // Ternary operators
+        cc += countTernaryOperators(cleaned);
+
+        // Deduplicate: "else if" was counted once above, subtract "else" overcounts
+        // (we count "if" which includes the "if" in "else if")
+
+        return cc;
+    }
+
+    private int countKeyword(String source, String keyword) {
+        int count = 0;
+        Pattern p = Pattern.compile("\\b" + Pattern.quote(keyword) + "\\b");
+        Matcher m = p.matcher(source);
+        while (m.find()) count++;
+        return count;
+    }
+
+    private int countSwitchCases(String source) {
+        // Count "case X:" but not "default:"
+        Pattern p = Pattern.compile("\\bcase\\b[^:]+:");
+        Matcher m = p.matcher(source);
+        int count = 0;
+        while (m.find()) count++;
+        return count;
+    }
+
+    private int countOccurrences(String source, String token) {
+        int count = 0;
+        int idx = 0;
+        while ((idx = source.indexOf(token, idx)) >= 0) {
+            count++;
+            idx += token.length();
+        }
+        return count;
+    }
+
+    private int countTernaryOperators(String source) {
+        // Count '?' that are part of ternary, excluding '?.' and '??'
+        int count = 0;
+        for (int i = 0; i < source.length(); i++) {
+            if (source.charAt(i) == '?') {
+                char next = i + 1 < source.length() ? source.charAt(i + 1) : '\0';
+                if (next != '.' && next != '?') {
+                    count++;
+                }
+            }
+        }
+        return count;
+    }
+
+    private static int lineNumberAt(String source, int charOffset) {
+        int line = 1;
+        for (int i = 0; i < charOffset && i < source.length(); i++) {
+            if (source.charAt(i) == '\n') line++;
+        }
+        return line;
+    }
+
+    private static int findClosingBrace(String source, int fromIndex) {
+        int depth = 0;
+        boolean inBody = false;
+        for (int i = fromIndex; i < source.length(); i++) {
+            char c = source.charAt(i);
+            if (c == '{') { depth++; inBody = true; }
+            else if (c == '}') {
+                depth--;
+                if (inBody && depth == 0) return i;
+            }
+        }
+        return Math.min(fromIndex + 5000, source.length() - 1);
     }
 
     // ─── Data model ──────────────────────────────────────────────────────

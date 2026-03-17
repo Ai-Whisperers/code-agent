@@ -39,7 +39,7 @@ public class CodeGraphIndexer {
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
     private static final long MAX_INDEX_TIME_MS = 60_000;  // 60 seconds
 
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs");
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs", ".ts", ".tsx", ".php");
 
     // ── C# regex patterns ──────────────────────────────────────────────
     private static final Pattern CS_TYPE_DECL = Pattern.compile(
@@ -74,6 +74,64 @@ public class CodeGraphIndexer {
             "bool", "double", "float", "decimal", "byte", "char", "short", "object",
             "get", "set", "value", "namespace");
 
+    // ── TypeScript regex patterns ──────────────────────────────────────
+    private static final Pattern TS_TYPE_DECL = Pattern.compile(
+            "^\\s*(?:export\\s+)?(?:abstract\\s+)?(?<kind>class|interface|enum|type)\\s+(?<name>\\w+)"
+                    + "(?:<[^>]*>)?(?:\\s+extends\\s+(?<ext>[\\w<>, ]+?))?(?:\\s+implements\\s+(?<impl>[^{]+?))?\\s*(?:\\{|=)",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|private|protected|static|async|readonly|abstract|override)\\s+)*"
+                    + "(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?::\\s*[\\w<>\\[\\]|&?,\\s]+?)?\\s*(?:\\{|=>)",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_FUNCTION_DECL = Pattern.compile(
+            "^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_IMPORT = Pattern.compile(
+            "^\\s*import\\s+(?:[\\w*{},\\s]+\\s+from\\s+)?['\"](?<module>[^'\"]+)['\"]",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_METHOD_CALL = Pattern.compile(
+            "(?<scope>\\w+)\\.(?<method>\\w+)\\s*\\(");
+
+    private static final Set<String> TS_KEYWORDS = Set.of(
+            "if", "else", "for", "while", "do", "switch", "case", "return", "break", "continue",
+            "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "in", "of",
+            "this", "super", "null", "undefined", "true", "false", "void", "let", "const", "var",
+            "async", "await", "yield", "from", "import", "export", "default", "class", "extends",
+            "implements", "interface", "type", "enum", "namespace", "module", "declare", "abstract",
+            "get", "set", "static", "public", "private", "protected", "readonly", "override",
+            "console", "Math", "Object", "Array", "String", "Number", "Boolean", "Promise",
+            "require", "constructor");
+
+    // ── PHP regex patterns ─────────────────────────────────────────────
+    private static final Pattern PHP_TYPE_DECL = Pattern.compile(
+            "^\\s*(?:(?:abstract|final|readonly)\\s+)*(?<kind>class|interface|trait|enum)\\s+(?<name>\\w+)"
+                    + "(?:\\s+extends\\s+(?<ext>[\\w\\\\]+))?(?:\\s+implements\\s+(?<impl>[^{]+?))?\\s*\\{",
+            Pattern.MULTILINE);
+
+    private static final Pattern PHP_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|protected|private|static|abstract|final)\\s+)*function\\s+(?<name>\\w+)\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Pattern PHP_USE = Pattern.compile(
+            "^\\s*use\\s+(?<ns>[\\w\\\\]+)(?:\\s+as\\s+\\w+)?\\s*;",
+            Pattern.MULTILINE);
+
+    private static final Pattern PHP_METHOD_CALL = Pattern.compile(
+            "(?<scope>\\$?\\w+)(?:->|::)(?<method>\\w+)\\s*\\(");
+
+    private static final Set<String> PHP_KEYWORDS = Set.of(
+            "if", "else", "elseif", "for", "foreach", "while", "do", "switch", "case", "return",
+            "break", "continue", "try", "catch", "finally", "throw", "new", "clone", "echo", "print",
+            "isset", "empty", "unset", "list", "array", "null", "true", "false", "self", "parent",
+            "static", "abstract", "final", "class", "interface", "trait", "enum", "extends",
+            "implements", "namespace", "use", "require", "require_once", "include", "include_once",
+            "match", "fn", "yield", "this", "string", "int", "float", "bool", "void", "mixed",
+            "never", "object", "callable", "iterable");
+
     @Inject
     CodeGraphStore store;
 
@@ -84,7 +142,7 @@ public class CodeGraphIndexer {
         store.deleteAllForRepo(wsName, repoSlug);
 
         List<Path> sourceFiles = findSourceFiles(workspace.getRoot());
-        LOG.infof("Found %d source files to index (Java + C#)", sourceFiles.size());
+        LOG.infof("Found %d source files to index (Java, C#, TypeScript, PHP)", sourceFiles.size());
 
         long startTime = System.currentTimeMillis();
         int indexed = 0;
@@ -145,6 +203,10 @@ public class CodeGraphIndexer {
                 indexJavaFile(file, relativePath, wsName, repoSlug);
             } else if (relativePath.endsWith(".cs")) {
                 indexCSharpFile(file, relativePath, wsName, repoSlug);
+            } else if (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) {
+                indexTypeScriptFile(file, relativePath, wsName, repoSlug);
+            } else if (relativePath.endsWith(".php")) {
+                indexPhpFile(file, relativePath, wsName, repoSlug);
             }
         } catch (Exception e) {
             LOG.warnf("Failed to index %s (non-fatal): %s", relativePath, e.getMessage());
@@ -349,6 +411,193 @@ public class CodeGraphIndexer {
         }
     }
 
+    // ── TypeScript (regex-based) ───────────────────────────────────────
+
+    private void indexTypeScriptFile(Path file, String relativePath, String wsName, String repoSlug)
+            throws IOException {
+        String source = Files.readString(file);
+        String currentType = null;
+
+        // Import statements
+        Matcher importMatcher = TS_IMPORT.matcher(source);
+        while (importMatcher.find()) {
+            String module = importMatcher.group("module");
+            String simpleName = module.contains("/") ? module.substring(module.lastIndexOf('/') + 1) : module;
+            store.upsertEdge(wsName, repoSlug, relativePath, simpleName, "IMPORTS", relativePath, null);
+        }
+
+        // Type declarations (class, interface, enum, type alias)
+        Matcher typeMatcher = TS_TYPE_DECL.matcher(source);
+        while (typeMatcher.find()) {
+            String kind = typeMatcher.group("kind");
+            String name = typeMatcher.group("name");
+            String ext = typeMatcher.group("ext");
+            String impl = typeMatcher.group("impl");
+            int lineNum = lineNumberAt(source, typeMatcher.start());
+
+            String symbolType = switch (kind) {
+                case "interface" -> "INTERFACE";
+                case "enum" -> "ENUM";
+                default -> "CLASS";
+            };
+
+            store.upsertNode(wsName, repoSlug, relativePath, name, symbolType, lineNum, null, "");
+
+            if (currentType == null) {
+                currentType = name;
+            }
+
+            if (ext != null) {
+                for (String base : ext.split(",")) {
+                    String baseName = base.trim().replaceAll("<.*>", "").trim();
+                    if (!baseName.isEmpty()) {
+                        store.upsertEdge(wsName, repoSlug, name, baseName, "EXTENDS", relativePath, null);
+                    }
+                }
+            }
+            if (impl != null) {
+                for (String iface : impl.split(",")) {
+                    String ifaceName = iface.trim().replaceAll("<.*>", "").trim();
+                    if (!ifaceName.isEmpty()) {
+                        store.upsertEdge(wsName, repoSlug, name, ifaceName, "IMPLEMENTS", relativePath, null);
+                    }
+                }
+            }
+        }
+
+        if (currentType == null) {
+            // Module-level functions (no enclosing class)
+            currentType = relativePath;
+        }
+
+        String enclosingType = currentType;
+
+        // Method declarations (class methods and top-level functions)
+        Matcher methodMatcher = TS_METHOD_DECL.matcher(source);
+        while (methodMatcher.find()) {
+            String methodName = methodMatcher.group("name");
+            if (TS_KEYWORDS.contains(methodName)) continue;
+
+            int lineNum = lineNumberAt(source, methodMatcher.start());
+            String methodSymbol = enclosingType + "." + methodName;
+            store.upsertNode(wsName, repoSlug, relativePath, methodSymbol, "METHOD", lineNum, null, "");
+
+            // TS_METHOD_DECL ends with '{', so the brace is already consumed — start from it
+            int bodyStart = (methodMatcher.end() > 0 && source.charAt(methodMatcher.end() - 1) == '{')
+                    ? methodMatcher.end() - 1 : methodMatcher.end();
+            int bodyEnd = findApproximateMethodEnd(source, bodyStart);
+            if (bodyEnd > bodyStart) {
+                String body = source.substring(bodyStart, bodyEnd);
+                Matcher callMatcher = TS_METHOD_CALL.matcher(body);
+                while (callMatcher.find()) {
+                    String scope = callMatcher.group("scope");
+                    String calledMethod = callMatcher.group("method");
+                    if (!TS_KEYWORDS.contains(scope) && !TS_KEYWORDS.contains(calledMethod)) {
+                        store.upsertEdge(wsName, repoSlug, methodSymbol,
+                                scope + "." + calledMethod, "CALLS", relativePath, null);
+                    }
+                }
+            }
+        }
+
+        // Top-level exported functions
+        Matcher funcMatcher = TS_FUNCTION_DECL.matcher(source);
+        while (funcMatcher.find()) {
+            String funcName = funcMatcher.group("name");
+            if (TS_KEYWORDS.contains(funcName)) continue;
+            int lineNum = lineNumberAt(source, funcMatcher.start());
+            store.upsertNode(wsName, repoSlug, relativePath, funcName, "METHOD", lineNum, null, "export");
+        }
+    }
+
+    // ── PHP (regex-based) ─────────────────────────────────────────────
+
+    private void indexPhpFile(Path file, String relativePath, String wsName, String repoSlug)
+            throws IOException {
+        String source = Files.readString(file);
+        String currentType = null;
+
+        // use statements (imports / namespace use)
+        Matcher useMatcher = PHP_USE.matcher(source);
+        while (useMatcher.find()) {
+            String ns = useMatcher.group("ns");
+            String simpleName = ns.contains("\\") ? ns.substring(ns.lastIndexOf('\\') + 1) : ns;
+            store.upsertEdge(wsName, repoSlug, relativePath, simpleName, "IMPORTS", relativePath, null);
+        }
+
+        // Type declarations (class, interface, trait, enum)
+        Matcher typeMatcher = PHP_TYPE_DECL.matcher(source);
+        while (typeMatcher.find()) {
+            String kind = typeMatcher.group("kind");
+            String name = typeMatcher.group("name");
+            String ext = typeMatcher.group("ext");
+            String impl = typeMatcher.group("impl");
+            int lineNum = lineNumberAt(source, typeMatcher.start());
+
+            String symbolType = switch (kind) {
+                case "interface" -> "INTERFACE";
+                case "enum" -> "ENUM";
+                case "trait" -> "CLASS";
+                default -> "CLASS";
+            };
+
+            store.upsertNode(wsName, repoSlug, relativePath, name, symbolType, lineNum, null, "");
+
+            if (currentType == null) {
+                currentType = name;
+            }
+
+            if (ext != null) {
+                String baseName = ext.trim().replaceAll("\\\\", ".").trim();
+                if (!baseName.isEmpty()) {
+                    store.upsertEdge(wsName, repoSlug, name, baseName, "EXTENDS", relativePath, null);
+                }
+            }
+            if (impl != null) {
+                for (String iface : impl.split(",")) {
+                    String ifaceName = iface.trim().replaceAll("\\\\", ".").trim();
+                    if (!ifaceName.isEmpty()) {
+                        store.upsertEdge(wsName, repoSlug, name, ifaceName, "IMPLEMENTS", relativePath, null);
+                    }
+                }
+            }
+        }
+
+        if (currentType == null) {
+            currentType = relativePath;
+        }
+
+        String enclosingType = currentType;
+
+        // Method declarations
+        Matcher methodMatcher = PHP_METHOD_DECL.matcher(source);
+        while (methodMatcher.find()) {
+            String methodName = methodMatcher.group("name");
+            if (PHP_KEYWORDS.contains(methodName)) continue;
+
+            int lineNum = lineNumberAt(source, methodMatcher.start());
+            String methodSymbol = enclosingType + "." + methodName;
+            store.upsertNode(wsName, repoSlug, relativePath, methodSymbol, "METHOD", lineNum, null, "");
+
+            int bodyStart = methodMatcher.end();
+            int bodyEnd = findApproximateMethodEnd(source, bodyStart);
+            if (bodyEnd > bodyStart) {
+                String body = source.substring(bodyStart, bodyEnd);
+                Matcher callMatcher = PHP_METHOD_CALL.matcher(body);
+                while (callMatcher.find()) {
+                    String scope = callMatcher.group("scope");
+                    String calledMethod = callMatcher.group("method");
+                    // Strip $ prefix from variable names for cleaner symbol names
+                    String cleanScope = scope.startsWith("$") ? scope.substring(1) : scope;
+                    if (!PHP_KEYWORDS.contains(cleanScope) && !PHP_KEYWORDS.contains(calledMethod)) {
+                        store.upsertEdge(wsName, repoSlug, methodSymbol,
+                                cleanScope + "." + calledMethod, "CALLS", relativePath, null);
+                    }
+                }
+            }
+        }
+    }
+
     private void updateImportsSource(String wsName, String repoSlug, String filePath, String typeName) {
         // The IMPORTS edges were created with filePath as source; update them to the primary type
         store.deleteEdgesForSourceFile(wsName, repoSlug, filePath + "#imports");
@@ -388,6 +637,10 @@ public class CodeGraphIndexer {
 
     // ── File discovery ─────────────────────────────────────────────────
 
+    private static final Set<String> SKIP_DIRS = Set.of(
+            ".git", "node_modules", "target", "build", ".gradle",
+            "bin", "obj", "vendor", "dist", "out", ".next", ".nuxt");
+
     private List<Path> findSourceFiles(Path root) {
         List<Path> files = new ArrayList<>();
         try {
@@ -395,7 +648,9 @@ public class CodeGraphIndexer {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String name = file.toString();
-                    if (name.endsWith(".java") || name.endsWith(".cs")) {
+                    if (SUPPORTED_EXTENSIONS.stream().anyMatch(name::endsWith)) {
+                        // Skip TypeScript declaration files and minified JS
+                        if (name.endsWith(".d.ts") || name.endsWith(".min.js")) return FileVisitResult.CONTINUE;
                         files.add(file);
                     }
                     return FileVisitResult.CONTINUE;
@@ -403,10 +658,7 @@ public class CodeGraphIndexer {
 
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    String name = dir.getFileName().toString();
-                    if (name.equals(".git") || name.equals("node_modules") || name.equals("target")
-                            || name.equals("build") || name.equals(".gradle")
-                            || name.equals("bin") || name.equals("obj")) {
+                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;

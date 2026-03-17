@@ -170,6 +170,17 @@ public class TestPresenceChecker {
             return FileRole.SOURCE;
         }
 
+        // ── PHP ───────────────────────────────────────────────────────
+        if (name.endsWith(".php")) {
+            languages.add("PHP");
+            // PHPUnit conventions: files named *Test.php, or inside tests/ / test/ directories
+            if (lower.contains("/tests/") || lower.contains("/test/")
+                    || containsWordIgnoreCase(name, "test") || containsWordIgnoreCase(name, "spec")) {
+                return FileRole.TEST;
+            }
+            return FileRole.SOURCE;
+        }
+
         return FileRole.IGNORE;
     }
 

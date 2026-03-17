@@ -41,7 +41,7 @@ public class EmbeddingIndexer {
     private static final Logger LOG = Logger.getLogger(EmbeddingIndexer.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
     private static final long MAX_INDEX_TIME_MS = 120_000; // 2 minutes
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs");
+    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs", ".ts", ".tsx", ".php");
 
     private static final Pattern CS_TYPE_DECL = Pattern.compile(
             "^\\s*(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly|new)\\s+)*"
@@ -63,6 +63,47 @@ public class EmbeddingIndexer {
             "bool", "double", "float", "decimal", "byte", "char", "short", "object",
             "get", "set", "value", "namespace", "class", "interface", "struct", "enum", "record");
 
+    // ── TypeScript patterns ────────────────────────────────────────────
+    private static final Pattern TS_TYPE_DECL = Pattern.compile(
+            "^\\s*(?:export\\s+)?(?:abstract\\s+)?(?:class|interface|enum|type)\\s+(?<name>\\w+)",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|private|protected|static|async|readonly|abstract|override)\\s+)*"
+                    + "(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\([^)]*\\)\\s*(?::\\s*[\\w<>\\[\\]|&?,\\s]+?)?\\s*(?:\\{|=>)",
+            Pattern.MULTILINE);
+
+    private static final Pattern TS_FUNCTION_DECL = Pattern.compile(
+            "^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+(?<name>\\w+)\\s*(?:<[^>]*>)?\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Set<String> TS_KEYWORDS = Set.of(
+            "if", "else", "for", "while", "do", "switch", "case", "return", "break", "continue",
+            "try", "catch", "finally", "throw", "new", "delete", "typeof", "instanceof", "in", "of",
+            "this", "super", "null", "undefined", "true", "false", "void", "let", "const", "var",
+            "async", "await", "yield", "from", "import", "export", "default", "class", "extends",
+            "implements", "interface", "type", "enum", "namespace", "module", "declare", "abstract",
+            "get", "set", "static", "public", "private", "protected", "readonly", "override",
+            "console", "Math", "Object", "Array", "String", "Number", "Boolean", "Promise",
+            "require", "constructor");
+
+    // ── PHP patterns ───────────────────────────────────────────────────
+    private static final Pattern PHP_TYPE_DECL = Pattern.compile(
+            "^\\s*(?:(?:abstract|final|readonly)\\s+)*(?:class|interface|trait|enum)\\s+(?<name>\\w+)",
+            Pattern.MULTILINE);
+
+    private static final Pattern PHP_METHOD_DECL = Pattern.compile(
+            "^\\s*(?:(?:public|protected|private|static|abstract|final)\\s+)*function\\s+(?<name>\\w+)\\s*\\(",
+            Pattern.MULTILINE);
+
+    private static final Set<String> PHP_KEYWORDS = Set.of(
+            "if", "else", "elseif", "for", "foreach", "while", "do", "switch", "case", "return",
+            "break", "continue", "try", "catch", "finally", "throw", "new", "clone", "echo", "print",
+            "isset", "empty", "unset", "list", "array", "null", "true", "false", "self", "parent",
+            "static", "abstract", "final", "class", "interface", "trait", "enum", "extends",
+            "implements", "namespace", "use", "require", "require_once", "include", "include_once",
+            "match", "fn", "yield", "this", "string", "int", "float", "bool", "void", "mixed");
+
     @Inject VoyageEmbeddingService voyageService;
     @Inject EmbeddingStore embeddingStore;
 
@@ -82,7 +123,7 @@ public class EmbeddingIndexer {
         embeddingStore.deleteAllForRepo(wsName, repoSlug);
 
         List<Path> sourceFiles = findSourceFiles(workspace.getRoot());
-        LOG.infof("Found %d source files for embedding (Java + C#)", sourceFiles.size());
+        LOG.infof("Found %d source files for embedding (Java, C#, TypeScript, PHP)", sourceFiles.size());
 
         List<SymbolChunk> allChunks = new ArrayList<>();
         long startTime = System.currentTimeMillis();
@@ -183,6 +224,10 @@ public class EmbeddingIndexer {
                 return extractJavaChunks(file, relativePath);
             } else if (relativePath.endsWith(".cs")) {
                 return extractCSharpChunks(file, relativePath);
+            } else if (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) {
+                return extractTypeScriptChunks(file, relativePath);
+            } else if (relativePath.endsWith(".php")) {
+                return extractPhpChunks(file, relativePath);
             }
         } catch (Exception e) {
             LOG.debugf("Failed to extract chunks from %s: %s", relativePath, e.getMessage());
@@ -265,6 +310,107 @@ public class EmbeddingIndexer {
         return chunks;
     }
 
+    private List<SymbolChunk> extractTypeScriptChunks(Path file, String relativePath) throws IOException {
+        String source = Files.readString(file);
+        List<SymbolChunk> chunks = new ArrayList<>();
+        String currentType = null;
+
+        Matcher typeMatcher = TS_TYPE_DECL.matcher(source);
+        while (typeMatcher.find()) {
+            String name = typeMatcher.group("name");
+            int lineStart = lineNumberAt(source, typeMatcher.start());
+            int bodyEnd = findClosingBrace(source, typeMatcher.end());
+            String typeSource = truncateSource(source.substring(typeMatcher.start(),
+                    Math.min(bodyEnd + 1, source.length())));
+
+            chunks.add(new SymbolChunk(relativePath, name, "CLASS", lineStart,
+                    lineNumberAt(source, bodyEnd), typeSource));
+
+            if (currentType == null) {
+                currentType = name;
+            }
+        }
+
+        // Top-level functions
+        Matcher funcMatcher = TS_FUNCTION_DECL.matcher(source);
+        while (funcMatcher.find()) {
+            String funcName = funcMatcher.group("name");
+            if (TS_KEYWORDS.contains(funcName)) continue;
+            int lineStart = lineNumberAt(source, funcMatcher.start());
+            int bodyEnd = findClosingBrace(source, funcMatcher.end());
+            String funcSource = truncateSource(source.substring(funcMatcher.start(),
+                    Math.min(bodyEnd + 1, source.length())));
+            chunks.add(new SymbolChunk(relativePath, funcName, "METHOD", lineStart,
+                    lineNumberAt(source, bodyEnd), funcSource));
+        }
+
+        if (currentType != null) {
+            String enclosing = currentType;
+            Matcher methodMatcher = TS_METHOD_DECL.matcher(source);
+            while (methodMatcher.find()) {
+                String methodName = methodMatcher.group("name");
+                if (TS_KEYWORDS.contains(methodName)) continue;
+
+                int lineStart = lineNumberAt(source, methodMatcher.start());
+                // TS_METHOD_DECL ends with '{', so the brace is already consumed
+                int bodyBrace = methodMatcher.end() > 0 && source.charAt(methodMatcher.end() - 1) == '{'
+                        ? methodMatcher.end() - 1
+                        : source.indexOf('{', methodMatcher.end());
+                if (bodyBrace < 0) continue;
+
+                int bodyEnd = findClosingBrace(source, bodyBrace);
+                String methodSource = truncateSource(source.substring(methodMatcher.start(),
+                        Math.min(bodyEnd + 1, source.length())));
+
+                chunks.add(new SymbolChunk(relativePath, enclosing + "." + methodName, "METHOD",
+                        lineStart, lineNumberAt(source, bodyEnd), methodSource));
+            }
+        }
+
+        return chunks;
+    }
+
+    private List<SymbolChunk> extractPhpChunks(Path file, String relativePath) throws IOException {
+        String source = Files.readString(file);
+        List<SymbolChunk> chunks = new ArrayList<>();
+        String currentType = null;
+
+        Matcher typeMatcher = PHP_TYPE_DECL.matcher(source);
+        while (typeMatcher.find()) {
+            String name = typeMatcher.group("name");
+            int lineStart = lineNumberAt(source, typeMatcher.start());
+            int bodyEnd = findClosingBrace(source, typeMatcher.end());
+            String typeSource = truncateSource(source.substring(typeMatcher.start(),
+                    Math.min(bodyEnd + 1, source.length())));
+
+            chunks.add(new SymbolChunk(relativePath, name, "CLASS", lineStart,
+                    lineNumberAt(source, bodyEnd), typeSource));
+
+            if (currentType == null) {
+                currentType = name;
+            }
+        }
+
+        if (currentType != null) {
+            String enclosing = currentType;
+            Matcher methodMatcher = PHP_METHOD_DECL.matcher(source);
+            while (methodMatcher.find()) {
+                String methodName = methodMatcher.group("name");
+                if (PHP_KEYWORDS.contains(methodName)) continue;
+
+                int lineStart = lineNumberAt(source, methodMatcher.start());
+                int bodyEnd = findClosingBrace(source, methodMatcher.end());
+                String methodSource = truncateSource(source.substring(methodMatcher.start(),
+                        Math.min(bodyEnd + 1, source.length())));
+
+                chunks.add(new SymbolChunk(relativePath, enclosing + "." + methodName, "METHOD",
+                        lineStart, lineNumberAt(source, bodyEnd), methodSource));
+            }
+        }
+
+        return chunks;
+    }
+
     private String truncateSource(String source) {
         if (source.length() <= maxSourceChars) {
             return source;
@@ -294,7 +440,11 @@ public class EmbeddingIndexer {
         return Math.min(fromIndex + 5000, source.length() - 1);
     }
 
-    // ── File discovery (same logic as CodeGraphIndexer) ─────────────────
+    // ── File discovery ───────────────────────────────────────────────────
+
+    private static final Set<String> SKIP_DIRS = Set.of(
+            ".git", "node_modules", "target", "build", ".gradle",
+            "bin", "obj", "vendor", "dist", "out", ".next", ".nuxt");
 
     private List<Path> findSourceFiles(Path root) {
         List<Path> files = new ArrayList<>();
@@ -303,7 +453,8 @@ public class EmbeddingIndexer {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String name = file.toString();
-                    if (name.endsWith(".java") || name.endsWith(".cs")) {
+                    if (SUPPORTED_EXTENSIONS.stream().anyMatch(name::endsWith)) {
+                        if (name.endsWith(".d.ts") || name.endsWith(".min.js")) return FileVisitResult.CONTINUE;
                         files.add(file);
                     }
                     return FileVisitResult.CONTINUE;
@@ -311,10 +462,7 @@ public class EmbeddingIndexer {
 
                 @Override
                 public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-                    String name = dir.getFileName().toString();
-                    if (name.equals(".git") || name.equals("node_modules") || name.equals("target")
-                            || name.equals("build") || name.equals(".gradle")
-                            || name.equals("bin") || name.equals("obj")) {
+                    if (SKIP_DIRS.contains(dir.getFileName().toString())) {
                         return FileVisitResult.SKIP_SUBTREE;
                     }
                     return FileVisitResult.CONTINUE;
