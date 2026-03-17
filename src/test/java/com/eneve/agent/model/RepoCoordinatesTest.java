@@ -138,7 +138,7 @@ class RepoCoordinatesTest {
 
     @Test
     void parseThrowsExceptionForInvalidUrl() {
-        String invalidUrl = "https://github.com/myorg/myrepo";
+        String invalidUrl = "https://unknown-host.com/myorg/myrepo";
         
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class, 
             () -> RepoCoordinates.parse(invalidUrl));
@@ -159,7 +159,7 @@ class RepoCoordinatesTest {
 
     @Test
     void httpsCloneUrlForBitbucket() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", "", "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", "", "myrepo", RepoCoordinates.Platform.BITBUCKET);
         String cloneUrl = coords.httpsCloneUrl("user", "pass");
         
         assertEquals("https://user:pass@bitbucket.org/myorg/myrepo.git", cloneUrl);
@@ -167,7 +167,7 @@ class RepoCoordinatesTest {
 
     @Test
     void httpsCloneUrlForBitbucketWithNullProject() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", null, "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", null, "myrepo", RepoCoordinates.Platform.BITBUCKET);
         String cloneUrl = coords.httpsCloneUrl("user", "pass");
         
         assertEquals("https://user:pass@bitbucket.org/myorg/myrepo.git", cloneUrl);
@@ -175,7 +175,7 @@ class RepoCoordinatesTest {
 
     @Test
     void httpsCloneUrlForAzureDevOps() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo", RepoCoordinates.Platform.AZURE_DEVOPS);
         String cloneUrl = coords.httpsCloneUrl("user", "pass");
         
         assertEquals("https://user:pass@dev.azure.com/myorg/myproject/_git/myrepo", cloneUrl);
@@ -183,7 +183,7 @@ class RepoCoordinatesTest {
 
     @Test
     void repoWebUrlForBitbucket() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", "", "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", "", "myrepo", RepoCoordinates.Platform.BITBUCKET);
         String webUrl = coords.repoWebUrl();
         
         assertEquals("https://bitbucket.org/myorg/myrepo.git", webUrl);
@@ -191,7 +191,7 @@ class RepoCoordinatesTest {
 
     @Test
     void repoWebUrlForBitbucketWithNullProject() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", null, "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", null, "myrepo", RepoCoordinates.Platform.BITBUCKET);
         String webUrl = coords.repoWebUrl();
         
         assertEquals("https://bitbucket.org/myorg/myrepo.git", webUrl);
@@ -199,7 +199,7 @@ class RepoCoordinatesTest {
 
     @Test
     void repoWebUrlForAzureDevOps() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo", RepoCoordinates.Platform.AZURE_DEVOPS);
         String webUrl = coords.repoWebUrl();
         
         assertEquals("https://dev.azure.com/myorg/myproject/_git/myrepo", webUrl);
@@ -207,9 +207,9 @@ class RepoCoordinatesTest {
 
     @Test
     void recordEquality() {
-        RepoCoordinates coords1 = new RepoCoordinates("org", "proj", "repo");
-        RepoCoordinates coords2 = new RepoCoordinates("org", "proj", "repo");
-        RepoCoordinates coords3 = new RepoCoordinates("org", "proj", "different");
+        RepoCoordinates coords1 = new RepoCoordinates("org", "proj", "repo", RepoCoordinates.Platform.AZURE_DEVOPS);
+        RepoCoordinates coords2 = new RepoCoordinates("org", "proj", "repo", RepoCoordinates.Platform.AZURE_DEVOPS);
+        RepoCoordinates coords3 = new RepoCoordinates("org", "proj", "different", RepoCoordinates.Platform.AZURE_DEVOPS);
         
         assertEquals(coords1, coords2);
         assertNotEquals(coords1, coords3);
@@ -218,7 +218,7 @@ class RepoCoordinatesTest {
 
     @Test
     void recordToString() {
-        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo");
+        RepoCoordinates coords = new RepoCoordinates("myorg", "myproject", "myrepo", RepoCoordinates.Platform.AZURE_DEVOPS);
         String toString = coords.toString();
         
         assertTrue(toString.contains("myorg"));

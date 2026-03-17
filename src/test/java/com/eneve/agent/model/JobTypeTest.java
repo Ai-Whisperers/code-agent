@@ -10,13 +10,18 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(6, values.length);
+        assertEquals(11, values.length);
         assertEquals(JobType.FIX, values[0]);
         assertEquals(JobType.REVIEW, values[1]);
         assertEquals(JobType.FIX_PR, values[2]);
         assertEquals(JobType.REPLY, values[3]);
         assertEquals(JobType.FIX_COMMENT, values[4]);
         assertEquals(JobType.HOOK, values[5]);
+        assertEquals(JobType.GENERATE_TESTS, values[6]);
+        assertEquals(JobType.GENERATE_DOCS, values[7]);
+        assertEquals(JobType.SYNC_CONFLUENCE, values[8]);
+        assertEquals(JobType.METRICS, values[9]);
+        assertEquals(JobType.QUALITY_REPORT, values[10]);
     }
 
     @Test
@@ -27,6 +32,11 @@ class JobTypeTest {
         assertEquals("REPLY", JobType.REPLY.name());
         assertEquals("FIX_COMMENT", JobType.FIX_COMMENT.name());
         assertEquals("HOOK", JobType.HOOK.name());
+        assertEquals("GENERATE_TESTS", JobType.GENERATE_TESTS.name());
+        assertEquals("GENERATE_DOCS", JobType.GENERATE_DOCS.name());
+        assertEquals("SYNC_CONFLUENCE", JobType.SYNC_CONFLUENCE.name());
+        assertEquals("METRICS", JobType.METRICS.name());
+        assertEquals("QUALITY_REPORT", JobType.QUALITY_REPORT.name());
     }
 
     @Test
@@ -37,6 +47,11 @@ class JobTypeTest {
         assertEquals(JobType.REPLY, JobType.valueOf("REPLY"));
         assertEquals(JobType.FIX_COMMENT, JobType.valueOf("FIX_COMMENT"));
         assertEquals(JobType.HOOK, JobType.valueOf("HOOK"));
+        assertEquals(JobType.GENERATE_TESTS, JobType.valueOf("GENERATE_TESTS"));
+        assertEquals(JobType.GENERATE_DOCS, JobType.valueOf("GENERATE_DOCS"));
+        assertEquals(JobType.SYNC_CONFLUENCE, JobType.valueOf("SYNC_CONFLUENCE"));
+        assertEquals(JobType.METRICS, JobType.valueOf("METRICS"));
+        assertEquals(JobType.QUALITY_REPORT, JobType.valueOf("QUALITY_REPORT"));
     }
 
     @Test
@@ -59,6 +74,11 @@ class JobTypeTest {
         assertEquals(3, JobType.REPLY.ordinal());
         assertEquals(4, JobType.FIX_COMMENT.ordinal());
         assertEquals(5, JobType.HOOK.ordinal());
+        assertEquals(6, JobType.GENERATE_TESTS.ordinal());
+        assertEquals(7, JobType.GENERATE_DOCS.ordinal());
+        assertEquals(8, JobType.SYNC_CONFLUENCE.ordinal());
+        assertEquals(9, JobType.METRICS.ordinal());
+        assertEquals(10, JobType.QUALITY_REPORT.ordinal());
     }
 
     @Test
