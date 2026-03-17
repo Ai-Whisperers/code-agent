@@ -204,7 +204,8 @@ public class PlannerService {
                             stepNode.path("prompt").asText(""),
                             stepNode.path("status").asText("PENDING"),
                             jobIdValue,
-                            stepParams
+                            stepParams,
+                            null
                     ));
                 }
                 phases.add(new PlanPhase(order, name, gate, steps));

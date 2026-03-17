@@ -198,14 +198,15 @@ public class PlanStore {
     }
 
     /**
-     * Updates the {@code status} and {@code jobId} of a single step inside the JSONB
-     * {@code plan_data} column, identified by {@code stepId}. All other step fields are
-     * preserved. If the step is not found the plan_data is left unchanged.
+     * Updates the {@code status}, {@code jobId}, and {@code errorMessage} of a single step
+     * inside the JSONB {@code plan_data} column, identified by {@code stepId}. All other
+     * step fields are preserved. If the step is not found the plan_data is left unchanged.
+     * Pass {@code null} for {@code errorMessage} to leave it unset (successful steps).
      *
      * <p>Uses a {@code SELECT ... FOR UPDATE} inside a transaction to prevent lost
      * updates when multiple steps in the same phase complete concurrently.
      */
-    public void updateStepInPlan(String planId, String stepId, String stepStatus, String jobId) {
+    public void updateStepInPlan(String planId, String stepId, String stepStatus, String jobId, String errorMessage) {
         String selectSql = """
                 SELECT plan_data
                 FROM execution_plans
@@ -243,6 +244,9 @@ public class PlanStore {
                                 PlanStep updated = step.withStatus(stepStatus);
                                 if (jobId != null) {
                                     updated = updated.withJobId(jobId);
+                                }
+                                if (errorMessage != null) {
+                                    updated = updated.withErrorMessage(errorMessage);
                                 }
                                 updatedSteps.add(updated);
                             } else {

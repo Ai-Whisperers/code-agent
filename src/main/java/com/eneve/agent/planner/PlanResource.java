@@ -204,7 +204,8 @@ public class PlanResource {
                 Map.of(
                         "branch", request.branch(),
                         "ccThreshold", String.valueOf(ccThreshold),
-                        "maxIterations", String.valueOf(maxIterations)));
+                        "maxIterations", String.valueOf(maxIterations)),
+                null);
 
         PlanPhase metricsPhase = new PlanPhase(1, "Baseline Metrics", true, List.of(metricsStep));
         PlanData planData = new PlanData(List.of(metricsPhase));

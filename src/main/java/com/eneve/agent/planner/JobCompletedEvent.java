@@ -11,5 +11,6 @@ public record JobCompletedEvent(
         String jobId,
         JobStatus status,
         String summary,
-        String prUrl
+        String prUrl,
+        String errorMessage
 ) {}

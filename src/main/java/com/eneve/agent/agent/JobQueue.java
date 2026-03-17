@@ -179,7 +179,8 @@ public class JobQueue {
                         jobStore.archive(job);
                     } finally {
                         jobCompletedEvent.fireAsync(new JobCompletedEvent(
-                                job.getJobId(), job.getStatus(), job.getSummary(), job.getPrUrl()));
+                                job.getJobId(), job.getStatus(), job.getSummary(), job.getPrUrl(),
+                                job.getErrorMessage()));
                         semaphore.release();
                     }
                 });

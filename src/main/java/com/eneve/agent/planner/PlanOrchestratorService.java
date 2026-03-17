@@ -158,7 +158,8 @@ public class PlanOrchestratorService {
         // AWAITING_APPROVAL means the agent completed successfully and created a PR
         // awaiting human merge — the step itself is done from the orchestrator's view.
         String stepStatus = isSuccess(event.status()) ? "SUCCESS" : "FAILED";
-        planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId());
+        String stepError = "FAILED".equals(stepStatus) ? event.errorMessage() : null;
+        planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId(), stepError);
 
         // When a FIX step succeeds, remember its branch so the next FIX phase can
         // automatically chain from it if the planner did not set sourceBranch explicitly.
@@ -303,7 +304,7 @@ public class PlanOrchestratorService {
             if (job == null) {
                 LOG.warnf("Orchestrator: could not map step %s (jobType=%s) in plan %s — skipping step",
                         step.stepId(), step.jobType(), plan.planId());
-                planStore.updateStepInPlan(plan.planId(), step.stepId(), "SKIPPED", null);
+                planStore.updateStepInPlan(plan.planId(), step.stepId(), "SKIPPED", null, null);
                 continue;
             }
 
@@ -313,7 +314,8 @@ public class PlanOrchestratorService {
                 // Remove tracking for jobs already submitted in this phase so their
                 // completion events don't trigger phase-advancement on a FAILED plan.
                 submittedJobIds.forEach(trackedJobs::remove);
-                planStore.updateStepInPlan(plan.planId(), step.stepId(), "FAILED", job.getJobId());
+                planStore.updateStepInPlan(plan.planId(), step.stepId(), "FAILED", job.getJobId(),
+                        "Job queue full");
                 planStore.updateStatusAndError(plan.planId(), PlanStatus.FAILED.name(),
                         "Job queue full when submitting step \"" + step.stepId() + "\"");
                 planCompletedEvent.fireAsync(new PlanCompletedEvent(plan.planId(), PlanStatus.FAILED.name()));
@@ -324,7 +326,7 @@ public class PlanOrchestratorService {
             boolean isMetrics = "METRICS".equalsIgnoreCase(step.jobType());
             trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order(), isMetrics));
             submittedJobIds.add(job.getJobId());
-            planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId());
+            planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId(), null);
             LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s",
                     job.getJobId(), step.stepId(), step.jobType(), plan.planId());
         }
@@ -413,7 +415,8 @@ public class PlanOrchestratorService {
                 "PENDING", null,
                 Map.of(
                         "branchName", fixBranch,
-                        "sourceBranch", prevBranch));
+                        "sourceBranch", prevBranch),
+                null);
 
         PlanStep metricsStep = new PlanStep(
                 metricsStepId, "METRICS",
@@ -423,7 +426,8 @@ public class PlanOrchestratorService {
                 Map.of(
                         "ccThreshold", String.valueOf(ccThreshold),
                         "maxIterations", String.valueOf(maxIterations),
-                        "branch", fixBranch));
+                        "branch", fixBranch),
+                null);
 
         PlanPhase fixPhase = new PlanPhase(nextOrder, "Quality Fix (iteration " + iteration + ")", true,
                 List.of(fixStep));
