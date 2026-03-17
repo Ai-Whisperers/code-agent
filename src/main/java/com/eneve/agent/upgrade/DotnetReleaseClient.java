@@ -17,15 +17,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 
 /**
- * Fetches the latest stable .NET release version from the Microsoft release-metadata index.
+ * Fetches the latest active LTS .NET channel version from the Microsoft release-metadata index.
  *
  * <p>Calls {@code https://dotnetcli.azureedge.net/dotnet/release-metadata/releases-index.json}
  * and selects the highest-numbered channel that is both {@code release-type = "lts"} and
- * {@code support-phase = "active"}, returning its {@code latest-release} value
- * (e.g. {@code "8.0.13"}).
+ * {@code support-phase = "active"}, returning its {@code channel-version} value
+ * (e.g. {@code "8.0"}).
  *
- * <p>Results are cached for a configurable duration (shared with the Quarkus upgrade
- * scheduler setting) to avoid repeated outbound calls during a single scheduler run.
+ * <p>The channel version (major.minor) is returned rather than the full patch release so that
+ * it aligns with the {@code <TargetFramework>} value stored by {@code ArchetypeDetector}
+ * (e.g. {@code "net8.0"} → normalized {@code "8.0"}).  A repo is only flagged for upgrade
+ * when a newer LTS channel is available (e.g. 8.0 → 10.0), not for patch updates within
+ * the same channel.
+ *
+ * <p>Results are cached for a configurable duration (shared with the upgrade scheduler
+ * setting) to avoid repeated outbound calls during a single scheduler run.
  */
 @ApplicationScoped
 public class DotnetReleaseClient {
@@ -47,13 +53,13 @@ public class DotnetReleaseClient {
             .build();
 
     /**
-     * Returns the latest stable LTS .NET release version, using a cached result when available.
+     * Returns the highest active LTS .NET channel version, using a cached result when available.
      *
      * <p>Selects only channels with {@code release-type = "lts"} and
      * {@code support-phase = "active"}, then picks the one with the highest
      * {@code channel-version}.
      *
-     * @return latest LTS release string (e.g. {@code "8.0.13"}), or empty on failure
+     * @return active LTS channel version string (e.g. {@code "8.0"}), or empty on failure
      */
     public Optional<String> getLatestDotnetVersion() {
         if (cachedVersion != null && Instant.now().isBefore(cacheExpiry)) {
@@ -107,12 +113,12 @@ public class DotnetReleaseClient {
                 }
             }
 
-            if (bestLatestRelease == null) {
+            if (bestChannelVersion == null) {
                 LOG.warnf("DotnetReleaseClient: no active LTS channel found in releases-index");
                 return Optional.empty();
             }
 
-            return cacheAndReturn(bestLatestRelease);
+            return cacheAndReturn(bestChannelVersion);
 
         } catch (Exception e) {
             LOG.errorf("DotnetReleaseClient: failed to fetch .NET version: %s", e.getMessage());
@@ -152,7 +158,7 @@ public class DotnetReleaseClient {
     private Optional<String> cacheAndReturn(String version) {
         cachedVersion = version;
         cacheExpiry = Instant.now().plusSeconds(cacheDurationMinutes * 60);
-        LOG.infof("DotnetReleaseClient: latest active LTS .NET version is %s (cached for %d min)",
+        LOG.infof("DotnetReleaseClient: latest active LTS .NET channel version is %s (cached for %d min)",
                 version, cacheDurationMinutes);
         return Optional.of(version);
     }

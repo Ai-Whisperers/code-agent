@@ -1,7 +1,7 @@
 package com.eneve.agent.upgrade;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -22,8 +22,10 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 /**
- * REST endpoints for manually triggering Quarkus upgrade checks.
- * Background execution follows the same pattern as {@code CodeGraphResource}.
+ * REST endpoints for triggering framework upgrade checks and inspecting the latest known
+ * framework versions.
+ *
+ * <p>Background execution follows the same pattern as {@code CodeGraphResource}.
  */
 @Path("/upgrades")
 @Produces(MediaType.APPLICATION_JSON)
@@ -34,6 +36,12 @@ public class UpgradeResource {
 
     @Inject UpgradeService upgradeService;
     @Inject MavenCentralClient mavenCentralClient;
+    @Inject DotnetReleaseClient dotnetReleaseClient;
+    @Inject WildflyReleaseClient wildflyReleaseClient;
+    @Inject JavaLtsClient javaLtsClient;
+    @Inject PhpReleaseClient phpReleaseClient;
+    @Inject NpmRegistryClient npmRegistryClient;
+    @Inject PackagistClient packagistClient;
 
     private final ExecutorService upgradeExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "upgrade-check");
@@ -45,10 +53,11 @@ public class UpgradeResource {
     @Path("/check")
     @Operation(
             operationId = "checkAllUpgrades",
-            summary = "Check all Quarkus repos for available upgrades",
-            description = "Scans all repos in repo_settings whose detected archetype is 'quarkus' "
+            summary = "Check all supported repos for available framework upgrades",
+            description = "Scans all repos in repo_settings whose archetype is one of the "
+                    + "supported types (quarkus, dotnet, wildfly, angular, react, laravel, symfony, php) "
                     + "and creates auto-executing upgrade plans for any that are below the latest "
-                    + "Quarkus version. Runs in the background and returns immediately."
+                    + "published version. Runs in the background and returns immediately."
     )
     @APIResponse(responseCode = "202", description = "Upgrade check accepted and running in background")
     public Response checkAll() {
@@ -69,9 +78,10 @@ public class UpgradeResource {
     @Path("/check/{workspace}/{repoSlug}")
     @Operation(
             operationId = "checkOneUpgrade",
-            summary = "Check a single repository for a Quarkus upgrade",
-            description = "Checks whether the given repository is below the latest Quarkus version "
-                    + "and, if so, creates and auto-executes an upgrade plan. Returns immediately."
+            summary = "Check a single repository for an available framework upgrade",
+            description = "Checks whether the given repository is below the latest version for its "
+                    + "detected archetype and, if so, creates and auto-executes an upgrade plan. "
+                    + "Returns immediately; the upgrade runs in the background."
     )
     @APIResponses({
             @APIResponse(responseCode = "202", description = "Upgrade check accepted"),
@@ -105,14 +115,22 @@ public class UpgradeResource {
     @Operation(
             operationId = "getLatestVersions",
             summary = "Return the latest known framework versions",
-            description = "Returns the latest stable Quarkus version fetched from Maven Central "
-                    + "(result may be cached). Useful for verifying connectivity and current state."
+            description = "Returns the latest stable version for each supported framework, "
+                    + "fetched from official release sources (results may be cached). "
+                    + "Useful for verifying connectivity and inspecting the current upgrade baseline."
     )
-    @APIResponse(responseCode = "200", description = "Latest versions")
+    @APIResponse(responseCode = "200", description = "Latest versions per framework")
     public Response latestVersions() {
-        Optional<String> quarkus = mavenCentralClient.getLatestQuarkusVersion();
-        return Response.ok(Map.of(
-                "quarkus", quarkus.orElse("unavailable")
-        )).build();
+        Map<String, String> versions = new LinkedHashMap<>();
+        versions.put("quarkus",  mavenCentralClient.getLatestQuarkusVersion().orElse("unavailable"));
+        versions.put("dotnet",   dotnetReleaseClient.getLatestDotnetVersion().orElse("unavailable"));
+        versions.put("wildfly",  wildflyReleaseClient.getLatestWildflyVersion().orElse("unavailable"));
+        versions.put("java-lts", javaLtsClient.getLatestJavaLtsVersion().orElse("unavailable"));
+        versions.put("php",      phpReleaseClient.getLatestPhpVersion().orElse("unavailable"));
+        versions.put("react",    npmRegistryClient.getLatestVersion("react").orElse("unavailable"));
+        versions.put("angular",  npmRegistryClient.getLatestVersion("@angular/core").orElse("unavailable"));
+        versions.put("laravel",  packagistClient.getLatestVersion("laravel", "framework").orElse("unavailable"));
+        versions.put("symfony",  packagistClient.getLatestVersion("symfony", "framework-bundle").orElse("unavailable"));
+        return Response.ok(versions).build();
     }
 }
