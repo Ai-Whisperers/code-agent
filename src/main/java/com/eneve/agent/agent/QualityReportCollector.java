@@ -6,13 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
-import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
 import com.eneve.agent.agent.QualityReport.AikidoSection;
 import com.eneve.agent.agent.QualityReport.ComplexitySection;
-import com.eneve.agent.agent.QualityReport.CoverageSection;
 import com.eneve.agent.agent.QualityReport.LinterSection;
 import com.eneve.agent.agent.QualityReport.ReviewSection;
+import com.eneve.agent.agent.QualityReport.TestPresenceSection;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.linter.LinterFinding;
@@ -38,7 +37,7 @@ public class QualityReportCollector {
 
     private static final Logger LOG = Logger.getLogger(QualityReportCollector.class);
 
-    @Inject CoverageReporter coverageReporter;
+    @Inject TestPresenceChecker testPresenceChecker;
     @Inject LinterService linterService;
     @Inject AikidoService aikidoService;
     @Inject CodeMetricsCalculator metricsCalculator;
@@ -61,13 +60,13 @@ public class QualityReportCollector {
     public QualityReport collect(WorkspaceContext workspace, String workspaceName, String repoSlug, String branch) {
         LOG.infof("QualityReportCollector: collecting metrics for %s/%s branch=%s", workspaceName, repoSlug, branch);
 
-        CoverageSection coverageSection = collectCoverage(workspace, workspaceName, repoSlug);
+        TestPresenceSection testPresenceSection = collectTestPresence(workspace, workspaceName, repoSlug);
         LinterSection linterSection = collectLinter(workspace, workspaceName, repoSlug);
         AikidoSection aikidoSection = collectAikido(repoSlug);
         ComplexitySection complexitySection = collectComplexity(workspace, workspaceName, repoSlug, branch);
         ReviewSection reviewSection = collectReview(workspaceName, repoSlug);
 
-        double score = QualityReport.computeScore(coverageSection, linterSection, aikidoSection,
+        double score = QualityReport.computeScore(testPresenceSection, linterSection, aikidoSection,
                 complexitySection, reviewSection);
 
         return new QualityReport(
@@ -77,34 +76,22 @@ public class QualityReportCollector {
                 branch,
                 Instant.now(),
                 score,
-                coverageSection,
+                null,
                 linterSection,
                 aikidoSection,
                 complexitySection,
-                reviewSection
+                reviewSection,
+                testPresenceSection
         );
     }
 
     // ─── Individual collectors ────────────────────────────────────────────
 
-    private CoverageSection collectCoverage(WorkspaceContext workspace, String workspaceName, String repoSlug) {
+    private TestPresenceSection collectTestPresence(WorkspaceContext workspace, String workspaceName, String repoSlug) {
         try {
-            if (!coverageReporter.isJacocoPresent(workspace)) {
-                LOG.infof("QualityReportCollector: no JaCoCo in %s/%s — skipping coverage", workspaceName, repoSlug);
-                return null;
-            }
-            CoverageSnapshot snap = coverageReporter.measureCoverage(workspace);
-            if (snap == null) return null;
-
-            return new CoverageSection(
-                    snap.lineRate(), snap.branchRate(), snap.methodRate(), snap.classRate(),
-                    snap.linesCovered(), snap.linesMissed(),
-                    snap.branchesCovered(), snap.branchesMissed(),
-                    snap.methodsCovered(), snap.methodsMissed(),
-                    snap.classesCovered(), snap.classesMissed()
-            );
+            return testPresenceChecker.check(workspace.getRoot(), workspaceName, repoSlug);
         } catch (Exception e) {
-            LOG.warnf("QualityReportCollector: coverage collection failed for %s/%s: %s",
+            LOG.warnf("QualityReportCollector: test presence check failed for %s/%s: %s",
                     workspaceName, repoSlug, e.getMessage());
             return null;
         }

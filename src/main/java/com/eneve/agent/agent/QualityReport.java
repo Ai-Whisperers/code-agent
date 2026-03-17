@@ -22,7 +22,8 @@ public record QualityReport(
         LinterSection linter,
         AikidoSection aikido,
         ComplexitySection complexity,
-        ReviewSection reviewQuality
+        ReviewSection reviewQuality,
+        TestPresenceSection testPresence
 ) {
 
     // ─── Nested section records ───────────────────────────────────────────
@@ -80,62 +81,78 @@ public record QualityReport(
             double fpRate
     ) {}
 
+    /**
+     * Language-agnostic test presence snapshot.
+     * {@code testRatio} = {@code testFiles / max(1, sourceFiles)}, capped at 1.0.
+     */
+    public record TestPresenceSection(
+            int sourceFiles,
+            int testFiles,
+            double testRatio,
+            java.util.List<String> detectedLanguages
+    ) {}
+
     // ─── Score computation ────────────────────────────────────────────────
 
     /**
-     * Computes an aggregate quality score in [0.0, 1.0] from the available metric sections.
-     * Each present section contributes an equal weight; missing (null) sections have their
-     * weight redistributed to the remaining sections.
+     * Computes an aggregate quality score in [0.0, 1.0]. Higher is better.
      *
+     * <p>Section weights (normalised to their sum when all four are present):
      * <ul>
-     *   <li><b>Coverage score</b> = lineRate / 100</li>
-     *   <li><b>Linter score</b> = 1 − min(1, errors×0.1 + warnings×0.01)</li>
-     *   <li><b>Aikido score</b> = 1 − min(1, critical×0.5 + high×0.2 + medium×0.05 + low×0.01)</li>
-     *   <li><b>Complexity score</b> = 1 − methodsAboveThreshold / max(1, totalMethods)</li>
-     *   <li><b>Review score</b> = resolutionRate</li>
+     *   <li><b>Complexity   (50)</b> — 1 − methodsAboveThreshold / max(1, totalMethods)</li>
+     *   <li><b>Aikido       (30)</b> — 1 − min(1, critical×0.5 + high×0.2 + medium×0.05 + low×0.01)</li>
+     *   <li><b>Linter       (20)</b> — 1 − min(1, errors×0.1 + warnings×0.01)</li>
+     *   <li><b>Test presence (10)</b> — testFiles / max(1, sourceFiles) (absent = 0,
+     *       <em>penalised not redistributed</em>)</li>
      * </ul>
+     *
+     * <p>Test-presence absence (no recognised source or test files found) is treated as 0
+     * so that repositories with no tests are penalised. Aikido and linter absence
+     * (service not configured / no applicable linter) have their weight redistributed to
+     * the remaining present sections. Review quality is collected but excluded from the score.
      */
-    public static double computeScore(CoverageSection cov, LinterSection lint,
+    public static double computeScore(TestPresenceSection tests, LinterSection lint,
                                       AikidoSection aik, ComplexitySection cplx,
                                       ReviewSection rev) {
-        double[] scores = new double[5];
-        boolean[] present = new boolean[5];
+        // Test presence: absent = score 0, weight always in denominator
+        double covScore = (tests != null)
+                ? Math.max(0.0, Math.min(1.0, tests.testRatio()))
+                : 0.0;
 
-        if (cov != null) {
-            scores[0] = Math.max(0.0, Math.min(1.0, cov.lineRate() / 100.0));
-            present[0] = true;
+        // Complexity
+        double cplxScore = 0.0;
+        if (cplx != null) {
+            double fraction = (double) cplx.methodsAboveThreshold() / Math.max(1, cplx.totalMethods());
+            cplxScore = Math.max(0.0, 1.0 - Math.min(1.0, fraction));
         }
-        if (lint != null) {
-            double penalty = lint.errorCount() * 0.1 + lint.warningCount() * 0.01;
-            scores[1] = Math.max(0.0, 1.0 - Math.min(1.0, penalty));
-            present[1] = true;
-        }
+
+        // Aikido
+        double aikScore = 0.0;
         if (aik != null) {
             double penalty = aik.criticalCount() * 0.5 + aik.highCount() * 0.2
                     + aik.mediumCount() * 0.05 + aik.lowCount() * 0.01;
-            scores[2] = Math.max(0.0, 1.0 - Math.min(1.0, penalty));
-            present[2] = true;
-        }
-        if (cplx != null) {
-            double fraction = (double) cplx.methodsAboveThreshold() / Math.max(1, cplx.totalMethods());
-            scores[3] = Math.max(0.0, 1.0 - Math.min(1.0, fraction));
-            present[3] = true;
-        }
-        if (rev != null) {
-            scores[4] = Math.max(0.0, Math.min(1.0, rev.resolutionRate()));
-            present[4] = true;
+            aikScore = Math.max(0.0, 1.0 - Math.min(1.0, penalty));
         }
 
-        int presentCount = 0;
-        double total = 0.0;
-        for (int i = 0; i < 5; i++) {
-            if (present[i]) {
-                total += scores[i];
-                presentCount++;
-            }
+        // Linter
+        double lintScore = 0.0;
+        if (lint != null) {
+            double penalty = lint.errorCount() * 0.1 + lint.warningCount() * 0.01;
+            lintScore = Math.max(0.0, 1.0 - Math.min(1.0, penalty));
         }
 
-        if (presentCount == 0) return 0.0;
-        return Math.round(total / presentCount * 10000.0) / 10000.0;
+        // Coverage weight is always present (absence = 0, not excluded).
+        // Absent optional sections have their weight redistributed.
+        double totalWeight = 10.0;                     // coverage always in denominator
+        if (cplx != null) totalWeight += 50.0;
+        if (aik  != null) totalWeight += 30.0;
+        if (lint != null) totalWeight += 20.0;
+
+        double weighted = covScore  * 10.0
+                + cplxScore * (cplx != null ? 50.0 : 0.0)
+                + aikScore  * (aik  != null ? 30.0 : 0.0)
+                + lintScore * (lint != null ? 20.0 : 0.0);
+
+        return Math.round(weighted / totalWeight * 10000.0) / 10000.0;
     }
 }
