@@ -2,6 +2,7 @@ package com.eneve.agent.upgrade;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -61,6 +62,7 @@ public class UpgradeService {
     @Inject NpmRegistryClient npmRegistryClient;
     @Inject PackagistClient packagistClient;
     @Inject PhpReleaseClient phpReleaseClient;
+    @Inject PostgresJdbcClient postgresJdbcClient;
     @Inject QuarkusMigrationFetcher migrationFetcher;
     @Inject PlannerService plannerService;
     @Inject PlanStore planStore;
@@ -249,8 +251,12 @@ public class UpgradeService {
             }
         }
 
+        String latestJdbcVersion = "wildfly".equals(archetype)
+                ? postgresJdbcClient.getLatestPostgresJdbcVersion().orElse(null)
+                : null;
+
         String specText = buildSpecText(archetype, currentVersion, latestVersion, branchName,
-                migrationNotes, aikidoFindings);
+                migrationNotes, aikidoFindings, latestJdbcVersion);
 
         ExecutionPlan plan = plannerService.generatePlan(
                 specText, cleanUrl, defaultBranch, "UPGRADE", archetype + "-" + latestVersion);
@@ -318,18 +324,18 @@ public class UpgradeService {
         LOG.infof("UpgradeService: upgrade plan %s completed — updating %s/%s archetype_version to %s",
                 event.planId(), ctx.workspace(), ctx.repoSlug(), ctx.targetVersion());
         repoSettingsStore.updateArchetype(
-                ctx.workspace(), ctx.repoSlug(), ctx.archetype(), ctx.targetVersion());
+                ctx.workspace(), ctx.repoSlug(), ctx.archetype(), ctx.targetVersion(), Map.of());
     }
 
     // ─── Spec text builders ──────────────────────────────────────────────────────
 
     private String buildSpecText(String archetype, String currentVersion, String latestVersion,
                                   String branchName, String migrationNotes,
-                                  List<AikidoIssueInfo> aikidoFindings) {
+                                  List<AikidoIssueInfo> aikidoFindings, String latestJdbcVersion) {
         String base = switch (archetype) {
             case "quarkus" -> buildQuarkusSpec(currentVersion, latestVersion, branchName, migrationNotes);
             case "dotnet"  -> buildDotnetSpec(currentVersion, latestVersion, branchName);
-            case "wildfly" -> buildWildflySpec(currentVersion, latestVersion, branchName);
+            case "wildfly" -> buildWildflySpec(currentVersion, latestVersion, branchName, latestJdbcVersion);
             case "angular" -> buildAngularSpec(currentVersion, latestVersion, branchName);
             case "react"   -> buildReactSpec(currentVersion, latestVersion, branchName);
             case "laravel" -> buildLaravelSpec(currentVersion, latestVersion, branchName);
@@ -415,8 +421,17 @@ public class UpgradeService {
                 branchName, defaultBranch);
     }
 
-    private String buildWildflySpec(String currentVersion, String latestVersion, String branchName) {
+    private String buildWildflySpec(String currentVersion, String latestVersion, String branchName,
+                                     String latestJdbcVersion) {
         String javaNote = FrameworkJavaRequirements.javaVersionNote("wildfly", latestVersion, currentVersion);
+
+        String jdbcStep = latestJdbcVersion != null
+                ? "8. If the project uses the PostgreSQL JDBC driver (`org.postgresql:postgresql`), "
+                        + "update its version to " + latestJdbcVersion + " in pom.xml.\n"
+                : "";
+
+        String compileStep = jdbcStep.isEmpty() ? "8" : "9";
+        String testStep    = jdbcStep.isEmpty() ? "9" : "10";
 
         return """
                 Upgrade WildFly from %s to %s in this repository.
@@ -431,8 +446,10 @@ public class UpgradeService {
                 5. Review the WildFly %s release notes for breaking changes or deprecated subsystems: \
                 https://www.wildfly.org/news/
                 6. Update any WildFly-specific server configuration files (standalone.xml, domain.xml) if needed.
-                7. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists, otherwise `mvn compile`
-                8. Run tests: run `./mvnw test` if ./mvnw exists, otherwise `mvn test`
+                7. Update other explicitly versioned dependencies to versions compatible with WildFly %s.
+                %s\
+                %s. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists, otherwise `mvn compile`
+                %s. Run tests: run `./mvnw test` if ./mvnw exists, otherwise `mvn test`
 
                 Current version: %s
                 Target version: %s
@@ -441,7 +458,9 @@ public class UpgradeService {
                 """.formatted(
                 currentVersion, latestVersion,
                 latestVersion,
-                javaNote, latestVersion,
+                javaNote, latestVersion, latestVersion,
+                jdbcStep,
+                compileStep, testStep,
                 currentVersion, latestVersion,
                 branchName, defaultBranch);
     }

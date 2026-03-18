@@ -15,6 +15,7 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Stream;
+import java.util.TreeMap;
 
 import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
@@ -65,7 +66,13 @@ public class ArchetypeDetector {
 
     private static final Logger LOG = Logger.getLogger(ArchetypeDetector.class);
 
-    public record ArchetypeInfo(String archetype, String version) {}
+    public record ArchetypeInfo(String archetype, String version, Map<String, String> dependencyVersions) {
+
+        /** Convenience constructor for archetypes with no tracked extra dependencies. */
+        public ArchetypeInfo(String archetype, String version) {
+            this(archetype, version, Map.of());
+        }
+    }
 
     /**
      * Maximum directory depth searched when scanning for Dockerfiles in a multi-module project.
@@ -135,16 +142,24 @@ public class ArchetypeDetector {
             }
 
             if (doc != null) {
+                // Start with POM dependency versions, then layer in WildFly module.xml detections.
+                Map<String, String> depVersions = new TreeMap<>(detectDependencyVersions(doc, properties));
+                mergeModuleXmlDependencies(projectRoot, depVersions);
+
                 ArchetypeInfo quarkus = detectQuarkus(doc, properties);
-                if (quarkus != null) return quarkus;
+                if (quarkus != null) return withDependencies(quarkus, depVersions);
 
                 ArchetypeInfo wildfly = detectWildFlyFromPom(doc, properties);
-                if (wildfly != null) return wildfly;
+                if (wildfly != null) return withDependencies(wildfly, depVersions);
             }
 
             // Dockerfile fallback — useful when the POM alone is not conclusive.
             ArchetypeInfo wildflyDocker = detectWildFlyFromDockerfiles(projectRoot);
-            if (wildflyDocker != null) return wildflyDocker;
+            if (wildflyDocker != null) {
+                Map<String, String> depVersions = new TreeMap<>();
+                mergeModuleXmlDependencies(projectRoot, depVersions);
+                return withDependencies(wildflyDocker, depVersions);
+            }
 
             // Generic Maven packaging — must come after all framework-specific checks.
             if (doc != null) {
@@ -885,6 +900,134 @@ public class ArchetypeDetector {
             v = v.substring(0, spaceIdx).trim();
         }
         return v.isEmpty() ? version.trim() : v;
+    }
+
+    // ─── Dependency version detection ────────────────────────────────────────────
+
+    /**
+     * Scans all {@code <dependency>} elements in the POM and records versions for
+     * well-known dependencies that are tracked for independent upgrades.
+     *
+     * <p>Currently tracked:
+     * <ul>
+     *   <li>{@code org.postgresql:postgresql} → key {@code "postgresql-jdbc"}</li>
+     * </ul>
+     *
+     * @return a map of dependency key → resolved version string; never null, may be empty
+     */
+    Map<String, String> detectDependencyVersions(Document doc, Map<String, String> properties) {
+        Map<String, String> found = new TreeMap<>();
+        NodeList deps = doc.getElementsByTagName("dependency");
+        for (int i = 0; i < deps.getLength(); i++) {
+            Node node = deps.item(i);
+            if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+            Element dep = (Element) node;
+            String groupId    = resolve(textContent(dep, "groupId"),    properties);
+            String artifactId = resolve(textContent(dep, "artifactId"), properties);
+            String version    = textContent(dep, "version");
+
+            if ("org.postgresql".equals(groupId) && "postgresql".equals(artifactId) && version != null) {
+                String resolved = resolve(version, properties);
+                if (resolved != null && !resolved.startsWith("$")) {
+                    LOG.debugf("ArchetypeDetector: detected postgresql-jdbc version %s", resolved);
+                    found.put("postgresql-jdbc", resolved);
+                }
+            }
+        }
+        return found;
+    }
+
+    /**
+     * Pattern matching PostgreSQL JDBC JAR filenames such as {@code postgresql-42.7.3.jar}.
+     * Captures the version segment between the first hyphen and {@code .jar}.
+     */
+    private static final Pattern POSTGRES_JAR_PATTERN =
+            Pattern.compile("(?i)^postgresql-(\\d+(?:\\.\\d+)*)(?:\\.jdbc\\d+)?\\.jar$");
+
+    /**
+     * Scans for WildFly {@code module.xml} files under {@code config/} (up to depth 6) that
+     * reference a PostgreSQL JDBC JAR via a {@code <resource-root path="postgresql-*.jar"/>}
+     * element. Merges any found version into the provided {@code depVersions} map under the
+     * key {@code "postgresql-jdbc"}, but only if the key is not already set (pom.xml wins).
+     *
+     * <p>This covers the common WildFly pattern where the driver is installed as a server
+     * module rather than declared as a Maven dependency.
+     */
+    void mergeModuleXmlDependencies(Path projectRoot, Map<String, String> depVersions) {
+        if (depVersions.containsKey("postgresql-jdbc")) {
+            return; // already detected from pom.xml — no need to scan
+        }
+        Path configDir = projectRoot.resolve("config");
+        if (!Files.isDirectory(configDir)) {
+            return;
+        }
+        try (Stream<Path> stream = Files.walk(configDir, 6)) {
+            stream.filter(Files::isRegularFile)
+                  .filter(p -> p.getFileName().toString().equalsIgnoreCase("module.xml"))
+                  .filter(p -> !isInSkippedDir(projectRoot, p))
+                  .forEach(moduleXml -> probeModuleXmlForPostgres(moduleXml, depVersions));
+        } catch (IOException e) {
+            LOG.debugf("ArchetypeDetector: cannot walk config/ for module.xml files: %s", e.getMessage());
+        }
+    }
+
+    /**
+     * Reads a single {@code module.xml} and, if it contains a {@code <resource-root>} whose
+     * {@code path} attribute matches a PostgreSQL JDBC JAR filename, records the version in
+     * {@code depVersions} under {@code "postgresql-jdbc"}.
+     */
+    private void probeModuleXmlForPostgres(Path moduleXml, Map<String, String> depVersions) {
+        if (depVersions.containsKey("postgresql-jdbc")) {
+            return; // already found in an earlier module.xml
+        }
+        try {
+            String content = Files.readString(moduleXml, StandardCharsets.UTF_8);
+            // Quick pre-check before XML parsing
+            if (!content.toLowerCase().contains("postgresql")) {
+                return;
+            }
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            factory.setNamespaceAware(false);
+            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            builder.setErrorHandler(null);
+            Document doc = builder.parse(moduleXml.toFile());
+            doc.getDocumentElement().normalize();
+
+            NodeList resources = doc.getElementsByTagName("resource-root");
+            for (int i = 0; i < resources.getLength(); i++) {
+                Node node = resources.item(i);
+                if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+                String path = ((Element) node).getAttribute("path");
+                if (path == null || path.isBlank()) continue;
+                // Use only the filename portion in case path contains directories
+                String filename = Path.of(path).getFileName().toString();
+                Matcher m = POSTGRES_JAR_PATTERN.matcher(filename);
+                if (m.matches()) {
+                    String version = m.group(1);
+                    LOG.debugf("ArchetypeDetector: detected postgresql-jdbc version %s from %s",
+                            version, moduleXml);
+                    depVersions.put("postgresql-jdbc", version);
+                    return;
+                }
+            }
+        } catch (Exception e) {
+            LOG.debugf("ArchetypeDetector: cannot parse module.xml at %s: %s",
+                    moduleXml, e.getMessage());
+        }
+    }
+
+    /**
+     * Returns a new {@link ArchetypeInfo} that merges the detected dependency versions
+     * into the base info's map. If {@code depVersions} is empty, returns the original.
+     */
+    private static ArchetypeInfo withDependencies(ArchetypeInfo base, Map<String, String> depVersions) {
+        if (depVersions.isEmpty()) return base;
+        Map<String, String> merged = new TreeMap<>(base.dependencyVersions());
+        merged.putAll(depVersions);
+        return new ArchetypeInfo(base.archetype(), base.version(), merged);
     }
 
     // ─── XML helpers ─────────────────────────────────────────────────────────────

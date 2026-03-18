@@ -42,6 +42,7 @@ public class UpgradeResource {
     @Inject PhpReleaseClient phpReleaseClient;
     @Inject NpmRegistryClient npmRegistryClient;
     @Inject PackagistClient packagistClient;
+    @Inject PostgresJdbcClient postgresJdbcClient;
 
     private final ExecutorService upgradeExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "upgrade-check");
@@ -129,8 +130,9 @@ public class UpgradeResource {
         versions.put("php",      phpReleaseClient.getLatestPhpVersion().orElse("unavailable"));
         versions.put("react",    npmRegistryClient.getLatestVersion("react").orElse("unavailable"));
         versions.put("angular",  npmRegistryClient.getLatestVersion("@angular/core").orElse("unavailable"));
-        versions.put("laravel",  packagistClient.getLatestVersion("laravel", "framework").orElse("unavailable"));
-        versions.put("symfony",  packagistClient.getLatestVersion("symfony", "framework-bundle").orElse("unavailable"));
+        versions.put("laravel",          packagistClient.getLatestVersion("laravel", "framework").orElse("unavailable"));
+        versions.put("symfony",          packagistClient.getLatestVersion("symfony", "framework-bundle").orElse("unavailable"));
+        versions.put("postgresql-jdbc",  postgresJdbcClient.getLatestPostgresJdbcVersion().orElse("unavailable"));
         return Response.ok(versions).build();
     }
 }

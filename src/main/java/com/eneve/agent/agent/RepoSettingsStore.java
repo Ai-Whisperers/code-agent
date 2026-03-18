@@ -8,6 +8,7 @@ import java.sql.Timestamp;
 import java.sql.Types;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
@@ -37,7 +38,7 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, created_at, updated_at
+                       archetype, archetype_version, dependency_versions, created_at, updated_at
                 FROM repo_settings
                 WHERE workspace = ? AND repo_slug = ?
                 """;
@@ -61,7 +62,7 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, created_at, updated_at
+                       archetype, archetype_version, dependency_versions, created_at, updated_at
                 FROM repo_settings
                 ORDER BY workspace, repo_slug
                 """;
@@ -311,22 +312,25 @@ public class RepoSettingsStore {
     }
 
     /**
-     * Stores the detected framework archetype and its version for a repository.
-     * Called by {@code CodeGraphBuildService} after indexing completes.
+     * Stores the detected framework archetype, its version, and any tracked dependency versions
+     * for a repository. Called by {@code CodeGraphBuildService} after indexing completes.
      */
-    public void updateArchetype(String workspace, String repoSlug, String archetype, String archetypeVersion) {
+    public void updateArchetype(String workspace, String repoSlug, String archetype,
+                                 String archetypeVersion, Map<String, String> dependencyVersions) {
         String sql = """
-                UPDATE repo_settings SET archetype = ?, archetype_version = ?, updated_at = now()
+                UPDATE repo_settings SET archetype = ?, archetype_version = ?, dependency_versions = ?, updated_at = now()
                 WHERE workspace = ? AND repo_slug = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             setNullableString(ps, 1, archetype);
             setNullableString(ps, 2, archetypeVersion);
-            ps.setString(3, workspace);
-            ps.setString(4, repoSlug);
+            setNullableString(ps, 3, toJsonMap(dependencyVersions));
+            ps.setString(4, workspace);
+            ps.setString(5, repoSlug);
             ps.executeUpdate();
-            LOG.debugf("Updated archetype for %s/%s: %s %s", workspace, repoSlug, archetype, archetypeVersion);
+            LOG.debugf("Updated archetype for %s/%s: %s %s (deps: %s)",
+                    workspace, repoSlug, archetype, archetypeVersion, dependencyVersions);
         } catch (SQLException e) {
             LOG.errorf("Failed to update archetype for %s/%s: %s", workspace, repoSlug, e.getMessage());
         }
@@ -341,7 +345,7 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, created_at, updated_at
+                       archetype, archetype_version, dependency_versions, created_at, updated_at
                 FROM repo_settings
                 WHERE lower(archetype) = lower(?) AND archetype_version IS NOT NULL
                 ORDER BY workspace, repo_slug
@@ -357,6 +361,38 @@ public class RepoSettingsStore {
             }
         } catch (SQLException e) {
             LOG.errorf("Failed to list repos by archetype '%s': %s", archetype, e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Returns all repos that have a tracked version for the given dependency key
+     * (e.g. {@code "postgresql-jdbc"}).
+     *
+     * <p>Only repos with a non-null {@code dependency_versions} JSON containing the key are returned.
+     */
+    public List<RepoSettings> listByDependency(String dependencyName) {
+        String sql = """
+                SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
+                       upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
+                       confluence_space_key, confluence_parent_page_id, git_platform_url,
+                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                FROM repo_settings
+                WHERE dependency_versions IS NOT NULL
+                  AND dependency_versions::jsonb ? ?
+                ORDER BY workspace, repo_slug
+                """;
+        List<RepoSettings> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, dependencyName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list repos by dependency '%s': %s", dependencyName, e.getMessage());
         }
         return results;
     }
@@ -417,7 +453,7 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, created_at, updated_at
+                       archetype, archetype_version, dependency_versions, created_at, updated_at
                 FROM repo_settings
                 WHERE quality_report_enabled = TRUE AND archived = FALSE
                 ORDER BY workspace, repo_slug
@@ -456,6 +492,7 @@ public class RepoSettingsStore {
                 rs.getString("git_platform_url"),
                 rs.getString("archetype"),
                 rs.getString("archetype_version"),
+                fromJsonMap(rs.getString("dependency_versions")),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );
@@ -482,6 +519,30 @@ public class RepoSettingsStore {
         } catch (JsonProcessingException e) {
             LOG.warnf("Failed to parse rule names JSON: %s", e.getMessage());
             return List.of();
+        }
+    }
+
+    private static String toJsonMap(Map<String, String> map) {
+        if (map == null || map.isEmpty()) {
+            return null;
+        }
+        try {
+            return MAPPER.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            LOG.warnf("Failed to serialize dependency versions: %s", e.getMessage());
+            return null;
+        }
+    }
+
+    private static Map<String, String> fromJsonMap(String json) {
+        if (json == null || json.isBlank()) {
+            return Map.of();
+        }
+        try {
+            return MAPPER.readValue(json, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            LOG.warnf("Failed to parse dependency versions JSON: %s", e.getMessage());
+            return Map.of();
         }
     }
 

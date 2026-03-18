@@ -140,7 +140,8 @@ public class CodeGraphBuildService {
 
             ArchetypeDetector.ArchetypeInfo info = archetypeDetector.detect(ws.getRoot());
             if (info != null) {
-                repoSettingsStore.updateArchetype(workspace, repoSlug, info.archetype(), info.version());
+                repoSettingsStore.updateArchetype(workspace, repoSlug, info.archetype(), info.version(),
+                        info.dependencyVersions());
                 LOG.infof("Detected archetype for %s/%s: %s %s", workspace, repoSlug, info.archetype(), info.version());
                 return true;
             }
@@ -192,7 +193,8 @@ public class CodeGraphBuildService {
 
             ArchetypeDetector.ArchetypeInfo archetypeInfo = archetypeDetector.detect(ws.getRoot());
             if (archetypeInfo != null) {
-                repoSettingsStore.updateArchetype(workspace, repoSlug, archetypeInfo.archetype(), archetypeInfo.version());
+                repoSettingsStore.updateArchetype(workspace, repoSlug, archetypeInfo.archetype(),
+                        archetypeInfo.version(), archetypeInfo.dependencyVersions());
                 LOG.infof("Detected archetype for %s/%s: %s %s",
                         workspace, repoSlug, archetypeInfo.archetype(), archetypeInfo.version());
             }
