@@ -193,8 +193,20 @@ public class RunFixHandler implements JobHandler {
             }
 
             if (!hasChanges) {
-                lifecycle.failFix(job,
-                        "Agent completed but made no file changes. Claude summary: " + summary);
+                if (job.getPlanId() != null) {
+                    // Plan step: the agent verified the task is already done — treat as success
+                    // so the plan can continue to subsequent phases.
+                    job.setStatus(JobStatus.SUCCESS);
+                    job.setSummary("No changes required — task already complete.\n\n" + summary);
+                    jobStore.archive(job);
+                    LOG.infof("Plan job %s: no changes needed (task already complete), marking SUCCESS",
+                            job.getJobId());
+                    RunResult result = lifecycle.buildResult(job, true);
+                    lifecycle.notifyResult(result, request.n8nWebhookUrl());
+                } else {
+                    lifecycle.failFix(job,
+                            "Agent completed but made no file changes. Claude summary: " + summary);
+                }
                 return;
             }
 
