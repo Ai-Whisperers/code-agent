@@ -37,8 +37,8 @@ public class PlanStore {
         String sql = """
                 INSERT INTO execution_plans
                     (plan_id, status, source_type, source_ref, repo_url, target_branch,
-                     title, plan_data, created_at, updated_at, approved_at, summary, error_message)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
+                     title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -55,6 +55,7 @@ public class PlanStore {
             ps.setTimestamp(11, timestampOf(plan.approvedAt()));
             setNullableString(ps, 12, plan.summary());
             setNullableString(ps, 13, plan.errorMessage());
+            setNullableString(ps, 14, plan.prUrl());
             ps.executeUpdate();
             LOG.debugf("Created execution plan %s (status=%s)", plan.planId(), plan.status());
         } catch (SQLException e) {
@@ -65,7 +66,7 @@ public class PlanStore {
     public Optional<ExecutionPlan> find(String planId) {
         String sql = """
                 SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message
+                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url
                 FROM execution_plans
                 WHERE plan_id = ?
                 """;
@@ -86,7 +87,7 @@ public class PlanStore {
     public List<ExecutionPlan> listAll() {
         String sql = """
                 SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message
+                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url
                 FROM execution_plans
                 ORDER BY created_at DESC
                 """;
@@ -106,7 +107,7 @@ public class PlanStore {
     public List<ExecutionPlan> listByStatus(String status) {
         String sql = """
                 SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message
+                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url
                 FROM execution_plans
                 WHERE status = ?
                 ORDER BY created_at DESC
@@ -300,6 +301,23 @@ public class PlanStore {
 
     // ─── Private helpers ────────────────────────────────────────────────
 
+    public void updatePrUrl(String planId, String prUrl) {
+        String sql = """
+                UPDATE execution_plans
+                SET pr_url = ?, updated_at = now()
+                WHERE plan_id = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            setNullableString(ps, 1, prUrl);
+            ps.setString(2, planId);
+            ps.executeUpdate();
+            LOG.debugf("Updated pr_url for execution plan %s", planId);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to update pr_url for %s: %s", planId, e.getMessage());
+        }
+    }
+
     private ExecutionPlan mapRow(ResultSet rs) throws SQLException {
         Timestamp createdTs = rs.getTimestamp("created_at");
         Timestamp updatedTs = rs.getTimestamp("updated_at");
@@ -319,7 +337,8 @@ public class PlanStore {
                 updatedTs != null ? updatedTs.toInstant() : null,
                 approvedTs != null ? approvedTs.toInstant() : null,
                 rs.getString("summary"),
-                rs.getString("error_message")
+                rs.getString("error_message"),
+                rs.getString("pr_url")
         );
     }
 

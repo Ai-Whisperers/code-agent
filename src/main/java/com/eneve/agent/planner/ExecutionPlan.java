@@ -20,5 +20,6 @@ public record ExecutionPlan(
         Instant updatedAt,
         Instant approvedAt,
         String summary,
-        String errorMessage
+        String errorMessage,
+        String prUrl
 ) {}

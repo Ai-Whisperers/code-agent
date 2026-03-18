@@ -17,9 +17,11 @@ import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.MetricsJobRequest;
+import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -64,9 +66,10 @@ public class PlanOrchestratorService {
     private final ConcurrentHashMap<String, Object> planLocks = new ConcurrentHashMap<>();
 
     /**
-     * Tracks the prUrl produced by the first FIX job in each plan so that subsequent
-     * REVIEW steps can reference the correct PR. All FIX steps share one branch/PR,
-     * so only the first FIX step's URL needs to be stored.
+     * Holds the PR URL for a plan so that REVIEW steps (if present in the last phase)
+     * can reference the correct PR. The PR is now created in {@link #markCompleted} after
+     * all phases finish, so this map is only populated at plan completion and cleared by
+     * {@link #cleanup}.
      */
     private final ConcurrentHashMap<String, String> planPrUrl = new ConcurrentHashMap<>();
 
@@ -86,7 +89,14 @@ public class PlanOrchestratorService {
     @Inject JobQueue jobQueue;
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject PlanWorkspaceManager planWorkspaceManager;
+    @Inject GitPlatformService platformService;
     @Inject Event<PlanCompletedEvent> planCompletedEvent;
+
+    @ConfigProperty(name = "git.username")
+    String gitUser;
+
+    @ConfigProperty(name = "git.password")
+    String gitPassword;
 
     @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
     int defaultCcThreshold;
@@ -165,11 +175,6 @@ public class PlanOrchestratorService {
 
         LOG.infof("Orchestrator: job %s for plan %s / step %s completed with %s",
                 event.jobId(), tracked.planId(), tracked.stepId(), event.status());
-
-        // Capture prUrl so later REVIEW steps can use it
-        if (event.prUrl() != null && !event.prUrl().isBlank()) {
-            planPrUrl.put(tracked.planId(), event.prUrl());
-        }
 
         // AWAITING_APPROVAL means the agent completed successfully and created a PR
         // awaiting human merge — the step itself is done from the orchestrator's view.
@@ -290,9 +295,6 @@ public class PlanOrchestratorService {
                         .orElse("agent/plan/" + plan.planId().substring(0, 8))
         );
 
-        // Whether a FIX step (and thus the PR) has already been submitted in a prior phase.
-        boolean prAlreadyCreated = planPrUrl.containsKey(plan.planId());
-
         // Track job IDs submitted in this phase so we can remove them if a later
         // step fails to enqueue (partial-submit cleanup).
         List<String> submittedJobIds = new ArrayList<>();
@@ -305,13 +307,9 @@ public class PlanOrchestratorService {
                 // All FIX steps share one branch; no sourceBranch chaining needed.
                 updatedParams.put("branchName", sharedBranch);
                 updatedParams.remove("sourceBranch");
-                // Only the first FIX step creates the PR; subsequent steps skip it.
-                if (prAlreadyCreated) {
-                    updatedParams.put("skipPrCreation", "true");
-                } else {
-                    updatedParams.remove("skipPrCreation");
-                    prAlreadyCreated = true; // mark so subsequent steps in this phase also skip
-                }
+                // All plan FIX steps skip PR creation — the orchestrator creates the PR
+                // in markCompleted() once every phase has finished.
+                updatedParams.put("skipPrCreation", "true");
                 effectiveStep = step.withUpdates(null, null, null, updatedParams);
             } else if ("GENERATE_DOCS".equalsIgnoreCase(step.jobType())
                     || "GENERATE_TESTS".equalsIgnoreCase(step.jobType())) {
@@ -730,9 +728,68 @@ public class PlanOrchestratorService {
 
     private void markCompleted(String planId) {
         LOG.infof("Orchestrator: plan %s completed successfully", planId);
+
+        // Create the PR now that all phases have finished and the branch has all commits.
+        String branch = planBranchName.get(planId);
+        ExecutionPlan plan = planStore.find(planId).orElse(null);
+        if (plan != null && branch != null) {
+            try {
+                RepoCoordinates coords = RepoCoordinates.parse(plan.repoUrl());
+                String targetBranch = plan.targetBranch() != null ? plan.targetBranch() : "main";
+                String title = plan.title() != null ? plan.title() : "Automated plan: " + planId;
+                String description = buildPlanPrDescription(plan);
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
+                        branch, targetBranch, title, description);
+                String prUrl = prResult[0];
+                planPrUrl.put(planId, prUrl);
+                planStore.updatePrUrl(planId, prUrl);
+                LOG.infof("Orchestrator: plan %s PR created: %s", planId, prUrl);
+            } catch (Exception e) {
+                LOG.warnf("Orchestrator: plan %s PR creation failed (branch %s still has commits): %s",
+                        planId, branch, e.getMessage());
+            }
+        }
+
         planStore.updateStatus(planId, PlanStatus.COMPLETED.name());
         planCompletedEvent.fireAsync(new PlanCompletedEvent(planId, PlanStatus.COMPLETED.name()));
         cleanup(planId);
+    }
+
+    /**
+     * Builds a Markdown PR description summarising the plan's phases and steps.
+     */
+    private String buildPlanPrDescription(ExecutionPlan plan) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("**Automated PR created by Code Agent**\n\n");
+
+        if (plan.sourceRef() != null && !plan.sourceRef().isBlank()) {
+            sb.append("Ref: ").append(plan.sourceRef()).append("\n\n");
+        }
+
+        if (plan.summary() != null && !plan.summary().isBlank()) {
+            sb.append(plan.summary()).append("\n\n");
+        }
+
+        if (plan.planData() != null && plan.planData().phases() != null
+                && !plan.planData().phases().isEmpty()) {
+            sb.append("## Changes\n\n");
+            List<PlanPhase> sorted = plan.planData().phases().stream()
+                    .sorted(Comparator.comparingInt(PlanPhase::order))
+                    .toList();
+            for (PlanPhase phase : sorted) {
+                sb.append("### ").append(phase.name()).append("\n\n");
+                if (phase.steps() != null) {
+                    for (PlanStep step : phase.steps()) {
+                        if (step.title() != null && !step.title().isBlank()) {
+                            sb.append("- ").append(step.title()).append("\n");
+                        }
+                    }
+                }
+                sb.append("\n");
+            }
+        }
+        return sb.toString().trim();
     }
 
     /** Removes all in-memory state for a plan once it reaches a terminal status. */

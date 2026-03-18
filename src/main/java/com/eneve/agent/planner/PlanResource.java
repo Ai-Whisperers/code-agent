@@ -228,6 +228,7 @@ public class PlanResource {
                 Instant.now(),
                 null,
                 null,
+                null,
                 null);
 
         planStore.create(plan);
