@@ -197,7 +197,7 @@ public class CoverageReporter {
         LOG.info("Running JaCoCo coverage measurement...");
         String command = ProcessHelper.mvn(workspace.getRoot()) + " jacoco:prepare-agent test jacoco:report -q";
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();

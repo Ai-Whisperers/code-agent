@@ -180,7 +180,7 @@ public class JiraWebhookResource {
 
         RunFixRequest fullRequest = new RunFixRequest(
                 repoUrl, branchName, issueKey, prompt,
-                "develop", null, null, null, null, null
+                "develop", null, null, null, null, null, null
         );
 
         String jobId = UUID.randomUUID().toString();

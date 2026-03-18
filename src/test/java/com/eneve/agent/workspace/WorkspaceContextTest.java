@@ -170,6 +170,55 @@ class WorkspaceContextTest {
         }
     }
 
+    @Test
+    void createPlanManagedCreatesDirectoryWithPlanPrefix() throws IOException {
+        String planId = "abcdef12-0000-0000-0000-000000000000";
+        WorkspaceContext ws = WorkspaceContext.createPlanManaged(planId);
+        try {
+            Path root = ws.getRoot();
+            assertNotNull(root);
+            assertTrue(Files.exists(root));
+            assertTrue(root.toString().contains("agent-plan-abcdef12"));
+        } finally {
+            ws.forceClose();
+        }
+    }
+
+    @Test
+    void closePlanManagedIsNoOp() throws IOException {
+        WorkspaceContext ws = WorkspaceContext.createPlanManaged("plan-close-noop-00000000-0000");
+        Path root = ws.getRoot();
+        assertTrue(Files.exists(root));
+        ws.close(); // should NOT delete
+        assertTrue(Files.exists(root), "Plan-managed workspace should survive close()");
+        ws.forceClose();
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void forceCloseDeletesPlanManagedWorkspace() throws IOException {
+        WorkspaceContext ws = WorkspaceContext.createPlanManaged("plan-force-close-00000000");
+        Path root = ws.getRoot();
+        assertTrue(Files.exists(root));
+        ws.forceClose();
+        assertFalse(Files.exists(root));
+    }
+
+    @Test
+    void hasClonedRepoReturnsFalseWhenNoGitDir() throws IOException {
+        try (WorkspaceContext ws = WorkspaceContext.create("test-no-git")) {
+            assertFalse(ws.hasClonedRepo());
+        }
+    }
+
+    @Test
+    void hasClonedRepoReturnsTrueWhenGitDirPresent() throws IOException {
+        try (WorkspaceContext ws = WorkspaceContext.create("test-with-git")) {
+            Files.createDirectory(ws.getRoot().resolve(".git"));
+            assertTrue(ws.hasClonedRepo());
+        }
+    }
+
     // Helper method to create WorkspaceContext via reflection (since constructor is private)
     private WorkspaceContext createWorkspaceContext(Path root) throws Exception {
         Constructor<WorkspaceContext> constructor = WorkspaceContext.class.getDeclaredConstructor(Path.class);

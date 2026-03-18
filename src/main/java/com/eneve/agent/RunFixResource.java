@@ -162,7 +162,7 @@ public class RunFixResource {
                 request.jiraKey(),
                 null,
                 "develop",
-                null, null, null, null, null
+                null, null, null, null, null, null
         );
 
         String jobId = UUID.randomUUID().toString();
@@ -285,7 +285,7 @@ public class RunFixResource {
                 null, null,
                 request.ruleNames(),
                 request.extraRules(),
-                null
+                null, null
         );
 
         String jobId = UUID.randomUUID().toString();
@@ -713,7 +713,7 @@ public class RunFixResource {
             String branchName = "agent/" + issue.key() + "-" + branchSuffix;
             RunFixRequest fullRequest = new RunFixRequest(
                     repoUrl, branchName, issue.key(), prompt,
-                    "develop", null, null, null, null, null
+                    "develop", null, null, null, null, null, null
             );
 
             String jobId = UUID.randomUUID().toString();

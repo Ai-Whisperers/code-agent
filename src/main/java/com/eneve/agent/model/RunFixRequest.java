@@ -46,9 +46,17 @@ public record RunFixRequest(
         @Schema(description = "Plan ID for quality-improvement jobs — when set, the agent uses a " +
                 "focused cyclomatic-complexity refactoring prompt instead of the generic fix prompt.",
                 example = "a1b2c3d4-...")
-        String planId
+        String planId,
+
+        @Schema(description = "When true, skip PR creation after pushing — used for intermediate " +
+                "plan steps that share a single PR with the first FIX step in the plan.")
+        Boolean skipPrCreation
 ) {
     public String targetBranchOrDefault() {
         return targetBranch != null && !targetBranch.isBlank() ? targetBranch : "main";
+    }
+
+    public boolean shouldSkipPrCreation() {
+        return skipPrCreation != null && skipPrCreation;
     }
 }

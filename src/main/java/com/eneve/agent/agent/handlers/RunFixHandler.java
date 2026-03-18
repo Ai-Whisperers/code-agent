@@ -31,6 +31,7 @@ import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 @ApplicationScoped
@@ -48,6 +49,7 @@ public class RunFixHandler implements JobHandler {
     @Inject JiraService jiraService;
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject LinterService linterService;
+    @Inject PlanWorkspaceManager planWorkspaceManager;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -80,23 +82,38 @@ public class RunFixHandler implements JobHandler {
             return;
         }
 
-        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+        WorkspaceContext workspace;
+        try {
+            workspace = job.getPlanId() != null
+                    ? planWorkspaceManager.acquire(job.getPlanId())
+                    : WorkspaceContext.create(job.getJobId());
+        } catch (Exception e) {
+            lifecycle.failFix(job, "Failed to acquire workspace: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext ignored = workspace) {
 
             String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
-            LOG.infof("Cloning %s/%s (branch: %s)", coords.organization(), coords.repository(),
-                    request.branchName());
-            try {
-                workspace.cloneRepo(authUrl, request.branchName(), jobTimeoutMinutes);
-            } catch (Exception e) {
-                LOG.infof("Branch '%s' not found, trying clone from '%s' and create branch",
-                        request.branchName(), request.targetBranchOrDefault());
+            if (!workspace.hasClonedRepo()) {
+                LOG.infof("Cloning %s/%s (branch: %s)", coords.organization(), coords.repository(),
+                        request.branchName());
                 try {
-                    workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
-                            request.branchName(), jobTimeoutMinutes);
-                } catch (Exception e2) {
-                    lifecycle.failFix(job, "Clone failed: " + e2.getMessage());
-                    return;
+                    workspace.cloneRepo(authUrl, request.branchName(), jobTimeoutMinutes);
+                } catch (Exception e) {
+                    LOG.infof("Branch '%s' not found, trying clone from '%s' and create branch",
+                            request.branchName(), request.targetBranchOrDefault());
+                    try {
+                        workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
+                                request.branchName(), jobTimeoutMinutes);
+                    } catch (Exception e2) {
+                        lifecycle.failFix(job, "Clone failed: " + e2.getMessage());
+                        return;
+                    }
                 }
+            } else {
+                LOG.infof("Reusing existing workspace for plan %s (branch: %s)",
+                        job.getPlanId(), request.branchName());
             }
 
             gitHelper.configureGitIfNeeded(workspace);
@@ -200,50 +217,61 @@ public class RunFixHandler implements JobHandler {
             job.setFilesChanged(stats.filesChanged());
             job.setLinesChanged(stats.linesChanged());
 
-            String prUrl;
-            String prId;
-            try {
-                String title = request.jiraKey() + ": Automated fix";
-                String linterSummaryLine = linterDiffReport != null
-                        ? "\n\n" + BuildAndLintHelper.buildLinterDiffSummaryLine(linterDiffReport)
-                        : "";
-                String description = "**Automated PR created by Code Agent Runner**\n\n"
-                        + "JIRA: " + request.jiraKey() + "\n\n" + summary + linterSummaryLine;
-                String[] prResult = platformService.createPullRequest(
-                        coords.organization(), coords.project(), coords.repository(),
-                        request.branchName(), request.targetBranchOrDefault(),
-                        title, description);
-                prUrl = prResult[0];
-                prId = prResult[1];
-            } catch (Exception e) {
-                lifecycle.failFix(job, "Create PR failed: " + e.getMessage());
-                return;
+            if (request.shouldSkipPrCreation()) {
+                // Intermediate plan step — changes pushed to shared branch, PR already exists.
+                job.setStatus(JobStatus.SUCCESS);
+                job.setSummary(summary);
+                jobStore.archive(job);
+                LOG.infof("Job %s completed (plan-managed, PR skipped). Branch: %s",
+                        job.getJobId(), request.branchName());
+                RunResult result = lifecycle.buildResult(job, true);
+                lifecycle.notifyResult(result, request.n8nWebhookUrl());
+            } else {
+                String prUrl;
+                String prId;
+                try {
+                    String title = request.jiraKey() + ": Automated fix";
+                    String linterSummaryLine = linterDiffReport != null
+                            ? "\n\n" + BuildAndLintHelper.buildLinterDiffSummaryLine(linterDiffReport)
+                            : "";
+                    String description = "**Automated PR created by Code Agent Runner**\n\n"
+                            + "JIRA: " + request.jiraKey() + "\n\n" + summary + linterSummaryLine;
+                    String[] prResult = platformService.createPullRequest(
+                            coords.organization(), coords.project(), coords.repository(),
+                            request.branchName(), request.targetBranchOrDefault(),
+                            title, description);
+                    prUrl = prResult[0];
+                    prId = prResult[1];
+                } catch (Exception e) {
+                    lifecycle.failFix(job, "Create PR failed: " + e.getMessage());
+                    return;
+                }
+
+                job.setStatus(JobStatus.AWAITING_APPROVAL);
+                job.setSummary(summary);
+                job.setPrUrl(prUrl);
+                job.setPrId(prId);
+                jobStore.update(job);
+
+                if (linterDiffReport != null && linterService.getConfig().isReportOnPr()) {
+                    final String capturedPrId = prId;
+                    final StaticAnalysisDiffReport capturedReport = linterDiffReport;
+                    CompletableFuture.runAsync(() -> lifecycle.safeComment(() ->
+                            platformService.addPrComment(
+                                    coords.organization(), coords.project(), coords.repository(),
+                                    capturedPrId, capturedReport.formatMarkdown())),
+                            AgentPools.PARALLEL);
+                }
+
+                lifecycle.safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
+                lifecycle.safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
+                lifecycle.safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
+
+                RunResult result = lifecycle.buildResult(job, true);
+                lifecycle.notifyResult(result, request.n8nWebhookUrl());
+
+                LOG.infof("Job %s completed successfully. PR: %s", job.getJobId(), prUrl);
             }
-
-            job.setStatus(JobStatus.AWAITING_APPROVAL);
-            job.setSummary(summary);
-            job.setPrUrl(prUrl);
-            job.setPrId(prId);
-            jobStore.update(job);
-
-            if (linterDiffReport != null && linterService.getConfig().isReportOnPr()) {
-                final String capturedPrId = prId;
-                final StaticAnalysisDiffReport capturedReport = linterDiffReport;
-                CompletableFuture.runAsync(() -> lifecycle.safeComment(() ->
-                        platformService.addPrComment(
-                                coords.organization(), coords.project(), coords.repository(),
-                                capturedPrId, capturedReport.formatMarkdown())),
-                        AgentPools.PARALLEL);
-            }
-
-            lifecycle.safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
-            lifecycle.safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
-            lifecycle.safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
-
-            RunResult result = lifecycle.buildResult(job, true);
-            lifecycle.notifyResult(result, request.n8nWebhookUrl());
-
-            LOG.infof("Job %s completed successfully. PR: %s", job.getJobId(), prUrl);
 
         } catch (Exception e) {
             lifecycle.failFix(job, "Unexpected error: " + e.getMessage());
@@ -298,32 +326,42 @@ public class RunFixHandler implements JobHandler {
         job.setFilesChanged(stats.filesChanged());
         job.setLinesChanged(stats.linesChanged());
 
-        String prUrl;
-        String prId;
-        try {
-            String title = "refactor: reduce cyclomatic complexity";
-            String description = "**Automated quality improvement by Code Agent**\n\n" + summary;
-            String[] prResult = platformService.createPullRequest(
-                    coords.organization(), coords.project(), coords.repository(),
-                    request.branchName(), request.targetBranchOrDefault(),
-                    title, description);
-            prUrl = prResult[0];
-            prId = prResult[1];
-        } catch (Exception e) {
-            lifecycle.failFix(job, "Create PR failed: " + e.getMessage());
-            return;
+        if (request.shouldSkipPrCreation()) {
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(summary);
+            jobStore.archive(job);
+            LOG.infof("Quality-fix job %s completed (plan-managed, PR skipped). Branch: %s",
+                    job.getJobId(), request.branchName());
+            RunResult result = lifecycle.buildResult(job, true);
+            lifecycle.notifyResult(result, request.n8nWebhookUrl());
+        } else {
+            String prUrl;
+            String prId;
+            try {
+                String title = "refactor: reduce cyclomatic complexity";
+                String description = "**Automated quality improvement by Code Agent**\n\n" + summary;
+                String[] prResult = platformService.createPullRequest(
+                        coords.organization(), coords.project(), coords.repository(),
+                        request.branchName(), request.targetBranchOrDefault(),
+                        title, description);
+                prUrl = prResult[0];
+                prId = prResult[1];
+            } catch (Exception e) {
+                lifecycle.failFix(job, "Create PR failed: " + e.getMessage());
+                return;
+            }
+
+            job.setStatus(JobStatus.AWAITING_APPROVAL);
+            job.setSummary(summary);
+            job.setPrUrl(prUrl);
+            job.setPrId(prId);
+            jobStore.update(job);
+
+            RunResult result = lifecycle.buildResult(job, true);
+            lifecycle.notifyResult(result, request.n8nWebhookUrl());
+
+            LOG.infof("Quality-fix job %s completed successfully. PR: %s", job.getJobId(), prUrl);
         }
-
-        job.setStatus(JobStatus.AWAITING_APPROVAL);
-        job.setSummary(summary);
-        job.setPrUrl(prUrl);
-        job.setPrId(prId);
-        jobStore.update(job);
-
-        RunResult result = lifecycle.buildResult(job, true);
-        lifecycle.notifyResult(result, request.n8nWebhookUrl());
-
-        LOG.infof("Quality-fix job %s completed successfully. PR: %s", job.getJobId(), prUrl);
     }
 
     private String resolvePrompt(RunFixRequest request) {

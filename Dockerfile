@@ -1,7 +1,13 @@
 # Stage 1: Build the Quarkus application
 FROM eclipse-temurin:21-jdk AS build
 
-RUN apt-get update && apt-get install -y maven && rm -rf /var/lib/apt/lists/*
+ENV MAVEN_VERSION=3.9.14
+ENV MAVEN_HOME=/opt/maven
+ENV PATH="${MAVEN_HOME}/bin:${PATH}"
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+    | tar -xz -C /opt && \
+    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
 
 WORKDIR /build
 COPY pom.xml .
@@ -9,11 +15,19 @@ RUN mvn -B dependency:go-offline -q
 COPY src src
 RUN mvn -B package -DskipTests -q
 
-# Stage 2: Runtime image with JRE + Git + Maven + Node.js + .NET SDK
-FROM eclipse-temurin:21-jre
+# Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK
+FROM eclipse-temurin:21-jdk
+
+ENV MAVEN_VERSION=3.9.14
+ENV MAVEN_HOME=/opt/maven
+ENV PATH="${MAVEN_HOME}/bin:${PATH}"
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+    curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+    | tar -xz -C /opt && \
+    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends git maven curl ca-certificates gnupg && \
+    apt-get install -y --no-install-recommends git curl ca-certificates gnupg && \
     # Node.js 20.x (for ESLint + Mermaid CLI)
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \

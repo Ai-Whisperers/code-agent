@@ -24,6 +24,7 @@ public class JobRecord {
     private volatile int filesChanged;
     private volatile int linesChanged;
     private volatile String prId;
+    private volatile String planId;
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
@@ -233,4 +234,7 @@ public class JobRecord {
 
     public String getPrId() { return prId; }
     public void setPrId(String prId) { this.prId = prId; }
+
+    public String getPlanId() { return planId; }
+    public void setPlanId(String planId) { this.planId = planId; }
 }

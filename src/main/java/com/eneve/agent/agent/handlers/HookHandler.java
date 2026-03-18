@@ -93,7 +93,7 @@ public class HookHandler implements JobHandler {
             RunFixRequest fixRequest = new RunFixRequest(
                     request.repoUrl(), request.branchName(), null,
                     request.prompt(), request.targetBranch(), null, null,
-                    request.ruleNames(), request.extraRules(), null);
+                    request.ruleNames(), request.extraRules(), null, null);
 
             String systemPrompt = promptBuilder.buildRunFixPrompt(fixRequest, request.prompt(), workspace, "");
 

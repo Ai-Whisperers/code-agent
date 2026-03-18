@@ -25,6 +25,7 @@ import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 @ApplicationScoped
@@ -42,6 +43,7 @@ public class GenerateDocsHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
+    @Inject PlanWorkspaceManager planWorkspaceManager;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -90,12 +92,24 @@ public class GenerateDocsHandler implements JobHandler {
             return;
         }
 
-        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+        WorkspaceContext workspace;
+        try {
+            workspace = job.getPlanId() != null
+                    ? planWorkspaceManager.acquire(job.getPlanId())
+                    : WorkspaceContext.create(job.getJobId());
+        } catch (Exception e) {
+            lifecycle.failGenerateDocs(job, "Failed to acquire workspace: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext ignored = workspace) {
 
             String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             String targetBranch = request.targetBranchOrDefault();
 
-            if (request.isCommitDirect()) {
+            if (workspace.hasClonedRepo()) {
+                LOG.infof("GenerateDocs: reusing existing workspace for plan %s", job.getPlanId());
+            } else if (request.isCommitDirect()) {
                 try {
                     workspace.cloneRepo(authUrl, targetBranch, jobTimeoutMinutes);
                 } catch (Exception e) {
@@ -104,11 +118,16 @@ public class GenerateDocsHandler implements JobHandler {
                 }
             } else {
                 try {
-                    workspace.cloneAndCreateBranch(authUrl, targetBranch,
-                            request.branchName(), jobTimeoutMinutes);
+                    workspace.cloneRepo(authUrl, request.branchName(), jobTimeoutMinutes);
                 } catch (Exception e) {
-                    lifecycle.failGenerateDocs(job, "Clone/branch failed: " + e.getMessage());
-                    return;
+                    // Branch doesn't exist yet — create it from target
+                    try {
+                        workspace.cloneAndCreateBranch(authUrl, targetBranch,
+                                request.branchName(), jobTimeoutMinutes);
+                    } catch (Exception e2) {
+                        lifecycle.failGenerateDocs(job, "Clone/branch failed: " + e2.getMessage());
+                        return;
+                    }
                 }
             }
 

@@ -54,7 +54,7 @@ public class DotnetFormatLinter implements LinterRunner {
                     + reportDir.toAbsolutePath()
                     + " --no-restore -v diag 2>&1; true";
 
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", formatCommand)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", formatCommand)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
@@ -88,7 +88,7 @@ public class DotnetFormatLinter implements LinterRunner {
 
     private boolean restore(Path workspaceRoot, long timeoutMinutes) {
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", "dotnet restore -q")
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", "dotnet restore -q")
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
@@ -172,7 +172,7 @@ public class DotnetFormatLinter implements LinterRunner {
     private List<LinterFinding> parseBuildDiagnostics(Path workspaceRoot, long timeoutMinutes) {
         List<LinterFinding> findings = new ArrayList<>();
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", "dotnet build --no-restore -v q 2>&1; true")
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", "dotnet build --no-restore -v q 2>&1; true")
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 

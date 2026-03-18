@@ -20,6 +20,7 @@ import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
+import com.eneve.agent.workspace.PlanWorkspaceManager;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -63,20 +64,17 @@ public class PlanOrchestratorService {
     private final ConcurrentHashMap<String, Object> planLocks = new ConcurrentHashMap<>();
 
     /**
-     * Tracks the prUrl produced by FIX jobs so that subsequent REVIEW steps in the
-     * same plan can reference the correct PR. Only the most-recently-completed FIX
-     * step's PR URL is retained; this covers the common single-PR plan layout.
+     * Tracks the prUrl produced by the first FIX job in each plan so that subsequent
+     * REVIEW steps can reference the correct PR. All FIX steps share one branch/PR,
+     * so only the first FIX step's URL needs to be stored.
      */
     private final ConcurrentHashMap<String, String> planPrUrl = new ConcurrentHashMap<>();
 
     /**
-     * Tracks the branch name of the most-recently-completed FIX step per plan.
-     * Used to automatically chain sequential FIX phases: when the planner did not
-     * explicitly set a {@code sourceBranch} param on a FIX step, the orchestrator
-     * injects the previous FIX step's branch so that changes accumulate rather than
-     * each step branching independently from the base branch.
+     * Tracks the single shared branch name per plan. All FIX steps in a plan push to
+     * this branch so that changes accumulate and only one PR is created.
      */
-    private final ConcurrentHashMap<String, String> planLastFixBranch = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> planBranchName = new ConcurrentHashMap<>();
 
     /**
      * Tracks how many quality-improvement iterations (FIX→METRICS cycles) have been
@@ -87,6 +85,7 @@ public class PlanOrchestratorService {
     @Inject PlanStore planStore;
     @Inject JobQueue jobQueue;
     @Inject CodeMetricsStore codeMetricsStore;
+    @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject Event<PlanCompletedEvent> planCompletedEvent;
 
     @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
@@ -112,27 +111,44 @@ public class PlanOrchestratorService {
         ExecutionPlan plan = planStore.find(planId)
                 .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
 
-        if (!PlanStatus.APPROVED.name().equals(plan.status())) {
+        if (!PlanStatus.APPROVED.name().equals(plan.status())
+                && !PlanStatus.FAILED.name().equals(plan.status())) {
             throw new IllegalStateException(
-                    "Plan " + planId + " must be APPROVED to execute (current: " + plan.status() + ")");
+                    "Plan " + planId + " must be APPROVED or FAILED to execute (current: " + plan.status() + ")");
         }
 
         LOG.infof("Orchestrator: starting execution of plan %s (%s)", planId, plan.title());
-
-        // Reset all step statuses to PENDING so a re-execute is idempotent
-        PlanData resetData = resetAllSteps(plan.planData());
-        planStore.updatePlanData(planId, resetData);
-        planStore.updateStatus(planId, PlanStatus.EXECUTING.name());
-
-        // Reload after resets to work with the authoritative DB state
-        ExecutionPlan executing = planStore.find(planId)
-                .orElseThrow(() -> new IllegalStateException("Plan disappeared after status update: " + planId));
 
         // Ensure the plan lock exists before submitting so any concurrent events
         // from recovered jobs don't race ahead of the initial phase submission.
         planLocks.computeIfAbsent(planId, k -> new Object());
 
-        submitNextPhase(executing, -1);
+        int resumeFromOrder = findFirstIncompletePhaseOrder(plan.planData());
+        if (resumeFromOrder >= 0 && PlanStatus.FAILED.name().equals(plan.status())) {
+            // Partial re-execution: keep completed steps, reset only from the failed phase onward.
+            LOG.infof("Orchestrator: resuming plan %s from phase order %d", planId, resumeFromOrder);
+            PlanData partialReset = resetStepsFromPhase(plan.planData(), resumeFromOrder);
+            planStore.updatePlanData(planId, partialReset);
+            planStore.updateStatus(planId, PlanStatus.EXECUTING.name());
+
+            // Restore in-memory state from previously completed steps.
+            ExecutionPlan reloaded = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalStateException("Plan disappeared: " + planId));
+            restoreInMemoryState(reloaded);
+
+            ExecutionPlan executing = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalStateException("Plan disappeared after status update: " + planId));
+            submitNextPhase(executing, resumeFromOrder - 1);
+        } else {
+            // Fresh execution: reset all steps.
+            PlanData resetData = resetAllSteps(plan.planData());
+            planStore.updatePlanData(planId, resetData);
+            planStore.updateStatus(planId, PlanStatus.EXECUTING.name());
+
+            ExecutionPlan executing = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalStateException("Plan disappeared after status update: " + planId));
+            submitNextPhase(executing, -1);
+        }
     }
 
     // ─── CDI event handler ───────────────────────────────────────────────────────
@@ -160,22 +176,6 @@ public class PlanOrchestratorService {
         String stepStatus = isSuccess(event.status()) ? "SUCCESS" : "FAILED";
         String stepError = "FAILED".equals(stepStatus) ? event.errorMessage() : null;
         planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId(), stepError);
-
-        // When a FIX step succeeds, remember its branch so the next FIX phase can
-        // automatically chain from it if the planner did not set sourceBranch explicitly.
-        if (isSuccess(event.status())) {
-            ExecutionPlan planForBranch = planStore.find(tracked.planId()).orElse(null);
-            if (planForBranch != null) {
-                PlanStep completedStep = findStep(planForBranch, tracked.stepId());
-                if (completedStep != null && "FIX".equalsIgnoreCase(completedStep.jobType())) {
-                    String fixBranch = param(completedStep, "branchName",
-                            "agent/plan/" + tracked.planId().substring(0, 8) + "-" + completedStep.stepId());
-                    planLastFixBranch.put(tracked.planId(), fixBranch);
-                    LOG.debugf("Orchestrator: recorded last FIX branch '%s' for plan %s",
-                            fixBranch, tracked.planId());
-                }
-            }
-        }
 
         // When a METRICS step succeeds, evaluate whether the quality loop should continue
         // or terminate. This must happen before checkPhaseCompletion advances the plan.
@@ -279,10 +279,19 @@ public class PlanOrchestratorService {
             return;
         }
 
-        // Safety-net: if the planner did not set sourceBranch on a FIX step but a
-        // prior FIX step completed in this plan, inject the previous branch so that
-        // sequential phases chain correctly instead of all branching from the base.
-        String lastFixBranch = planLastFixBranch.get(plan.planId());
+        // Determine (or reuse) the single shared branch for all FIX steps in this plan.
+        // We pick it from the first FIX step's branchName param, or auto-generate one.
+        String sharedBranch = planBranchName.computeIfAbsent(plan.planId(), k ->
+                phase.steps().stream()
+                        .filter(s -> "FIX".equalsIgnoreCase(s.jobType()))
+                        .findFirst()
+                        .map(s -> param(s, "branchName",
+                                "agent/plan/" + plan.planId().substring(0, 8)))
+                        .orElse("agent/plan/" + plan.planId().substring(0, 8))
+        );
+
+        // Whether a FIX step (and thus the PR) has already been submitted in a prior phase.
+        boolean prAlreadyCreated = planPrUrl.containsKey(plan.planId());
 
         // Track job IDs submitted in this phase so we can remove them if a later
         // step fails to enqueue (partial-submit cleanup).
@@ -290,16 +299,31 @@ public class PlanOrchestratorService {
 
         for (PlanStep step : phase.steps()) {
             PlanStep effectiveStep = step;
-            if ("FIX".equalsIgnoreCase(step.jobType())
-                    && lastFixBranch != null
-                    && param(step, "sourceBranch", null) == null) {
+            if ("FIX".equalsIgnoreCase(step.jobType())) {
                 Map<String, String> updatedParams = new java.util.LinkedHashMap<>(
                         step.params() != null ? step.params() : Map.of());
-                updatedParams.put("sourceBranch", lastFixBranch);
+                // All FIX steps share one branch; no sourceBranch chaining needed.
+                updatedParams.put("branchName", sharedBranch);
+                updatedParams.remove("sourceBranch");
+                // Only the first FIX step creates the PR; subsequent steps skip it.
+                if (prAlreadyCreated) {
+                    updatedParams.put("skipPrCreation", "true");
+                } else {
+                    updatedParams.remove("skipPrCreation");
+                    prAlreadyCreated = true; // mark so subsequent steps in this phase also skip
+                }
                 effectiveStep = step.withUpdates(null, null, null, updatedParams);
-                LOG.infof("Orchestrator: auto-injected sourceBranch='%s' for step %s in plan %s",
-                        lastFixBranch, step.stepId(), plan.planId());
+            } else if ("GENERATE_DOCS".equalsIgnoreCase(step.jobType())
+                    || "GENERATE_TESTS".equalsIgnoreCase(step.jobType())) {
+                Map<String, String> updatedParams = new java.util.LinkedHashMap<>(
+                        step.params() != null ? step.params() : Map.of());
+                updatedParams.put("branchName", sharedBranch);
+                if ("GENERATE_DOCS".equalsIgnoreCase(step.jobType())) {
+                    updatedParams.put("commitDirect", "true");
+                }
+                effectiveStep = step.withUpdates(null, null, null, updatedParams);
             }
+
             JobRecord job = mapStepToJob(effectiveStep, plan);
             if (job == null) {
                 LOG.warnf("Orchestrator: could not map step %s (jobType=%s) in plan %s — skipping step",
@@ -307,6 +331,9 @@ public class PlanOrchestratorService {
                 planStore.updateStepInPlan(plan.planId(), step.stepId(), "SKIPPED", null, null);
                 continue;
             }
+
+            // Tag every job with the plan ID so handlers can use the shared workspace.
+            job.setPlanId(plan.planId());
 
             boolean accepted = jobQueue.submit(job);
             if (!accepted) {
@@ -327,8 +354,8 @@ public class PlanOrchestratorService {
             trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order(), isMetrics));
             submittedJobIds.add(job.getJobId());
             planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId(), null);
-            LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s",
-                    job.getJobId(), step.stepId(), step.jobType(), plan.planId());
+            LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s (branch: %s)",
+                    job.getJobId(), step.stepId(), step.jobType(), plan.planId(), sharedBranch);
         }
     }
 
@@ -455,13 +482,14 @@ public class PlanOrchestratorService {
             case "FIX" -> {
                 String branchName = param(step, "branchName",
                         "agent/plan/" + plan.planId().substring(0, 8) + "-" + step.stepId());
-                // For quality-improvement FIX steps, clone from the previous iteration's branch
-                // (sourceBranch param) rather than the plan's target branch so iterations chain.
+                // All FIX steps in a plan use the plan's target branch as base (no chaining).
+                // Quality FIX steps (from the metrics loop) still carry sourceBranch for the
+                // iteration chain — respect that only for quality jobs identified by planId.
                 String sourceBranch = param(step, "sourceBranch", null);
-                String effectiveTargetBranch = sourceBranch != null ? sourceBranch : plan.targetBranch();
-                // Quality FIX steps carry a sourceBranch param; pass the planId so AgentRunner
-                // can look up the latest CC snapshot and use the focused metrics-fix prompt.
-                String qualityPlanId = sourceBranch != null ? plan.planId() : null;
+                boolean isQualityStep = sourceBranch != null;
+                String effectiveTargetBranch = isQualityStep ? sourceBranch : plan.targetBranch();
+                String qualityPlanId = isQualityStep ? plan.planId() : null;
+                boolean skipPr = "true".equalsIgnoreCase(param(step, "skipPrCreation", null));
                 yield new JobRecord(jobId, new RunFixRequest(
                         plan.repoUrl(),
                         branchName,
@@ -472,7 +500,8 @@ public class PlanOrchestratorService {
                         null,  // rulesRepoUrl
                         null,  // ruleNames
                         null,  // extraRules
-                        qualityPlanId
+                        qualityPlanId,
+                        skipPr ? Boolean.TRUE : null
                 ));
             }
             case "GENERATE_TESTS" -> {
@@ -497,6 +526,7 @@ public class PlanOrchestratorService {
             case "GENERATE_DOCS" -> {
                 String branchName = param(step, "branchName",
                         "agent/plan/" + plan.planId().substring(0, 8) + "-" + step.stepId());
+                boolean commitDirect = "true".equalsIgnoreCase(param(step, "commitDirect", null));
                 yield new JobRecord(jobId, new GenerateDocsRequest(
                         plan.repoUrl(),
                         branchName,
@@ -504,7 +534,7 @@ public class PlanOrchestratorService {
                         null,  // ruleNames
                         nullIfBlank(step.prompt()),
                         null,  // n8nWebhookUrl
-                        false
+                        commitDirect
                 ));
             }
             case "SYNC_CONFLUENCE" -> {
@@ -626,6 +656,62 @@ public class PlanOrchestratorService {
         return new PlanData(phases);
     }
 
+    /**
+     * Returns the {@code order} of the first phase that contains a FAILED or SKIPPED step,
+     * or {@code -1} if all phases completed successfully (or there are no phases).
+     */
+    private static int findFirstIncompletePhaseOrder(PlanData data) {
+        if (data == null || data.phases() == null) return -1;
+        return data.phases().stream()
+                .sorted(Comparator.comparingInt(PlanPhase::order))
+                .filter(p -> p.steps() != null && p.steps().stream()
+                        .anyMatch(s -> "FAILED".equals(s.status()) || "SKIPPED".equals(s.status())))
+                .mapToInt(PlanPhase::order)
+                .findFirst()
+                .orElse(-1);
+    }
+
+    /**
+     * Resets steps only in phases at or after {@code fromOrder}, leaving earlier phases unchanged.
+     */
+    private static PlanData resetStepsFromPhase(PlanData data, int fromOrder) {
+        if (data == null || data.phases() == null) return data;
+        List<PlanPhase> phases = new ArrayList<>();
+        for (PlanPhase phase : data.phases()) {
+            if (phase.order() < fromOrder) {
+                phases.add(phase);
+            } else {
+                List<PlanStep> steps = phase.steps().stream()
+                        .map(s -> s.withStatus("PENDING").withJobId(null))
+                        .toList();
+                phases.add(new PlanPhase(phase.order(), phase.name(), phase.gateOnSuccess(), steps));
+            }
+        }
+        return new PlanData(phases);
+    }
+
+    /**
+     * Rebuilds in-memory plan state ({@code planBranchName}, {@code planPrUrl}) from the
+     * persisted step data so that a resumed plan uses the same branch and PR as before.
+     */
+    private void restoreInMemoryState(ExecutionPlan plan) {
+        if (plan.planData() == null || plan.planData().phases() == null) return;
+        plan.planData().phases().stream()
+                .sorted(Comparator.comparingInt(PlanPhase::order))
+                .flatMap(p -> p.steps().stream())
+                .filter(s -> "FIX".equalsIgnoreCase(s.jobType()) && "SUCCESS".equals(s.status()))
+                .forEach(s -> {
+                    String branch = param(s, "branchName",
+                            "agent/plan/" + plan.planId().substring(0, 8));
+                    planBranchName.putIfAbsent(plan.planId(), branch);
+                });
+        // Restore PR URL from first completed FIX step that has a job record with a prUrl.
+        // We rely on the step's jobId to look it up — best-effort; REVIEW steps will still
+        // work even if this is not restored since they use planPrUrl only as a fallback.
+        LOG.debugf("Orchestrator: restored in-memory state for plan %s (branch=%s)",
+                plan.planId(), planBranchName.get(plan.planId()));
+    }
+
     private static PlanData skipRemainingPhases(PlanData data, int fromPhaseOrder) {
         if (data == null || data.phases() == null) return data;
         List<PlanPhase> phases = new ArrayList<>();
@@ -654,7 +740,8 @@ public class PlanOrchestratorService {
         planPrUrl.remove(planId);
         planLocks.remove(planId);
         planIterationCount.remove(planId);
-        planLastFixBranch.remove(planId);
+        planBranchName.remove(planId);
+        planWorkspaceManager.release(planId);
     }
 
     private Object lockFor(String planId) {

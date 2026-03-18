@@ -19,11 +19,15 @@ import org.w3c.dom.NodeList;
 import com.eneve.agent.util.ProcessHelper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
 public class PmdLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(PmdLinter.class);
+
+    @ConfigProperty(name = "build.java-home", defaultValue = "")
+    String javaHome;
 
     private static final String PMD_ARGS =
             " org.apache.maven.plugins:maven-pmd-plugin:3.26.0:pmd -Dformat=xml -q";
@@ -44,8 +48,9 @@ public class PmdLinter implements LinterRunner {
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running PMD analysis...");
         String command = ProcessHelper.mvn(workspaceRoot) + PMD_ARGS;
+        String effectiveJavaHome = javaHome != null && !javaHome.isBlank() ? javaHome : null;
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 

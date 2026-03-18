@@ -22,6 +22,9 @@ public class BuildValidator {
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long timeoutMinutes;
 
+    @ConfigProperty(name = "build.java-home", defaultValue = "")
+    String javaHome;
+
     public void validate(WorkspaceContext workspace) throws Exception {
         String command = detectTestCommand(workspace.getRoot());
         if (command == null) {
@@ -30,7 +33,8 @@ public class BuildValidator {
         }
 
         LOG.infof("Build validation using: %s", command);
-        ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
+        String effectiveJavaHome = javaHome != null && !javaHome.isBlank() ? javaHome : null;
+        ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);
         Process proc = pb.start();

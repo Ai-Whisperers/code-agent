@@ -22,6 +22,7 @@ import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 @ApplicationScoped
@@ -38,6 +39,7 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
+    @Inject PlanWorkspaceManager planWorkspaceManager;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -70,18 +72,37 @@ public class GenerateTestsHandler implements JobHandler {
             return;
         }
 
-        try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
+        WorkspaceContext workspace;
+        try {
+            workspace = job.getPlanId() != null
+                    ? planWorkspaceManager.acquire(job.getPlanId())
+                    : WorkspaceContext.create(job.getJobId());
+        } catch (Exception e) {
+            lifecycle.failGenerateTests(job, "Failed to acquire workspace: " + e.getMessage());
+            return;
+        }
+
+        try (WorkspaceContext ignored = workspace) {
 
             String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
             String testBranch = request.branchName();
-            LOG.infof("GenerateTests: cloning %s/%s (branch: %s)",
-                    coords.organization(), coords.repository(), testBranch);
-            try {
-                workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
-                        testBranch, generateTestsTimeoutMinutes);
-            } catch (Exception e) {
-                lifecycle.failGenerateTests(job, "Clone/branch failed: " + e.getMessage());
-                return;
+            if (workspace.hasClonedRepo()) {
+                LOG.infof("GenerateTests: reusing existing workspace for plan %s (branch: %s)",
+                        job.getPlanId(), testBranch);
+            } else {
+                LOG.infof("GenerateTests: cloning %s/%s (branch: %s)",
+                        coords.organization(), coords.repository(), testBranch);
+                try {
+                    workspace.cloneRepo(authUrl, testBranch, generateTestsTimeoutMinutes);
+                } catch (Exception e) {
+                    try {
+                        workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
+                                testBranch, generateTestsTimeoutMinutes);
+                    } catch (Exception e2) {
+                        lifecycle.failGenerateTests(job, "Clone/branch failed: " + e2.getMessage());
+                        return;
+                    }
+                }
             }
 
             gitHelper.configureGitIfNeeded(workspace);

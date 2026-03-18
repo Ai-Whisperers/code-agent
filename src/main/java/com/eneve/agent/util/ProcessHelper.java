@@ -33,12 +33,24 @@ public final class ProcessHelper {
 
     /**
      * Creates a ProcessBuilder for the given command with all JVM-polluting
-     * environment variables removed from the inherited environment.
+     * environment variables removed, and optionally sets {@code JAVA_HOME} and
+     * prepends {@code $JAVA_HOME/bin} to {@code PATH}.
+     *
+     * <p>Pass {@code null} or blank string as {@code javaHome} to leave the
+     * JDK environment unchanged (same as the old single-arg overload).
+     *
+     * @param javaHome path to a JDK home (e.g. {@code /usr/lib/jvm/java-21});
+     *                 when {@code null} or blank the environment is left unchanged
+     * @param command  command and arguments
      */
-    public static ProcessBuilder cleanBuilder(String... command) {
+    public static ProcessBuilder cleanBuilder(String javaHome, String... command) {
         ProcessBuilder pb = new ProcessBuilder(command);
         Map<String, String> env = pb.environment();
         POLLUTING_ENV_VARS.forEach(env::remove);
+        if (javaHome != null && !javaHome.isBlank()) {
+            env.put("JAVA_HOME", javaHome);
+            env.put("PATH", javaHome + "/bin:" + env.getOrDefault("PATH", ""));
+        }
         return pb;
     }
 

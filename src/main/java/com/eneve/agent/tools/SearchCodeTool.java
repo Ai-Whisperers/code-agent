@@ -54,7 +54,7 @@ public class SearchCodeTool implements ToolExecutor {
         cmd.append(" ").append(shellQuote(searchPath));
 
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", cmd.toString())
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", cmd.toString())
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
 

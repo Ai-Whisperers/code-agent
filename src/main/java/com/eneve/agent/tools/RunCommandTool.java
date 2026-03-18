@@ -36,7 +36,7 @@ public class RunCommandTool implements ToolExecutor {
         }
 
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
 

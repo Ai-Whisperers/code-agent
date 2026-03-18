@@ -61,7 +61,7 @@ public class PhpStanLinter implements LinterRunner {
             String phpstanBin = resolvePhpStanBin(workspaceRoot);
             String command = phpstanBin + " analyse --error-format=json --no-progress 2>/dev/null; true";
 
-            ProcessBuilder pb = ProcessHelper.cleanBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(false);
 

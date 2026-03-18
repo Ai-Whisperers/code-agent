@@ -14,6 +14,11 @@ import org.jboss.logging.Logger;
 /**
  * Manages an isolated workspace directory for a single agent job.
  * Handles cloning the repo, path resolution with traversal protection, and cleanup.
+ *
+ * <p>Plan-managed workspaces ({@link #createPlanManaged}) survive across multiple job steps:
+ * {@link #close()} is a no-op so the try-with-resources in each handler does not delete the
+ * directory. The owning {@code PlanWorkspaceManager} calls {@link #forceClose()} when the
+ * plan reaches a terminal state.
  */
 public class WorkspaceContext implements AutoCloseable {
 
@@ -21,6 +26,7 @@ public class WorkspaceContext implements AutoCloseable {
 
     private final Path root;
     private final Map<String, String> metadata = new HashMap<>();
+    private boolean planManaged;
 
     private WorkspaceContext(Path root) {
         this.root = root;
@@ -30,6 +36,26 @@ public class WorkspaceContext implements AutoCloseable {
         Path tmp = Files.createTempDirectory("agent-job-" + jobId + "-");
         LOG.infof("Created workspace: %s", tmp);
         return new WorkspaceContext(tmp);
+    }
+
+    /**
+     * Creates a workspace whose lifecycle is managed by {@code PlanWorkspaceManager}.
+     * {@link #close()} is a no-op; use {@link #forceClose()} to actually delete it.
+     */
+    public static WorkspaceContext createPlanManaged(String planId) throws IOException {
+        Path tmp = Files.createTempDirectory("agent-plan-" + planId.substring(0, 8) + "-");
+        LOG.infof("Created plan-managed workspace: %s (plan %s)", tmp, planId);
+        WorkspaceContext ws = new WorkspaceContext(tmp);
+        ws.planManaged = true;
+        return ws;
+    }
+
+    /**
+     * Returns {@code true} if a git repository has already been cloned into this workspace
+     * (i.e. {@code .git} directory exists at the root).
+     */
+    public boolean hasClonedRepo() {
+        return Files.exists(root.resolve(".git"));
     }
 
     public Path getRoot() {
@@ -224,6 +250,21 @@ public class WorkspaceContext implements AutoCloseable {
 
     @Override
     public void close() {
+        if (planManaged) {
+            return;
+        }
+        doClose();
+    }
+
+    /**
+     * Unconditionally deletes the workspace directory regardless of whether it is
+     * plan-managed. Called by {@code PlanWorkspaceManager} when the plan completes or fails.
+     */
+    public void forceClose() {
+        doClose();
+    }
+
+    private void doClose() {
         try {
             if (Files.exists(root)) {
                 try (Stream<Path> walk = Files.walk(root)) {
