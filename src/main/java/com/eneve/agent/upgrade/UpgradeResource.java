@@ -1,9 +1,14 @@
 package com.eneve.agent.upgrade;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+
+import com.eneve.agent.agent.RepoSettings;
+import com.eneve.agent.agent.RepoSettingsStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -35,6 +40,7 @@ public class UpgradeResource {
     private static final Logger LOG = Logger.getLogger(UpgradeResource.class);
 
     @Inject UpgradeService upgradeService;
+    @Inject RepoSettingsStore repoSettingsStore;
     @Inject MavenCentralClient mavenCentralClient;
     @Inject DotnetReleaseClient dotnetReleaseClient;
     @Inject WildflyReleaseClient wildflyReleaseClient;
@@ -134,5 +140,80 @@ public class UpgradeResource {
         versions.put("symfony",          packagistClient.getLatestVersion("symfony", "framework-bundle").orElse("unavailable"));
         versions.put("postgresql-jdbc",  postgresJdbcClient.getLatestPostgresJdbcVersion().orElse("unavailable"));
         return Response.ok(versions).build();
+    }
+
+    @GET
+    @Path("/dependency-status/{dependency}")
+    @Operation(
+            operationId = "getDependencyStatus",
+            summary = "Show upgrade status for a tracked dependency across all repos",
+            description = "Returns all repositories that have a detected version for the given dependency "
+                    + "(e.g. 'postgresql-jdbc'), together with each repo's current version, the latest "
+                    + "stable version, and whether an upgrade is needed. "
+                    + "Results are sorted: outdated repos first, then up-to-date ones."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Dependency status per repository"),
+            @APIResponse(responseCode = "404", description = "Unknown dependency name")
+    })
+    public Response dependencyStatus(
+            @Parameter(description = "Dependency key, e.g. 'postgresql-jdbc'", required = true)
+            @PathParam("dependency") String dependency) {
+
+        String latestVersion = resolveLatestDependencyVersion(dependency);
+        if (latestVersion == null) {
+            return Response.status(404)
+                    .entity(Map.of("error", "Unknown dependency: " + dependency))
+                    .build();
+        }
+
+        List<RepoSettings> repos = repoSettingsStore.listByDependency(dependency);
+
+        List<Map<String, Object>> outdated = new ArrayList<>();
+        List<Map<String, Object>> upToDate = new ArrayList<>();
+
+        for (RepoSettings repo : repos) {
+            String currentVersion = repo.dependencyVersions().get(dependency);
+            String source         = repo.dependencyVersions().get(dependency + "-source");
+            boolean needsUpgrade  = UpgradeService.isOlderVersion(currentVersion, latestVersion);
+
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("workspace",      repo.workspace());
+            entry.put("repoSlug",       repo.repoSlug());
+            entry.put("archetype",      repo.archetype());
+            entry.put("currentVersion", currentVersion);
+            entry.put("latestVersion",  latestVersion);
+            entry.put("source",         source != null ? source : "unknown");
+            entry.put("upgradeNeeded",  needsUpgrade);
+
+            if (needsUpgrade) {
+                outdated.add(entry);
+            } else {
+                upToDate.add(entry);
+            }
+        }
+
+        List<Map<String, Object>> allRepos = new ArrayList<>(outdated);
+        allRepos.addAll(upToDate);
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("dependency",    dependency);
+        result.put("latestVersion", latestVersion);
+        result.put("total",         allRepos.size());
+        result.put("outdated",      outdated.size());
+        result.put("repos",         allRepos);
+
+        return Response.ok(result).build();
+    }
+
+    /**
+     * Resolves the latest stable version for a tracked dependency key.
+     * Returns {@code null} if the dependency is not recognised.
+     */
+    private String resolveLatestDependencyVersion(String dependency) {
+        return switch (dependency) {
+            case "postgresql-jdbc" -> postgresJdbcClient.getLatestPostgresJdbcVersion().orElse(null);
+            default                -> null;
+        };
     }
 }
