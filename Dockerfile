@@ -1,5 +1,5 @@
 # Stage 1: Build the Quarkus application
-FROM eclipse-temurin:21-jdk AS build
+FROM eclipse-temurin:21-jdk@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57 AS build
 
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
@@ -16,7 +16,7 @@ COPY src src
 RUN mvn -B package -DskipTests -q
 
 # Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK
-FROM eclipse-temurin:21-jdk
+FROM eclipse-temurin:21-jdk@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57
 
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
@@ -55,13 +55,16 @@ RUN apt-get update && \
     apt-get purge -y gnupg && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
+RUN useradd -m -u 1001 -s /bin/bash appuser && \
+    mkdir -p /home/appuser/.m2
+
 # Tell Puppeteer to use the system-installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
 
-COPY settings.xml /root/.m2/settings.xml
+COPY --chown=appuser:appuser settings.xml /home/appuser/.m2/settings.xml
 
 WORKDIR /app
 
@@ -70,7 +73,11 @@ COPY --from=build /build/target/quarkus-app/*.jar .
 COPY --from=build /build/target/quarkus-app/app/ app/
 COPY --from=build /build/target/quarkus-app/quarkus/ quarkus/
 
+RUN chown -R appuser:appuser /app
+
 ENV JAVA_OPTS="-Djava.util.logging.manager=org.jboss.logmanager.LogManager"
+
+USER appuser
 
 EXPOSE 8080
 
