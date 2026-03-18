@@ -7,7 +7,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import com.eneve.agent.agent.AiCallStore;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.util.UrlUtils;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
@@ -49,6 +51,7 @@ public class PlanResource {
     @Inject PlanStore planStore;
     @Inject JiraService jiraService;
     @Inject PlanOrchestratorService orchestratorService;
+    @Inject AiCallStore aiCallStore;
 
     @ConfigProperty(name = "planner.enabled", defaultValue = "true")
     boolean plannerEnabled;
@@ -90,7 +93,7 @@ public class PlanResource {
         String sourceType = request.sourceType() != null ? request.sourceType() : "FREE_TEXT";
         String targetBranch = request.targetBranch() != null ? request.targetBranch() : "main";
 
-        LOG.infof("Creating plan: sourceType=%s, repoUrl=%s", sourceType, request.repoUrl());
+        LOG.infof("Creating plan: sourceType=%s, repoUrl=%s", sourceType, UrlUtils.stripCredentials(request.repoUrl()));
 
         ExecutionPlan plan = plannerService.generatePlan(
                 request.specText(), request.repoUrl(), targetBranch, sourceType, request.sourceRef());
@@ -142,7 +145,7 @@ public class PlanResource {
 
         String targetBranch = request.targetBranch() != null ? request.targetBranch() : "main";
 
-        LOG.infof("Creating plan from Jira %s, repoUrl=%s", jiraKey, request.repoUrl());
+        LOG.infof("Creating plan from Jira %s, repoUrl=%s", jiraKey, UrlUtils.stripCredentials(request.repoUrl()));
 
         ExecutionPlan plan = plannerService.generatePlan(
                 ticketText, request.repoUrl(), targetBranch, "JIRA", jiraKey);
@@ -210,12 +213,14 @@ public class PlanResource {
         PlanPhase metricsPhase = new PlanPhase(1, "Baseline Metrics", true, List.of(metricsStep));
         PlanData planData = new PlanData(List.of(metricsPhase));
 
+        String safeRepoUrl = UrlUtils.stripCredentials(request.repoUrl());
+
         ExecutionPlan plan = new ExecutionPlan(
                 planId,
                 PlanStatus.DRAFT.name(),
                 "QUALITY",
                 request.branch(),
-                request.repoUrl(),
+                safeRepoUrl,
                 targetBranch,
                 title,
                 planData,
@@ -227,7 +232,7 @@ public class PlanResource {
 
         planStore.create(plan);
         LOG.infof("Quality improvement plan %s created for %s (CC threshold=%d, maxIter=%d)",
-                planId, request.repoUrl(), ccThreshold, maxIterations);
+                planId, safeRepoUrl, ccThreshold, maxIterations);
 
         if (request.autoApprove()) {
             planStore.approve(planId);
@@ -286,6 +291,31 @@ public class PlanResource {
                 .orElse(Response.status(404)
                         .entity(Map.of("error", "Plan not found: " + planId))
                         .build());
+    }
+
+    @GET
+    @Path("/{planId}/conversation")
+    @Operation(
+            operationId = "getPlanConversation",
+            summary = "Get the AI conversation log for a plan",
+            description = "Returns the AI call records for the plan, including the full prompt sent to "
+                    + "the model and the raw response received. Each entry also includes token usage and timing."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "AI call records with prompt and response text"),
+            @APIResponse(responseCode = "404", description = "No AI conversation found for this plan")
+    })
+    public Response getConversation(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId) {
+
+        var calls = aiCallStore.findByJobId(planId);
+        if (calls.isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No AI conversation found for plan: " + planId))
+                    .build();
+        }
+        return Response.ok(calls).build();
     }
 
     // ─── Edit (DRAFT only) ──────────────────────────────────────────────

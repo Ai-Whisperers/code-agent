@@ -47,8 +47,9 @@ public class AiCallStore {
                 INSERT INTO ai_calls
                     (job_id, job_type, model, iteration,
                      input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                     stop_reason, tool_names, duration_ms, is_error, error_message, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                     prompt_text, response_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -70,6 +71,8 @@ public class AiCallStore {
             ps.setBoolean(12, record.isError());
             setNullableString(ps, 13, record.errorMessage());
             ps.setTimestamp(14, Timestamp.from(record.createdAt() != null ? record.createdAt() : Instant.now()));
+            setNullableString(ps, 15, record.promptText());
+            setNullableString(ps, 16, record.responseText());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to store AI call record: %s", e.getMessage());
@@ -80,7 +83,8 @@ public class AiCallStore {
         String sql = """
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at
+                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                       prompt_text, response_text
                 FROM ai_calls WHERE job_id = ?
                 ORDER BY iteration ASC NULLS FIRST, created_at ASC
                 """;
@@ -104,7 +108,8 @@ public class AiCallStore {
         StringBuilder sql = new StringBuilder("""
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at
+                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                       prompt_text, response_text
                 FROM ai_calls WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
@@ -257,7 +262,9 @@ public class AiCallStore {
                 rs.getLong("duration_ms"),
                 rs.getBoolean("is_error"),
                 rs.getString("error_message"),
-                ts != null ? ts.toInstant() : null
+                ts != null ? ts.toInstant() : null,
+                rs.getString("prompt_text"),
+                rs.getString("response_text")
         );
     }
 

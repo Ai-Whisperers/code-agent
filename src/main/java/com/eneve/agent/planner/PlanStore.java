@@ -11,6 +11,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import com.eneve.agent.util.UrlUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -45,7 +46,7 @@ public class PlanStore {
             ps.setString(2, plan.status());
             ps.setString(3, plan.sourceType());
             setNullableString(ps, 4, plan.sourceRef());
-            ps.setString(5, plan.repoUrl());
+            ps.setString(5, UrlUtils.stripCredentials(plan.repoUrl()));
             ps.setString(6, plan.targetBranch() != null ? plan.targetBranch() : "main");
             setNullableString(ps, 7, plan.title());
             ps.setString(8, toJson(plan.planData()));

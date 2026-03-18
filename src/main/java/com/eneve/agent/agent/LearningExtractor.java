@@ -118,7 +118,8 @@ public class LearningExtractor {
                 null, null, "LEARNING_EXTRACTION", fastModelName, null,
                 0, 0, 0, 0,
                 null, null, durationMs,
-                true, e.getMessage(), Instant.now()));
+                true, e.getMessage(), Instant.now(),
+                null, null));
             LOG.warnf("Learning extraction failed: %s", e.getMessage());
             return Optional.empty();
         }
@@ -132,7 +133,8 @@ public class LearningExtractor {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
 
         String responseText = "";
         for (ContentBlock block : response.content()) {

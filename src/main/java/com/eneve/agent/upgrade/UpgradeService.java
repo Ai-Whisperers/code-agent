@@ -253,7 +253,7 @@ public class UpgradeService {
                 migrationNotes, aikidoFindings);
 
         ExecutionPlan plan = plannerService.generatePlan(
-                specText, cloneUrl, defaultBranch, "UPGRADE", archetype + "-" + latestVersion);
+                specText, cleanUrl, defaultBranch, "UPGRADE", archetype + "-" + latestVersion);
 
         if (plan == null) {
             LOG.errorf("UpgradeService: plan generation failed for %s/%s", repo.workspace(), repo.repoSlug());

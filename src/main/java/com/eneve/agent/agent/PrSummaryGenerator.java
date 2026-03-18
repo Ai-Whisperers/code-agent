@@ -198,7 +198,8 @@ public class PrSummaryGenerator {
                     null, jobId, "PR_SUMMARY", modelName, null,
                     0, 0, 0, 0,
                     null, null, durationMs,
-                    true, e.getMessage(), Instant.now()));
+                    true, e.getMessage(), Instant.now(),
+                    null, null));
             LOG.errorf("PR summary Claude call failed: %s", e.getMessage());
             return null;
         }
@@ -212,7 +213,8 @@ public class PrSummaryGenerator {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
         LOG.infof("PR summary generated — tokens: in=%d, out=%d, duration=%dms",
                 usage.inputTokens(), usage.outputTokens(), durationMs);
 

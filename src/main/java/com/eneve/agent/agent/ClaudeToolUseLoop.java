@@ -147,7 +147,8 @@ public class ClaudeToolUseLoop {
                         null, jobId, jobType, modelName, iteration + 1,
                         0, 0, 0, 0,
                         null, null, durationMs,
-                        true, e.getMessage(), Instant.now()));
+                        true, e.getMessage(), Instant.now(),
+                        null, null));
                 throw e;
             }
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -229,7 +230,8 @@ public class ClaudeToolUseLoop {
                     usage.cacheCreationInputTokens().orElse(0L),
                     usage.cacheReadInputTokens().orElse(0L),
                     stopReason, toolNamesCsv, durationMs,
-                    false, null, Instant.now()));
+                    false, null, Instant.now(),
+                    null, null));
 
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.ASSISTANT)

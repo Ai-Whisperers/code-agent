@@ -157,7 +157,8 @@ public class FindingResolver {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
         LOG.infof("Batch resolution: %d findings checked in %dms (tokens: in=%d out=%d)",
@@ -257,7 +258,8 @@ public class FindingResolver {
                     null, jobId, "FINDING_RESOLUTION", fastModelName, null,
                     0, 0, 0, 0,
                     null, null, durationMs,
-                    true, e.getMessage(), Instant.now()));
+                    true, e.getMessage(), Instant.now(),
+                    null, null));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -270,7 +272,8 @@ public class FindingResolver {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
         String responseText = "";

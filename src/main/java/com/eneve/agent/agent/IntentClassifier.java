@@ -94,7 +94,8 @@ public class IntentClassifier {
                 null, null, "INTENT_CLASSIFICATION", fastModelName, null,
                 0, 0, 0, 0,
                 null, null, durationMs,
-                true, e.getMessage(), Instant.now()));
+                true, e.getMessage(), Instant.now(),
+                null, null));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -107,7 +108,8 @@ public class IntentClassifier {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
 
         String responseText = "";
         for (ContentBlock block : response.content()) {
