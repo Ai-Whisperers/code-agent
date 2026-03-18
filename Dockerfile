@@ -40,8 +40,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
         chromium \
         fonts-liberation fonts-noto-color-emoji \
-        libgbm1 libasound2 libatk1.0-0 libatk-bridge2.0-0 libcups2 \
-        libdbus-1-3 libdrm2 libgtk-3-0 libnspr4 libnss3 libx11-xcb1 \
+        libgbm1 libasound2t64 libatk1.0-0 libatk-bridge2.0-0 libcups2t64 \
+        libdbus-1-3 libdrm2 libgtk-3-0t64 libnspr4 libnss3 libx11-xcb1 \
         libxcomposite1 libxdamage1 libxrandr2 xdg-utils && \
     # Mermaid CLI for local diagram rendering
     npm install -g @mermaid-js/mermaid-cli && \
