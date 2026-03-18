@@ -251,12 +251,17 @@ public class UpgradeService {
             }
         }
 
-        String latestJdbcVersion = "wildfly".equals(archetype)
-                ? postgresJdbcClient.getLatestPostgresJdbcVersion().orElse(null)
-                : null;
+        String latestJdbcVersion  = null;
+        String currentJdbcVersion = null;
+        String jdbcSource         = null;
+        if ("wildfly".equals(archetype)) {
+            latestJdbcVersion  = postgresJdbcClient.getLatestPostgresJdbcVersion().orElse(null);
+            currentJdbcVersion = repo.dependencyVersions().get("postgresql-jdbc");
+            jdbcSource         = repo.dependencyVersions().get("postgresql-jdbc-source");
+        }
 
         String specText = buildSpecText(archetype, currentVersion, latestVersion, branchName,
-                migrationNotes, aikidoFindings, latestJdbcVersion);
+                migrationNotes, aikidoFindings, latestJdbcVersion, currentJdbcVersion, jdbcSource);
 
         ExecutionPlan plan = plannerService.generatePlan(
                 specText, cleanUrl, defaultBranch, "UPGRADE", archetype + "-" + latestVersion);
@@ -331,11 +336,13 @@ public class UpgradeService {
 
     private String buildSpecText(String archetype, String currentVersion, String latestVersion,
                                   String branchName, String migrationNotes,
-                                  List<AikidoIssueInfo> aikidoFindings, String latestJdbcVersion) {
+                                  List<AikidoIssueInfo> aikidoFindings, String latestJdbcVersion,
+                                  String currentJdbcVersion, String jdbcSource) {
         String base = switch (archetype) {
             case "quarkus" -> buildQuarkusSpec(currentVersion, latestVersion, branchName, migrationNotes);
             case "dotnet"  -> buildDotnetSpec(currentVersion, latestVersion, branchName);
-            case "wildfly" -> buildWildflySpec(currentVersion, latestVersion, branchName, latestJdbcVersion);
+            case "wildfly" -> buildWildflySpec(currentVersion, latestVersion, branchName,
+                                               latestJdbcVersion, currentJdbcVersion, jdbcSource);
             case "angular" -> buildAngularSpec(currentVersion, latestVersion, branchName);
             case "react"   -> buildReactSpec(currentVersion, latestVersion, branchName);
             case "laravel" -> buildLaravelSpec(currentVersion, latestVersion, branchName);
@@ -422,13 +429,10 @@ public class UpgradeService {
     }
 
     private String buildWildflySpec(String currentVersion, String latestVersion, String branchName,
-                                     String latestJdbcVersion) {
+                                     String latestJdbcVersion, String currentJdbcVersion, String jdbcSource) {
         String javaNote = FrameworkJavaRequirements.javaVersionNote("wildfly", latestVersion, currentVersion);
 
-        String jdbcStep = latestJdbcVersion != null
-                ? "8. If the project uses the PostgreSQL JDBC driver (`org.postgresql:postgresql`), "
-                        + "update its version to " + latestJdbcVersion + " in pom.xml.\n"
-                : "";
+        String jdbcStep = buildJdbcUpgradeStep(latestJdbcVersion, currentJdbcVersion, jdbcSource);
 
         String compileStep = jdbcStep.isEmpty() ? "8" : "9";
         String testStep    = jdbcStep.isEmpty() ? "9" : "10";
@@ -463,6 +467,53 @@ public class UpgradeService {
                 compileStep, testStep,
                 currentVersion, latestVersion,
                 branchName, defaultBranch);
+    }
+
+    /**
+     * Builds a numbered spec step for upgrading the PostgreSQL JDBC driver, tailored to
+     * where the driver was detected in the repository.
+     *
+     * <ul>
+     *   <li><b>pom.xml</b>: instructs updating the {@code org.postgresql:postgresql} version
+     *       (or its property) in {@code pom.xml}.</li>
+     *   <li><b>module.xml</b>: instructs replacing the JAR and updating the
+     *       {@code <resource-root>} path in the WildFly module descriptor under
+     *       {@code config/}.</li>
+     *   <li><b>unknown source / not detected</b>: falls back to a conditional hint covering
+     *       both patterns.</li>
+     * </ul>
+     *
+     * @return a non-null step string (may be empty if no latest JDBC version is available)
+     */
+    private String buildJdbcUpgradeStep(String latestJdbcVersion, String currentJdbcVersion,
+                                         String jdbcSource) {
+        if (latestJdbcVersion == null) {
+            return "";
+        }
+
+        String from = currentJdbcVersion != null
+                ? "from " + currentJdbcVersion + " "
+                : "";
+
+        if ("pom".equals(jdbcSource)) {
+            return "8. Update the PostgreSQL JDBC driver (`org.postgresql:postgresql`) "
+                    + from + "to " + latestJdbcVersion
+                    + " in pom.xml (update the version directly or its property reference).\n";
+        }
+
+        if ("module.xml".equals(jdbcSource)) {
+            return "8. Update the PostgreSQL JDBC driver " + from + "to " + latestJdbcVersion
+                    + " in the WildFly server module: replace the JAR file under config/ "
+                    + "(e.g. config/org.postgresql/main/postgresql-" + latestJdbcVersion + ".jar) "
+                    + "and update the <resource-root path=\\\"postgresql-" + latestJdbcVersion + ".jar\\\"/> "
+                    + "attribute in the corresponding module.xml.\n";
+        }
+
+        // Source unknown — driver may be configured via pom.xml or as a WildFly module
+        return "8. If the project uses the PostgreSQL JDBC driver (`org.postgresql:postgresql`), "
+                + "update it " + from + "to " + latestJdbcVersion
+                + ". Check pom.xml for a direct dependency or config/ for a WildFly module.xml "
+                + "with a <resource-root> referencing postgresql-*.jar.\n";
     }
 
     private String buildAngularSpec(String currentVersion, String latestVersion, String branchName) {

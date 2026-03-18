@@ -929,8 +929,9 @@ public class ArchetypeDetector {
             if ("org.postgresql".equals(groupId) && "postgresql".equals(artifactId) && version != null) {
                 String resolved = resolve(version, properties);
                 if (resolved != null && !resolved.startsWith("$")) {
-                    LOG.debugf("ArchetypeDetector: detected postgresql-jdbc version %s", resolved);
+                    LOG.debugf("ArchetypeDetector: detected postgresql-jdbc version %s from pom.xml", resolved);
                     found.put("postgresql-jdbc", resolved);
+                    found.put("postgresql-jdbc-source", "pom");
                 }
             }
         }
@@ -955,7 +956,7 @@ public class ArchetypeDetector {
      */
     void mergeModuleXmlDependencies(Path projectRoot, Map<String, String> depVersions) {
         if (depVersions.containsKey("postgresql-jdbc")) {
-            return; // already detected from pom.xml — no need to scan
+            return; // already detected from pom.xml — source already recorded, no need to scan
         }
         Path configDir = projectRoot.resolve("config");
         if (!Files.isDirectory(configDir)) {
@@ -1010,6 +1011,7 @@ public class ArchetypeDetector {
                     LOG.debugf("ArchetypeDetector: detected postgresql-jdbc version %s from %s",
                             version, moduleXml);
                     depVersions.put("postgresql-jdbc", version);
+                    depVersions.put("postgresql-jdbc-source", "module.xml");
                     return;
                 }
             }
