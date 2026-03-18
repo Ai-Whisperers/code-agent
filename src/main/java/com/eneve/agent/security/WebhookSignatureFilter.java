@@ -10,6 +10,8 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.Optional;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
@@ -41,6 +43,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
     private static final Logger LOG = Logger.getLogger(WebhookSignatureFilter.class);
     private static final String HMAC_SHA256 = "HmacSHA256";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final long REPLAY_WINDOW_SECONDS = 30;
 
     @ConfigProperty(name = "webhook.secret.bitbucket")
     Optional<String> bitbucketSecret;
@@ -56,6 +60,9 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
     @ConfigProperty(name = "webhook.secret.github")
     Optional<String> githubSecret;
+
+    @ConfigProperty(name = "webhook.secret.aikido")
+    Optional<String> aikidoSecret;
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
@@ -74,6 +81,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             verifyGitHub(ctx);
         } else if (path.contains("jira")) {
             verifyJira(ctx);
+        } else if (path.contains("aikido")) {
+            verifyAikido(ctx);
         }
     }
 
@@ -242,13 +251,64 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
         abort(ctx);
     }
 
+    /**
+     * Aikido sends the payload signed with HMAC-SHA256 and includes the hex digest in
+     * the {@code X-Aikido-Webhook-Signature} header (raw hex, no {@code sha256=} prefix).
+     * The payload also contains a top-level {@code dispatched_at} epoch timestamp;
+     * requests older than {@value #REPLAY_WINDOW_SECONDS} seconds are rejected to prevent
+     * replay attacks.
+     */
+    private void verifyAikido(ContainerRequestContext ctx) throws IOException {
+        String secret = aikidoSecret.orElse("");
+        if (isNotConfigured(secret)) return;
+
+        String signatureHeader = ctx.getHeaderString("X-Aikido-Webhook-Signature");
+        if (signatureHeader == null || signatureHeader.isBlank()) {
+            LOG.warn("Aikido webhook rejected — missing X-Aikido-Webhook-Signature header");
+            abort(ctx);
+            return;
+        }
+
+        byte[] body = readAndRestoreBody(ctx);
+        String computedHex = hmacSha256Hex(body, secret);
+
+        if (!MessageDigest.isEqual(
+                signatureHeader.getBytes(StandardCharsets.UTF_8),
+                computedHex.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("Aikido webhook rejected — HMAC signature mismatch");
+            abort(ctx);
+            return;
+        }
+
+        // Replay-attack guard: dispatched_at must be within the allowed window
+        try {
+            long dispatchedAt = MAPPER.readTree(body).path("dispatched_at").asLong(0L);
+            if (!isTimestampFresh(dispatchedAt)) {
+                LOG.warnf("Aikido webhook rejected — dispatched_at %d is older than %d seconds",
+                        dispatchedAt, REPLAY_WINDOW_SECONDS);
+                abort(ctx);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Aikido webhook rejected — could not parse dispatched_at: %s", e.getMessage());
+            abort(ctx);
+        }
+    }
+
+    /**
+     * Returns {@code true} when {@code dispatchedAt} (epoch seconds) is within the replay window.
+     */
+    public static boolean isTimestampFresh(long dispatchedAt) {
+        long nowSeconds = System.currentTimeMillis() / 1000L;
+        return (nowSeconds - dispatchedAt) <= REPLAY_WINDOW_SECONDS;
+    }
+
     private byte[] readAndRestoreBody(ContainerRequestContext ctx) throws IOException {
         byte[] body = ctx.getEntityStream().readAllBytes();
         ctx.setEntityStream(new ByteArrayInputStream(body));
         return body;
     }
 
-    private static String hmacSha256Hex(byte[] data, String secret) {
+    public static String hmacSha256Hex(byte[] data, String secret) {
         try {
             Mac mac = Mac.getInstance(HMAC_SHA256);
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_SHA256));

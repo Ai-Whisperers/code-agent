@@ -1,0 +1,258 @@
+package com.eneve.agent.webhooks;
+
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+import com.eneve.agent.agent.RepoSettings;
+import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.aikido.AikidoService;
+import com.eneve.agent.upgrade.UpgradeService;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
+import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
+import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
+
+import jakarta.inject.Inject;
+import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.POST;
+import jakarta.ws.rs.Path;
+import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.core.Response;
+
+/**
+ * Handles incoming Aikido Security webhooks.
+ * When Aikido reports a vulnerability for a known repository, automatically triggers
+ * an upgrade check for that repository via {@link UpgradeService}.
+ */
+@Path("/webhooks")
+@Produces(MediaType.APPLICATION_JSON)
+@Consumes(MediaType.APPLICATION_JSON)
+@Tag(name = "Webhooks", description = "Incoming webhook handlers for external integrations")
+public class AikidoWebhookResource {
+
+    private static final Logger LOG = Logger.getLogger(AikidoWebhookResource.class);
+
+    @Inject UpgradeService upgradeService;
+    @Inject RepoSettingsStore repoSettingsStore;
+    @Inject AikidoService aikidoService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private final ExecutorService upgradeExecutor = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "aikido-webhook-upgrade");
+        t.setDaemon(true);
+        return t;
+    });
+
+    @POST
+    @Path("/aikido")
+    @Operation(
+            operationId = "aikidoWebhook",
+            summary = "Handle Aikido Security webhook events",
+            description = "Receives Aikido Security webhook payloads for vulnerability notifications. "
+                    + "When a known repository is identified in the payload, automatically triggers "
+                    + "an upgrade check for that repository. Signature verification and replay-attack "
+                    + "protection are enforced by WebhookSignatureFilter before this handler is called."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Upgrade check triggered in background",
+                    content = @Content(schema = @Schema(example = "{\"action\": \"upgrade_check_started\", \"workspace\": \"...\", \"repoSlug\": \"...\"}"))),
+            @APIResponse(responseCode = "200", description = "Webhook processed — event ignored or repo not found")
+    })
+    public Response handleAikidoWebhook(String rawPayload) {
+        try {
+            JsonNode root = objectMapper.readTree(rawPayload);
+            String eventType = root.path("event_type").asText("unknown");
+            LOG.infof("Aikido webhook received: event_type=%s", eventType);
+
+            // The actual event data lives inside the nested "payload" node when present
+            JsonNode payloadNode = root.has("payload") && !root.path("payload").isNull()
+                    ? root.path("payload")
+                    : root;
+
+            Optional<RepoSettings> repoOpt = resolveRepo(payloadNode);
+            if (repoOpt.isEmpty()) {
+                LOG.infof("Aikido webhook: no matching repository found for event_type=%s — skipping", eventType);
+                return ok("skipped", "No matching repository found in settings");
+            }
+
+            RepoSettings repo = repoOpt.get();
+            LOG.infof("Aikido webhook: matched repo %s/%s for event_type=%s — triggering upgrade check",
+                    repo.workspace(), repo.repoSlug(), eventType);
+
+            upgradeExecutor.submit(() -> {
+                try {
+                    UpgradeService.UpgradeResult result = upgradeService.checkAndUpgradeOne(
+                            repo.workspace(), repo.repoSlug());
+                    LOG.infof("Aikido-triggered upgrade check for %s/%s: checked=%d, outdated=%d, plans=%d",
+                            repo.workspace(), repo.repoSlug(),
+                            result.checked(), result.outdated(), result.plansCreated());
+                } catch (Exception e) {
+                    LOG.errorf("Aikido-triggered upgrade check failed for %s/%s: %s",
+                            repo.workspace(), repo.repoSlug(), e.getMessage());
+                }
+            });
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("action", "upgrade_check_started");
+            body.put("workspace", repo.workspace());
+            body.put("repoSlug", repo.repoSlug());
+            body.put("eventType", eventType);
+            return Response.accepted(body).build();
+
+        } catch (Exception e) {
+            LOG.errorf("Aikido webhook processing error: %s", e.getMessage());
+            return ok("error", e.getMessage());
+        }
+    }
+
+    // ─── Repository resolution ──────────────────────────────────────────────────
+
+    /**
+     * Attempts to resolve a known {@link RepoSettings} from the Aikido event payload.
+     *
+     * <p>Resolution order:
+     * <ol>
+     *   <li>Repo name / slug extracted directly from the payload fields.</li>
+     *   <li>Last path segment of any repo URL present in the payload.</li>
+     *   <li>Container image name looked up via the container-repo mapping, then the
+     *       resulting URL parsed for workspace + slug.</li>
+     * </ol>
+     */
+    Optional<RepoSettings> resolveRepo(JsonNode payload) {
+        List<RepoSettings> all = repoSettingsStore.listAll();
+
+        // 1. Direct repo name / slug candidates
+        for (String field : new String[]{"repo_name", "repository_name"}) {
+            String name = payload.path(field).asText("");
+            if (!name.isBlank()) {
+                Optional<RepoSettings> match = matchBySlug(all, name);
+                if (match.isPresent()) return match;
+            }
+        }
+        JsonNode codeRepo = payload.path("code_repo");
+        if (!codeRepo.isMissingNode() && !codeRepo.isNull()) {
+            String name = codeRepo.path("name").asText(codeRepo.path("repo_name").asText(""));
+            if (!name.isBlank()) {
+                Optional<RepoSettings> match = matchBySlug(all, name);
+                if (match.isPresent()) return match;
+            }
+        }
+
+        // 2. Last path segment of repo URL fields
+        for (String field : new String[]{"repo_url", "repository_url", "clone_url"}) {
+            String url = payload.path(field).asText("");
+            if (url.isBlank() && !codeRepo.isMissingNode()) {
+                url = codeRepo.path("url").asText(codeRepo.path("clone_url").asText(""));
+            }
+            if (!url.isBlank()) {
+                String slug = lastPathSegment(url);
+                if (!slug.isBlank()) {
+                    Optional<RepoSettings> match = matchBySlug(all, slug);
+                    if (match.isPresent()) return match;
+                }
+            }
+        }
+
+        // 3. Container image → repo URL mapping
+        String containerImage = extractContainerImage(payload);
+        if (containerImage != null && !containerImage.isBlank() && aikidoService.isEnabled()) {
+            String codeRepoUrl = aikidoService.findCodeRepoUrlForContainer(containerImage);
+            if (codeRepoUrl != null) {
+                String[] parts = parseWorkspaceAndSlug(codeRepoUrl);
+                if (parts != null) {
+                    return repoSettingsStore.find(parts[0], parts[1]);
+                }
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Finds the first repo in {@code all} whose slug (case-insensitive) contains
+     * {@code candidate}, or where {@code candidate} contains the slug.
+     */
+    private static Optional<RepoSettings> matchBySlug(List<RepoSettings> all, String candidate) {
+        String lower = candidate.toLowerCase();
+        return all.stream()
+                .filter(r -> {
+                    String slug = r.repoSlug().toLowerCase();
+                    return lower.contains(slug) || slug.contains(lower);
+                })
+                .findFirst();
+    }
+
+    /**
+     * Extracts workspace and repo slug from a clone URL.
+     * E.g. {@code https://bitbucket.org/csarenergy/my-repo.git} → {@code ["csarenergy", "my-repo"]}.
+     * Returns {@code null} if the URL does not have at least two real path segments after the host.
+     */
+    static String[] parseWorkspaceAndSlug(String url) {
+        if (url == null || url.isBlank()) return null;
+        String work = url.endsWith(".git") ? url.substring(0, url.length() - 4) : url;
+        if (work.endsWith("/")) work = work.substring(0, work.length() - 1);
+
+        // Isolate the path component: strip protocol + authority
+        String path;
+        int schemeEnd = work.indexOf("://");
+        if (schemeEnd >= 0) {
+            int pathStart = work.indexOf('/', schemeEnd + 3);
+            if (pathStart < 0) return null; // only host, no path
+            path = work.substring(pathStart + 1); // e.g. "csarenergy/my-repo"
+        } else if (work.contains("@") && work.contains(":")) {
+            // SSH: git@host:workspace/repo
+            int colon = work.indexOf(':');
+            path = work.substring(colon + 1);
+        } else {
+            path = work;
+        }
+
+        // path must contain at least one slash → workspace/slug
+        int slash = path.indexOf('/');
+        if (slash <= 0 || slash == path.length() - 1) return null;
+        String workspace = path.substring(0, slash);
+        // Take only the first two segments (ignore sub-groups)
+        String rest = path.substring(slash + 1);
+        String slug = rest.contains("/") ? rest.substring(rest.lastIndexOf('/') + 1) : rest;
+        if (workspace.isBlank() || slug.isBlank()) return null;
+        return new String[]{workspace, slug};
+    }
+
+    private static String lastPathSegment(String url) {
+        if (url == null || url.isBlank()) return "";
+        String stripped = url.endsWith(".git") ? url.substring(0, url.length() - 4) : url;
+        int idx = stripped.lastIndexOf('/');
+        return idx >= 0 ? stripped.substring(idx + 1) : stripped;
+    }
+
+    private static String extractContainerImage(JsonNode root) {
+        for (String field : new String[]{"container_image", "image_name", "docker_image",
+                "affected_container", "container_name"}) {
+            String val = root.path(field).asText("");
+            if (!val.isBlank()) return val;
+        }
+        JsonNode container = root.path("container");
+        if (!container.isMissingNode() && !container.isNull()) {
+            if (container.isTextual()) return container.asText("");
+            String img = container.path("image").asText(container.path("name").asText(""));
+            if (!img.isBlank()) return img;
+        }
+        return null;
+    }
+
+    private static Response ok(String action, String reason) {
+        return Response.ok(Map.of("action", action, "reason", reason)).build();
+    }
+}
