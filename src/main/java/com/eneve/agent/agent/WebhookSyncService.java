@@ -135,7 +135,7 @@ public class WebhookSyncService {
         if (!"bitbucket".equalsIgnoreCase(gitPlatform)) {
             return false;
         }
-        if (agentBaseUrl == null || agentBaseUrl.isBlank()) {
+        if (agentBaseUrl == null || agentBaseUrl.isBlank() || "-".equals(agentBaseUrl)) {
             return false;
         }
         if (workspace == null || workspace.isBlank()) {
