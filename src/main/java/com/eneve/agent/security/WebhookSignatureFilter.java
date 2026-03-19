@@ -8,17 +8,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Map;
-import java.util.Optional;
 
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.annotation.Priority;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
@@ -46,23 +46,8 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final long REPLAY_WINDOW_SECONDS = 30;
 
-    @ConfigProperty(name = "webhook.secret.bitbucket")
-    Optional<String> bitbucketSecret;
-
-    @ConfigProperty(name = "webhook.secret.azuredevops")
-    Optional<String> azureDevOpsSecret;
-
-    @ConfigProperty(name = "webhook.secret.jira")
-    Optional<String> jiraSecret;
-
-    @ConfigProperty(name = "webhook.secret.gitlab")
-    Optional<String> gitlabSecret;
-
-    @ConfigProperty(name = "webhook.secret.github")
-    Optional<String> githubSecret;
-
-    @ConfigProperty(name = "webhook.secret.aikido")
-    Optional<String> aikidoSecret;
+    @Inject
+    SettingsService settingsService;
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
@@ -91,7 +76,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * in the X-Hub-Signature header as "sha256=<hex-encoded-digest>".
      */
     private void verifyBitbucket(ContainerRequestContext ctx) throws IOException {
-        String secret = bitbucketSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.bitbucket");
         if (isNotConfigured(secret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature");
@@ -119,7 +104,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * (Basic :secret) or fall back to an X-Azure-Signature HMAC check.
      */
     private void verifyAzureDevOps(ContainerRequestContext ctx) throws IOException {
-        String secret = azureDevOpsSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.azuredevops");
         if (isNotConfigured(secret)) return;
 
         String authHeader = ctx.getHeaderString("Authorization");
@@ -163,7 +148,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * in the {@code X-Hub-Signature-256} header as {@code sha256=<hex-encoded-digest>}.
      */
     private void verifyGitHub(ContainerRequestContext ctx) throws IOException {
-        String secret = githubSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.github");
         if (isNotConfigured(secret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature-256");
@@ -191,7 +176,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * the payload body by default for standard webhooks).
      */
     private void verifyGitLab(ContainerRequestContext ctx) {
-        String secret = gitlabSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.gitlab");
         if (isNotConfigured(secret)) return;
 
         String tokenHeader = ctx.getHeaderString("X-Gitlab-Token");
@@ -216,7 +201,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * We support both: direct secret comparison and HMAC signature.
      */
     private void verifyJira(ContainerRequestContext ctx) throws IOException {
-        String secret = jiraSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.jira");
         if (isNotConfigured(secret)) return;
 
         String hubSecret = ctx.getHeaderString("X-Hub-Secret");
@@ -259,7 +244,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * replay attacks.
      */
     private void verifyAikido(ContainerRequestContext ctx) throws IOException {
-        String secret = aikidoSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.aikido");
         if (isNotConfigured(secret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Aikido-Webhook-Signature");
@@ -280,9 +265,15 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             return;
         }
 
-        // Replay-attack guard: dispatched_at must be within the allowed window
+        // Replay-attack guard: dispatched_at must be present and within the allowed window
         try {
-            long dispatchedAt = MAPPER.readTree(body).path("dispatched_at").asLong(0L);
+            com.fasterxml.jackson.databind.JsonNode node = MAPPER.readTree(body).path("dispatched_at");
+            if (node.isMissingNode() || node.isNull()) {
+                LOG.warn("Aikido webhook rejected — dispatched_at field is missing from payload");
+                abort(ctx);
+                return;
+            }
+            long dispatchedAt = node.asLong();
             if (!isTimestampFresh(dispatchedAt)) {
                 LOG.warnf("Aikido webhook rejected — dispatched_at %d is older than %d seconds",
                         dispatchedAt, REPLAY_WINDOW_SECONDS);

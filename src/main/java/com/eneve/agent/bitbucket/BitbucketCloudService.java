@@ -391,6 +391,8 @@ public class BitbucketCloudService {
                     .GET()
                     .build();
 
+            LOG.infof("Bitbucket %s request: %s", operation, request.toString());
+
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {

@@ -3,7 +3,8 @@ package com.eneve.agent.security;
 import java.util.Map;
 import java.util.Set;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
+
 import org.jboss.logging.Logger;
 
 import io.quarkus.security.identity.SecurityIdentity;
@@ -35,8 +36,8 @@ public class ApiKeyFilter implements ContainerRequestFilter {
             "q/"
     );
 
-    @ConfigProperty(name = "api.key", defaultValue = "")
-    String apiKey;
+    @Inject
+    SettingsService settingsService;
 
     @Inject
     SecurityIdentity securityIdentity;
@@ -62,7 +63,8 @@ public class ApiKeyFilter implements ContainerRequestFilter {
             return;
         }
 
-        // Fall back to API key check
+        // Fall back to API key check (read per-request to support live rotation)
+        String apiKey = settingsService.getSecret("api.key");
         if (isNotConfigured(apiKey)) {
             return;
         }
