@@ -441,7 +441,8 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     /**
-     * Returns a map of {@code uid → url} for all webhooks registered on the given repository.
+     * Returns a map of {@code uuid → url} for all webhooks registered on the given repository.
+     * Bitbucket Cloud API 2.0 exposes the webhook identifier as {@code "uuid"}, not {@code "uid"}.
      */
     public Map<String, String> listWebhooks(String workspace, String repo) {
         Map<String, String> hooks = new LinkedHashMap<>();
@@ -454,10 +455,10 @@ public class BitbucketPlatformService implements GitPlatformService {
                 JsonNode values = root.path("values");
                 if (values.isArray()) {
                     for (JsonNode hook : values) {
-                        String uid = hook.path("uid").asText("");
+                        String uuid = hook.path("uuid").asText("");
                         String url = hook.path("url").asText("");
-                        if (!uid.isEmpty() && !url.isEmpty()) {
-                            hooks.put(uid, url);
+                        if (!uuid.isEmpty() && !url.isEmpty()) {
+                            hooks.put(uuid, url);
                         }
                     }
                 }
@@ -512,26 +513,65 @@ public class BitbucketPlatformService implements GitPlatformService {
         Map<String, String> existing = listWebhooks(workspace, repo);
         for (Map.Entry<String, String> entry : existing.entrySet()) {
             if (targetUrl.equals(entry.getValue())) {
-                String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + entry.getKey();
-                requireTrustedUrl(baseUrl + deletePath);
-                try {
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create(baseUrl + deletePath))
-                            .header("Authorization", authHeader())
-                            .DELETE()
-                            .build();
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                        LOG.infof("Deleted webhook %s (uid=%s) from %s/%s", targetUrl, entry.getKey(), workspace, repo);
-                    } else {
-                        LOG.warnf("Failed to delete webhook uid=%s from %s/%s: HTTP %d",
-                                entry.getKey(), workspace, repo, response.statusCode());
-                    }
-                } catch (Exception e) {
-                    LOG.errorf("Error deleting webhook uid=%s from %s/%s: %s",
-                            entry.getKey(), workspace, repo, e.getMessage());
-                }
+                deleteWebhookByUuid(workspace, repo, entry.getKey(), targetUrl);
             }
+        }
+    }
+
+    /**
+     * Deletes all webhooks on the given repository whose {@code description} field matches
+     * {@code targetDescription}. Use this to remove all agent-owned hooks regardless of the
+     * URL they were registered with (handles hostname changes between deployments).
+     */
+    public void deleteWebhooksByDescription(String workspace, String repo, String targetDescription) {
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list webhooks for " + workspace + "/" + repo);
+            List<String[]> toDelete = new java.util.ArrayList<>();
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(responseBody);
+                com.fasterxml.jackson.databind.JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode hook : values) {
+                        String uuid = hook.path("uuid").asText("");
+                        String url = hook.path("url").asText("");
+                        String description = hook.path("description").asText("");
+                        if (!uuid.isEmpty() && targetDescription.equals(description)) {
+                            toDelete.add(new String[]{uuid, url});
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
+                break;
+            }
+            for (String[] hook : toDelete) {
+                deleteWebhookByUuid(workspace, repo, hook[0], hook[1]);
+            }
+        }
+    }
+
+    private void deleteWebhookByUuid(String workspace, String repo, String uuid, String urlForLog) {
+        String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + uuid;
+        requireTrustedUrl(baseUrl + deletePath);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + deletePath))
+                    .header("Authorization", authHeader())
+                    .DELETE()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                LOG.infof("Deleted webhook %s (uuid=%s) from %s/%s", urlForLog, uuid, workspace, repo);
+            } else {
+                LOG.warnf("Failed to delete webhook uuid=%s from %s/%s: HTTP %d",
+                        uuid, workspace, repo, response.statusCode());
+            }
+        } catch (Exception e) {
+            LOG.errorf("Error deleting webhook uuid=%s from %s/%s: %s", uuid, workspace, repo, e.getMessage());
         }
     }
 

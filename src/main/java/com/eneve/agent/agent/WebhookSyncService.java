@@ -137,20 +137,18 @@ public class WebhookSyncService {
     }
 
     /**
-     * Removes the agent's PR and comment webhooks from the given repository.
-     * This method is a no-op if the service is not fully configured or if the hooks
-     * are not registered.
+     * Removes all code-agent webhooks from the given repository, identified by their
+     * {@code "code-agent"} description. Matching by description rather than by URL ensures
+     * stale webhooks from a previous {@code agent.base.url} are also removed.
+     *
+     * <p>This method is a no-op if the service is not fully configured.
      */
     public void removeWebhooks(String repoWorkspace, String repoSlug) {
         if (!isConfigured()) {
             return;
         }
 
-        String prUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request";
-        String commentUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request-comment";
-
-        bitbucketPlatformService.deleteWebhooksByUrl(repoWorkspace, repoSlug, prUrl);
-        bitbucketPlatformService.deleteWebhooksByUrl(repoWorkspace, repoSlug, commentUrl);
+        bitbucketPlatformService.deleteWebhooksByDescription(repoWorkspace, repoSlug, "code-agent");
     }
 
     private boolean isConfigured() {
