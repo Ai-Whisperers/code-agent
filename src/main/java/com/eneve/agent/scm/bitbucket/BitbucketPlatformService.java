@@ -7,6 +7,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -437,6 +438,101 @@ public class BitbucketPlatformService implements GitPlatformService {
 
         LOG.infof("Listed %d repositories in workspace '%s'", slugs.size(), org);
         return slugs;
+    }
+
+    /**
+     * Returns a map of {@code uid → url} for all webhooks registered on the given repository.
+     */
+    public Map<String, String> listWebhooks(String workspace, String repo) {
+        Map<String, String> hooks = new LinkedHashMap<>();
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list webhooks for " + workspace + "/" + repo);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode hook : values) {
+                        String uid = hook.path("uid").asText("");
+                        String url = hook.path("url").asText("");
+                        if (!uid.isEmpty() && !url.isEmpty()) {
+                            hooks.put(uid, url);
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
+                break;
+            }
+        }
+
+        return hooks;
+    }
+
+    /**
+     * Creates a webhook on the given repository.
+     *
+     * @param workspace  Bitbucket workspace slug
+     * @param repo       Repository slug
+     * @param webhookUrl Public URL the webhook will POST to
+     * @param secret     HMAC-SHA256 secret for payload signing
+     * @param events     Bitbucket event keys (e.g. {@code pullrequest:created})
+     */
+    public void createWebhook(String workspace, String repo, String webhookUrl, String secret, List<String> events) {
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks";
+        try {
+            List<String> quotedEvents = events.stream()
+                    .map(e -> "\"" + e + "\"")
+                    .toList();
+            String eventsJson = "[" + String.join(",", quotedEvents) + "]";
+            String body = """
+                    {
+                      "description": "code-agent",
+                      "url": "%s",
+                      "active": true,
+                      "secret": "%s",
+                      "events": %s
+                    }
+                    """.formatted(webhookUrl, secret, eventsJson);
+            postAndReturn(path, body, "create webhook " + webhookUrl + " on " + workspace + "/" + repo);
+            LOG.infof("Created webhook %s on %s/%s", webhookUrl, workspace, repo);
+        } catch (Exception e) {
+            LOG.errorf("Failed to create webhook %s on %s/%s: %s", webhookUrl, workspace, repo, e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * Deletes all webhooks on the given repository whose URL matches {@code targetUrl}.
+     */
+    public void deleteWebhooksByUrl(String workspace, String repo, String targetUrl) {
+        Map<String, String> existing = listWebhooks(workspace, repo);
+        for (Map.Entry<String, String> entry : existing.entrySet()) {
+            if (targetUrl.equals(entry.getValue())) {
+                String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + entry.getKey();
+                requireTrustedUrl(baseUrl + deletePath);
+                try {
+                    HttpRequest request = HttpRequest.newBuilder()
+                            .uri(URI.create(baseUrl + deletePath))
+                            .header("Authorization", authHeader())
+                            .DELETE()
+                            .build();
+                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                        LOG.infof("Deleted webhook %s (uid=%s) from %s/%s", targetUrl, entry.getKey(), workspace, repo);
+                    } else {
+                        LOG.warnf("Failed to delete webhook uid=%s from %s/%s: HTTP %d",
+                                entry.getKey(), workspace, repo, response.statusCode());
+                    }
+                } catch (Exception e) {
+                    LOG.errorf("Error deleting webhook uid=%s from %s/%s: %s",
+                            entry.getKey(), workspace, repo, e.getMessage());
+                }
+            }
+        }
     }
 
     // ── HTTP helpers ─────────────────────────────────────────────────────

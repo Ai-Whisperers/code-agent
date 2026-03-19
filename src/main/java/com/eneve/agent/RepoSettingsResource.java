@@ -5,6 +5,9 @@ import java.util.Map;
 
 import com.eneve.agent.agent.RepoSettings;
 import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.WebhookSyncService;
+
+import org.jboss.logging.Logger;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -35,8 +38,13 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Repo Settings", description = "Manage per-repository review settings and prompt templates")
 public class RepoSettingsResource {
 
+    private static final Logger LOG = Logger.getLogger(RepoSettingsResource.class);
+
     @Inject
     RepoSettingsStore settingsStore;
+
+    @Inject
+    WebhookSyncService webhookSyncService;
 
     @GET
     @Operation(
@@ -108,6 +116,16 @@ public class RepoSettingsResource {
                 qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId,
                 gitPlatformUrl);
 
+        try {
+            if (enabled && !archived) {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } else {
+                webhookSyncService.removeWebhooks(workspace, repoSlug);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after upsert for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
+
         return Response.ok(Map.of(
                 "action", "saved",
                 "workspace", workspace,
@@ -138,12 +156,20 @@ public class RepoSettingsResource {
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
 
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+        var existing = settingsStore.find(workspace, repoSlug);
+        if (existing.isEmpty()) {
             return Response.status(404)
                     .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
                     .build();
         }
         settingsStore.setReviewEnabled(workspace, repoSlug, true);
+        if (!existing.get().archived()) {
+            try {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Webhook sync failed after enable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            }
+        }
         return Response.ok(Map.of("action", "enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
@@ -171,6 +197,11 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setReviewEnabled(workspace, repoSlug, false);
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after disable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
         return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
@@ -412,6 +443,11 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setArchived(workspace, repoSlug, true);
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after archive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
         return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
@@ -432,12 +468,20 @@ public class RepoSettingsResource {
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
 
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+        var unarchiveSettings = settingsStore.find(workspace, repoSlug);
+        if (unarchiveSettings.isEmpty()) {
             return Response.status(404)
                     .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
                     .build();
         }
         settingsStore.setArchived(workspace, repoSlug, false);
+        if (unarchiveSettings.get().reviewEnabled()) {
+            try {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Webhook sync failed after unarchive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            }
+        }
         return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
