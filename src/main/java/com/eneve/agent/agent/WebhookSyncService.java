@@ -47,6 +47,11 @@ public class WebhookSyncService {
     @ConfigProperty(name = "agent.base.url", defaultValue = "")
     String agentBaseUrl;
 
+    /** Lazily normalised view of {@link #agentBaseUrl} with any trailing slashes removed. */
+    private String normalizedBaseUrl() {
+        return agentBaseUrl == null ? "" : agentBaseUrl.stripTrailing().replaceAll("/+$", "");
+    }
+
     @ConfigProperty(name = "webhook.secret.bitbucket")
     Optional<String> webhookSecret;
 
@@ -86,9 +91,10 @@ public class WebhookSyncService {
     }
 
     /**
-     * Ensures that both the PR and comment webhooks exist for the given repository.
-     * Skips creation if the webhook URL is already registered. This method is a no-op
-     * if the service is not fully configured.
+     * Ensures that exactly one PR webhook and one comment webhook exist for the given
+     * repository. Skips creation if the correct webhook URL is already registered.
+     * Removes any duplicate registrations of the same URL left over from a prior bug.
+     * This method is a no-op if the service is not fully configured.
      */
     public void ensureWebhooks(String repoWorkspace, String repoSlug) {
         if (!isConfigured()) {
@@ -97,20 +103,36 @@ public class WebhookSyncService {
 
         String secret = webhookSecret.get();
         Map<String, String> existing = bitbucketPlatformService.listWebhooks(repoWorkspace, repoSlug);
-        java.util.Set<String> registeredUrls = new java.util.HashSet<>(existing.values());
 
-        String prUrl = agentBaseUrl + "/webhooks/bitbucket/pull-request";
-        if (!registeredUrls.contains(prUrl)) {
-            bitbucketPlatformService.createWebhook(repoWorkspace, repoSlug, prUrl, secret, PR_EVENTS);
-        } else {
-            LOG.debugf("PR webhook already registered for %s/%s", repoWorkspace, repoSlug);
-        }
+        String prUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request";
+        String commentUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request-comment";
 
-        String commentUrl = agentBaseUrl + "/webhooks/bitbucket/pull-request-comment";
-        if (!registeredUrls.contains(commentUrl)) {
-            bitbucketPlatformService.createWebhook(repoWorkspace, repoSlug, commentUrl, secret, COMMENT_EVENTS);
+        syncWebhook(repoWorkspace, repoSlug, prUrl, secret, PR_EVENTS, existing);
+        syncWebhook(repoWorkspace, repoSlug, commentUrl, secret, COMMENT_EVENTS, existing);
+    }
+
+    /**
+     * Ensures exactly one registration of {@code targetUrl} exists on the repository:
+     * <ul>
+     *   <li>0 registrations → create</li>
+     *   <li>1 registration → no-op</li>
+     *   <li>&gt;1 registrations → delete all duplicates and recreate one clean entry</li>
+     * </ul>
+     */
+    private void syncWebhook(String repoWorkspace, String repoSlug,
+                             String targetUrl, String secret,
+                             List<String> events, Map<String, String> existing) {
+        long count = existing.values().stream().filter(targetUrl::equals).count();
+
+        if (count == 0) {
+            bitbucketPlatformService.createWebhook(repoWorkspace, repoSlug, targetUrl, secret, events);
+        } else if (count == 1) {
+            LOG.debugf("Webhook already registered for %s/%s → %s", repoWorkspace, repoSlug, targetUrl);
         } else {
-            LOG.debugf("Comment webhook already registered for %s/%s", repoWorkspace, repoSlug);
+            LOG.warnf("Found %d duplicate webhooks for %s/%s → %s; removing and recreating",
+                    count, repoWorkspace, repoSlug, targetUrl);
+            bitbucketPlatformService.deleteWebhooksByUrl(repoWorkspace, repoSlug, targetUrl);
+            bitbucketPlatformService.createWebhook(repoWorkspace, repoSlug, targetUrl, secret, events);
         }
     }
 
@@ -124,8 +146,8 @@ public class WebhookSyncService {
             return;
         }
 
-        String prUrl = agentBaseUrl + "/webhooks/bitbucket/pull-request";
-        String commentUrl = agentBaseUrl + "/webhooks/bitbucket/pull-request-comment";
+        String prUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request";
+        String commentUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request-comment";
 
         bitbucketPlatformService.deleteWebhooksByUrl(repoWorkspace, repoSlug, prUrl);
         bitbucketPlatformService.deleteWebhooksByUrl(repoWorkspace, repoSlug, commentUrl);
@@ -135,7 +157,8 @@ public class WebhookSyncService {
         if (!"bitbucket".equalsIgnoreCase(gitPlatform)) {
             return false;
         }
-        if (agentBaseUrl == null || agentBaseUrl.isBlank() || "-".equals(agentBaseUrl)) {
+        String baseUrl = normalizedBaseUrl();
+        if (baseUrl.isBlank() || "-".equals(baseUrl)) {
             return false;
         }
         if (workspace == null || workspace.isBlank()) {

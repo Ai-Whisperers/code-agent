@@ -508,6 +508,11 @@ public class RepoSettingsResource {
                     .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
                     .build();
         }
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook removal failed after delete for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
         return Response.ok(Map.of("action", "deleted", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
