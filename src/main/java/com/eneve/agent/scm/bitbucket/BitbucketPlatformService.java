@@ -555,7 +555,10 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private void deleteWebhookByUuid(String workspace, String repo, String uuid, String urlForLog) {
-        String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + uuid;
+        // Bitbucket returns UUIDs wrapped in curly braces (e.g. "{abc-123}"); strip them
+        // before embedding in a URI path where { and } are illegal characters.
+        String bareUuid = uuid.replaceAll("[{}]", "");
+        String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + bareUuid;
         requireTrustedUrl(baseUrl + deletePath);
         try {
             HttpRequest request = HttpRequest.newBuilder()
