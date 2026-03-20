@@ -1,5 +1,6 @@
 package com.eneve.agent.agent;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -11,8 +12,10 @@ import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
+import com.eneve.agent.workspace.WorkspaceContext;
 
 import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -57,6 +60,7 @@ public class ChatService {
      */
     public Multi<ChatEvent> chatStream(ChatRequest request, String userId) {
         return Multi.createFrom().<ChatEvent>emitter(emitter -> {
+            WorkspaceContext workspace = null;
             try {
                 // ── Resolve conversation ───────────────────────────────
                 String conversationId;
@@ -80,13 +84,16 @@ public class ChatService {
 
                 int priorCount = history.size();
 
+                // ── Create workspace context for tool access ───────────
+                workspace = createChatWorkspace(conversationId, request.productId());
+
                 // ── Run the streaming loop ─────────────────────────────
                 String systemPrompt = buildSystemPrompt(request.productId());
                 List<ToolUnion> tools = ToolDefinitions.chat();
 
                 List<MessageParam> updatedHistory = toolLoop.runStreaming(
                         systemPrompt,
-                        null,
+                        workspace,
                         tools,
                         request.message(),
                         history,
@@ -112,8 +119,35 @@ public class ChatService {
                 LOG.errorf("ChatService error: %s", e.getMessage());
                 emitter.emit(new ChatEvent.Error(e.getMessage() != null ? e.getMessage() : "Internal error"));
                 emitter.complete();
+            } finally {
+                if (workspace != null) {
+                    workspace.close();
+                }
             }
-        });
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+    }
+
+    /**
+     * Creates a workspace context for a chat session.
+     *
+     * <p>The workspace directory is ephemeral (no repo is cloned into it), but the metadata
+     * it carries allows read-only tools like {@code semantic_search} and {@code query_code_graph}
+     * to scope their queries to the correct git workspace/organisation.
+     */
+    private WorkspaceContext createChatWorkspace(String conversationId, String productId) {
+        try {
+            WorkspaceContext workspace = WorkspaceContext.create(conversationId);
+            if (productId != null && !productId.isBlank()) {
+                var product = registryStore.getProduct(productId).orElse(null);
+                if (product != null && product.git() != null
+                        && product.git().workspace() != null) {
+                    workspace.putMetadata("workspace", product.git().workspace());
+                }
+            }
+            return workspace;
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to create chat workspace: " + e.getMessage(), e);
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────
