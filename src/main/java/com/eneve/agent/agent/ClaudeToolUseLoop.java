@@ -13,6 +13,7 @@ import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import com.anthropic.client.AnthropicClient;
+import com.anthropic.core.JsonMissing;
 import com.anthropic.core.JsonValue;
 import com.anthropic.core.http.StreamResponse;
 import com.anthropic.errors.RateLimitException;
@@ -28,6 +29,7 @@ import com.anthropic.models.messages.RawMessageStreamEvent;
 import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
+import com.anthropic.models.messages.ToolUseBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
 import com.eneve.agent.tools.ToolExecutor;
@@ -406,7 +408,18 @@ public class ClaudeToolUseLoop {
                     if (block.isText()) {
                         assistantBlocks.add(ContentBlockParam.ofText(block.asText().toParam()));
                     } else if (block.isToolUse()) {
-                        assistantBlocks.add(ContentBlockParam.ofToolUse(block.asToolUse().toParam()));
+                        ToolUseBlock tb = block.asToolUse();
+                        if (tb._input() instanceof JsonMissing) {
+                            // Anthropic requires input to be present; substitute empty object
+                            assistantBlocks.add(ContentBlockParam.ofToolUse(
+                                    ToolUseBlockParam.builder()
+                                            .id(tb.id())
+                                            .name(tb.name())
+                                            .input(ToolUseBlockParam.Input.builder().build())
+                                            .build()));
+                        } else {
+                            assistantBlocks.add(ContentBlockParam.ofToolUse(tb.toParam()));
+                        }
                     }
                 }
 
@@ -526,6 +539,7 @@ public class ClaudeToolUseLoop {
     @SuppressWarnings("unchecked")
     private Map<String, Object> convertJsonValueToMap(JsonValue json) {
         Object raw = json.accept(new JsonValue.Visitor<Object>() {
+            @Override public Object visitMissing() { return null; }
             @Override public Object visitNull() { return null; }
             @Override public Object visitBoolean(boolean value) { return value; }
             @Override public Object visitNumber(Number value) { return value; }

@@ -39,7 +39,7 @@ import org.jboss.logging.Logger;
 public class ChatService {
 
     private static final Logger LOG = Logger.getLogger(ChatService.class);
-    private static final int CHAT_MAX_ITERATIONS = 20;
+    private static final int CHAT_MAX_ITERATIONS = 100;
     private static final int AUTO_TITLE_MAX_LENGTH = 80;
 
     @Inject ClaudeToolUseLoop toolLoop;
