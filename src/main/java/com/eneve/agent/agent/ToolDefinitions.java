@@ -20,7 +20,9 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(writeFile()),
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(listFiles()),
-                ToolUnion.ofTool(fetchUrl())
+                ToolUnion.ofTool(fetchUrl()),
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(lookupCustomerContext())
         );
     }
 
@@ -32,7 +34,9 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(semanticSearch()),
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(listFiles()),
-                ToolUnion.ofTool(fetchUrl())
+                ToolUnion.ofTool(fetchUrl()),
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(lookupCustomerContext())
         );
     }
 
@@ -45,6 +49,19 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(queryCodeGraph()),
                 ToolUnion.ofTool(semanticSearch()),
                 ToolUnion.ofTool(runCommand()),
+                ToolUnion.ofTool(fetchUrl()),
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(lookupCustomerContext())
+        );
+    }
+
+    public static List<ToolUnion> chat() {
+        return List.of(
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(lookupCustomerContext()),
+                ToolUnion.ofTool(semanticSearch()),
+                ToolUnion.ofTool(searchCode()),
+                ToolUnion.ofTool(queryCodeGraph()),
                 ToolUnion.ofTool(fetchUrl())
         );
     }
@@ -216,6 +233,68 @@ public final class ToolDefinitions {
                                 )))
                                 .build())
                         .addRequired("url")
+                        .build())
+                .build();
+    }
+
+    private static Tool searchKnowledgeBase() {
+        return Tool.builder()
+                .name("search_knowledge_base")
+                .description("Search previously indexed Jira tickets, Confluence documentation pages, "
+                        + "and Jira file attachments by meaning. "
+                        + "Use this BEFORE answering questions about past issues, known bugs, "
+                        + "architecture decisions, runbooks, or team knowledge. "
+                        + "Returns ranked excerpts with source references.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("query", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Natural-language description of what you want to find"
+                                )))
+                                .putAdditionalProperty("sourceTypes", JsonValue.from(Map.of(
+                                        "type", "array",
+                                        "items", Map.of("type", "string",
+                                                "enum", List.of("jira", "confluence", "jira-attachment")),
+                                        "description", "Restrict search to these source types (omit for all sources)"
+                                )))
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Restrict search to a specific product's knowledge (omit for all products)"
+                                )))
+                                .putAdditionalProperty("topK", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Maximum results to return (default: 10, max: 25)"
+                                )))
+                                .build())
+                        .addRequired("query")
+                        .build())
+                .build();
+    }
+
+    private static Tool lookupCustomerContext() {
+        return Tool.builder()
+                .name("lookup_customer_context")
+                .description("Look up customer and product information from the registry: "
+                        + "team members by role (productOwner, engineering, devops, operations, qa), "
+                        + "deployment environments with AWS account IDs and regions, "
+                        + "Jira project keys, Confluence space keys, and Git workspace details. "
+                        + "Use this when you need to know who to notify, which AWS account an environment runs in, "
+                        + "or which Jira project to reference.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID from the registry"
+                                )))
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Customer ID (returns all products if multiple exist)"
+                                )))
+                                .putAdditionalProperty("jiraProject", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira project key — used to look up the owning product"
+                                )))
+                                .build())
                         .build())
                 .build();
     }

@@ -383,6 +383,145 @@ public class ConfluenceService {
         return results.get(0).path("id").asText();
     }
 
+    // ─── Knowledge-base indexing helpers ──────────────────────────────────
+
+    /**
+     * Lightweight page descriptor returned by {@link #listPagesInSpace}.
+     */
+    public record ConfluencePage(String pageId, String title, String url) {}
+
+    /**
+     * Lists all current pages in a Confluence space, paginating until exhausted.
+     * Returns page IDs, titles, and URLs — body content is fetched separately
+     * via {@link #getPageBody(String)}.
+     *
+     * @param spaceKey the Confluence space key
+     * @return list of page descriptors, empty list on error
+     */
+    public List<ConfluencePage> listPagesInSpace(String spaceKey) {
+        if (!isEnabled()) {
+            LOG.warn("Confluence not configured, cannot list pages");
+            return List.of();
+        }
+        List<ConfluencePage> pages = new java.util.ArrayList<>();
+        String cursor = null;
+
+        try {
+            String spaceId = resolveSpaceId(spaceKey);
+            while (true) {
+                String url = baseUrl + "/wiki/api/v2/pages?spaceId=" + spaceId
+                        + "&status=current&limit=50"
+                        + (cursor != null ? "&cursor=" + URLEncoder.encode(cursor, StandardCharsets.UTF_8) : "");
+
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(url))
+                        .header("Authorization", authHeader())
+                        .header("Accept", "application/json")
+                        .GET()
+                        .build();
+
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 200) {
+                    LOG.warnf("Confluence listPagesInSpace failed (%d): %s",
+                            response.statusCode(), response.body());
+                    break;
+                }
+
+                JsonNode root = MAPPER.readTree(response.body());
+                JsonNode results = root.path("results");
+                if (!results.isArray() || results.isEmpty()) break;
+
+                for (JsonNode page : results) {
+                    String pageId = page.path("id").asText();
+                    String title = page.path("title").asText("");
+                    pages.add(new ConfluencePage(pageId, title, buildPageUrl(pageId)));
+                }
+
+                JsonNode nextLink = root.path("_links").path("next");
+                if (nextLink.isMissingNode() || nextLink.isNull() || nextLink.asText("").isBlank()) break;
+
+                // Extract cursor from the next link query string
+                String nextUrl = nextLink.asText("");
+                int ci = nextUrl.indexOf("cursor=");
+                if (ci < 0) break;
+                String rest = nextUrl.substring(ci + 7);
+                int amp = rest.indexOf('&');
+                cursor = amp >= 0 ? rest.substring(0, amp) : rest;
+            }
+            LOG.infof("Confluence listPagesInSpace(%s): found %d pages", spaceKey, pages.size());
+        } catch (Exception e) {
+            LOG.errorf("Failed to list Confluence pages in space %s: %s", spaceKey, e.getMessage());
+        }
+        return pages;
+    }
+
+    /**
+     * Fetches the plain-text body of a Confluence page by stripping its XHTML storage format.
+     *
+     * @param pageId the Confluence page ID
+     * @return plain-text body, or null on error
+     */
+    public String getPageBody(String pageId) {
+        if (!isEnabled()) return null;
+        try {
+            String url = baseUrl + "/wiki/api/v2/pages/" + pageId
+                    + "?body-format=storage";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", authHeader())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                LOG.warnf("Confluence getPageBody failed (%d) for page %s", response.statusCode(), pageId);
+                return null;
+            }
+
+            JsonNode root = MAPPER.readTree(response.body());
+            String storageValue = root.path("body").path("storage").path("value").asText("");
+            return stripXhtml(storageValue);
+        } catch (Exception e) {
+            LOG.errorf("Failed to fetch Confluence page body %s: %s", pageId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Strips XHTML/storage-format tags, returning human-readable plain text.
+     * Uses a simple tag-removal regex; sufficient for embedding text.
+     */
+    private static String stripXhtml(String xhtml) {
+        if (xhtml == null || xhtml.isBlank()) return "";
+        // Replace block-level tags with newlines before stripping
+        String text = xhtml
+                .replaceAll("(?i)<(p|li|h[1-6]|br|tr|div)[^>]*>", "\n")
+                .replaceAll("<[^>]+>", "")
+                .replaceAll("&amp;", "&")
+                .replaceAll("&lt;", "<")
+                .replaceAll("&gt;", ">")
+                .replaceAll("&nbsp;", " ")
+                .replaceAll("&quot;", "\"")
+                .replaceAll("\n{3,}", "\n\n")
+                .trim();
+        return text;
+    }
+
+    /**
+     * Extracts a page ID from a Confluence page URL.
+     * Supports patterns like /pages/12345 and /wiki/spaces/KEY/pages/12345.
+     * Returns null if the URL is not a recognisable Confluence page URL.
+     */
+    public String extractPageIdFromUrl(String url) {
+        if (url == null || url.isBlank()) return null;
+        var m = java.util.regex.Pattern
+                .compile("/pages/(\\d+)")
+                .matcher(url);
+        if (m.find()) return m.group(1);
+        return null;
+    }
+
     private String buildPageUrl(String pageId) {
         return baseUrl + "/wiki/pages/" + pageId;
     }

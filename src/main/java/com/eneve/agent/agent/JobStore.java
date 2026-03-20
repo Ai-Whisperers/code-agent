@@ -464,6 +464,7 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, MetricsJobRequest.class));
                 case QUALITY_REPORT -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, QualityReportJobRequest.class));
+                case CHAT -> new JobRecord(jobId, objectMapper.readValue(payloadJson, Object.class));
             };
         } catch (Exception e) {
             LOG.errorf("Failed to deserialize request payload for job %s (type=%s): %s",
@@ -484,6 +485,7 @@ public class JobStore {
             case SYNC_CONFLUENCE -> job.getSyncConfluenceRequest();
             case METRICS -> job.getMetricsRequest();
             case QUALITY_REPORT -> job.getQualityReportRequest();
+            case CHAT -> null;
         };
         if (request == null) return "{}";
         try {

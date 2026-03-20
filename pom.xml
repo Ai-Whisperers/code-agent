@@ -69,6 +69,13 @@
             <version>2.15.0</version>
         </dependency>
 
+        <!-- Apache PDFBox: extract text from PDF attachments during knowledge indexing -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.4</version>
+        </dependency>
+
         <!-- Quarkus Arc (CDI) -->
         <dependency>
             <groupId>io.quarkus</groupId>

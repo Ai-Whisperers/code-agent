@@ -9,11 +9,14 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.core.JsonValue;
+import com.anthropic.core.http.StreamResponse;
 import com.anthropic.errors.RateLimitException;
+import com.anthropic.helpers.MessageAccumulator;
 import com.anthropic.models.messages.CacheControlEphemeral;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.ContentBlockParam;
@@ -21,6 +24,7 @@ import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
+import com.anthropic.models.messages.RawMessageStreamEvent;
 import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
@@ -258,6 +262,163 @@ public class ClaudeToolUseLoop {
 
         LOG.warnf("Agent loop hit max iterations (%d)", iterationCap);
         return "Agent loop reached maximum iterations without completing. Partial work may exist.";
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Streaming loop
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Run the agentic loop in streaming mode.
+     *
+     * <p>Text deltas are emitted via {@code eventSink} as they arrive from the API.
+     * Tool lifecycle events ({@link ChatEvent.ToolStart}/{@link ChatEvent.ToolEnd}) are emitted
+     * synchronously while tool execution is in progress.
+     * On completion a {@link ChatEvent.Done} is emitted; on unrecoverable error a
+     * {@link ChatEvent.Error} is emitted instead.
+     *
+     * @param systemPrompt      system prompt for the loop
+     * @param workspace         workspace context (may be null for chat mode)
+     * @param tools             tool definitions available to Claude
+     * @param initialUserMessage the first user message
+     * @param jobId             identifier for AI call logging
+     * @param jobType           job type string for AI call logging
+     * @param iterationCap      maximum tool-use iterations before giving up
+     * @param eventSink         callback that receives each {@link ChatEvent}
+     */
+    public void runStreaming(String systemPrompt, WorkspaceContext workspace,
+                             List<ToolUnion> tools, String initialUserMessage,
+                             String jobId, String jobType, int iterationCap,
+                             Consumer<ChatEvent> eventSink) {
+        List<MessageParam> messages = new ArrayList<>();
+        messages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .content(initialUserMessage)
+                .build());
+
+        try {
+            for (int iteration = 0; iteration < iterationCap; iteration++) {
+                LOG.infof("Streaming agent loop iteration %d/%d", iteration + 1, iterationCap);
+
+                MessageCreateParams params = MessageCreateParams.builder()
+                        .model(Model.of(modelName))
+                        .maxTokens(maxTokens)
+                        .system(systemPrompt)
+                        .messages(messages)
+                        .tools(tools)
+                        .build();
+
+                // Stream the response, accumulating into a full Message for tool processing
+                MessageAccumulator accumulator = MessageAccumulator.create();
+                long startNs = System.nanoTime();
+
+                try (StreamResponse<RawMessageStreamEvent> stream =
+                             client.messages().createStreaming(params)) {
+                    stream.stream().forEach(event -> {
+                        accumulator.accumulate(event);
+
+                        // Emit text deltas as they arrive
+                        if (event.isContentBlockDelta()) {
+                            var delta = event.asContentBlockDelta().delta();
+                            if (delta.isText()) {
+                                String text = delta.asText().text();
+                                if (text != null && !text.isEmpty()) {
+                                    eventSink.accept(new ChatEvent.TextDelta(text));
+                                }
+                            }
+                        }
+
+                        // Emit ToolStart when a tool_use block begins.
+                        // contentBlock() returns RawContentBlockStartEvent.ContentBlock (nested type).
+                        if (event.isContentBlockStart()) {
+                            var block = event.asContentBlockStart().contentBlock();
+                            if (block.isToolUse()) {
+                                eventSink.accept(new ChatEvent.ToolStart(block.asToolUse().name()));
+                            }
+                        }
+                    });
+                }
+
+                long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+                Message response = accumulator.message();
+
+                logUsage(response, iteration + 1);
+                tokenBudgetTracker.recordUsage(
+                        response.usage().inputTokens(),
+                        response.usage().outputTokens());
+
+                // Process tool calls from the accumulated message
+                List<ToolUseBlock> toolUseBlocks = response.content().stream()
+                        .filter(ContentBlock::isToolUse)
+                        .map(ContentBlock::asToolUse)
+                        .toList();
+
+                List<ContentBlockParam> assistantBlocks = new ArrayList<>();
+                List<ContentBlockParam> toolResults = new ArrayList<>();
+                List<String> toolNamesList = new ArrayList<>();
+
+                for (ContentBlock block : response.content()) {
+                    if (block.isText()) {
+                        assistantBlocks.add(ContentBlockParam.ofText(block.asText().toParam()));
+                    } else if (block.isToolUse()) {
+                        assistantBlocks.add(ContentBlockParam.ofToolUse(block.asToolUse().toParam()));
+                    }
+                }
+
+                for (ToolUseBlock toolUse : toolUseBlocks) {
+                    toolNamesList.add(toolUse.name());
+                    LOG.infof("Streaming tool call: %s (id=%s)", toolUse.name(), toolUse.id());
+                    String result = dispatchTool(toolUse, workspace);
+
+                    eventSink.accept(new ChatEvent.ToolEnd(toolUse.name()));
+
+                    boolean isError = result.startsWith("ERROR:");
+                    toolResults.add(ContentBlockParam.ofToolResult(
+                            ToolResultBlockParam.builder()
+                                    .toolUseId(toolUse.id())
+                                    .content(result)
+                                    .isError(isError)
+                                    .build()
+                    ));
+                }
+
+                Usage usage = response.usage();
+                String stopReason = response.stopReason().map(Object::toString).orElse(null);
+                String toolNamesCsv = toolNamesList.isEmpty() ? null : String.join(",", toolNamesList);
+
+                aiCallStore.save(new AiCallRecord(
+                        null, jobId, jobType, modelName, iteration + 1,
+                        usage.inputTokens(), usage.outputTokens(),
+                        usage.cacheCreationInputTokens().orElse(0L),
+                        usage.cacheReadInputTokens().orElse(0L),
+                        stopReason, toolNamesCsv, durationMs,
+                        false, null, Instant.now(),
+                        null, null));
+
+                messages.add(MessageParam.builder()
+                        .role(MessageParam.Role.ASSISTANT)
+                        .contentOfBlockParams(assistantBlocks)
+                        .build());
+
+                if (toolUseBlocks.isEmpty()) {
+                    LOG.infof("Streaming agent finished after %d iterations", iteration + 1);
+                    eventSink.accept(new ChatEvent.Done(jobId));
+                    return;
+                }
+
+                messages.add(MessageParam.builder()
+                        .role(MessageParam.Role.USER)
+                        .contentOfBlockParams(toolResults)
+                        .build());
+            }
+
+            LOG.warnf("Streaming agent hit max iterations (%d)", iterationCap);
+            eventSink.accept(new ChatEvent.Error("Max iterations reached without completing"));
+
+        } catch (Exception e) {
+            LOG.errorf("Streaming agent loop error: %s", e.getMessage());
+            eventSink.accept(new ChatEvent.Error(e.getMessage() != null ? e.getMessage() : "Unknown error"));
+        }
     }
 
     private void logUsage(Message response, int iteration) {

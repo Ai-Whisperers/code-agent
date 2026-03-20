@@ -1,9 +1,8 @@
 package com.eneve.agent.agent;
 
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
@@ -44,14 +43,18 @@ public class JobQueue {
     @ConfigProperty(name = "run-fix.max-queue-size", defaultValue = "20")
     int maxQueueSize;
 
-    private BlockingQueue<JobRecord> pendingQueue;
+    private PriorityBlockingQueue<JobRecord> pendingQueue;
     private ExecutorService executor;
     private Semaphore semaphore;
     private Thread dispatcherThread;
     private volatile boolean running = true;
 
     void onStart(@Observes StartupEvent event) {
-        pendingQueue = new LinkedBlockingQueue<>(maxQueueSize);
+        pendingQueue = new PriorityBlockingQueue<>(
+                maxQueueSize,
+                Comparator.comparingInt((JobRecord j) -> j.getJobType().priority())
+                          .thenComparing(JobRecord::getCreatedAt)
+        );
         semaphore = new Semaphore(maxConcurrentJobs);
         executor = Executors.newFixedThreadPool(maxConcurrentJobs);
 
@@ -110,12 +113,13 @@ public class JobQueue {
      */
     public boolean submit(JobRecord job) {
         job.setStatus(JobStatus.QUEUED);
-        if (!pendingQueue.offer(job)) {
+        if (pendingQueue.size() >= maxQueueSize) {
             job.setStatus(JobStatus.FAILED);
             job.setErrorMessage("Job queue is full");
             jobStore.archive(job);
             return false;
         }
+        pendingQueue.offer(job);
         String label = switch (job.getJobType()) {
             case REVIEW -> "PR-review";
             case FIX_PR -> "fix-PR-" + job.getFixPrRequest().prId();

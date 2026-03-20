@@ -404,6 +404,168 @@ public class JiraService {
         }
     }
 
+    // ─── Knowledge-base indexing helpers ──────────────────────────────────
+
+    /**
+     * Full issue detail record for knowledge indexing.
+     */
+    public record JiraIssueDetail(
+            String key,
+            String summary,
+            String description,
+            String status,
+            String reporter,
+            String assignee,
+            java.util.List<String> labels,
+            java.util.List<String> comments,
+            java.util.List<JiraAttachment> attachments
+    ) {}
+
+    /**
+     * Attachment metadata returned by the Jira REST API.
+     */
+    public record JiraAttachment(
+            String id,
+            String filename,
+            String mimeType,
+            long size,
+            String contentUrl
+    ) {}
+
+    /**
+     * Remote link (e.g. a linked Confluence page) on a Jira issue.
+     */
+    public record JiraRemoteLink(String title, String url) {}
+
+    /**
+     * Search Jira issues with the given JQL and return full detail for each.
+     * Fetches summary, description, status, reporter, assignee, labels, comments,
+     * and attachment metadata.
+     *
+     * @param jql    Jira Query Language expression
+     * @param maxResults maximum number of results (capped at 100)
+     */
+    public java.util.List<JiraIssueDetail> searchIssues(String jql, int maxResults) {
+        int cap = Math.min(Math.max(1, maxResults), 100);
+        String fields = "summary,description,status,reporter,assignee,labels,comment,attachment";
+        String encodedJql;
+        try {
+            encodedJql = java.net.URLEncoder.encode(jql, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            LOG.warnf("Failed to encode JQL: %s", e.getMessage());
+            return java.util.List.of();
+        }
+        String path = "/rest/api/3/search?jql=" + encodedJql
+                + "&fields=" + fields + "&maxResults=" + cap + "&expand=renderedFields";
+        String json = get(path, "search issues");
+        if (json == null) return java.util.List.of();
+
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            var issues = root.path("issues");
+            if (!issues.isArray()) return java.util.List.of();
+
+            var results = new java.util.ArrayList<JiraIssueDetail>();
+            for (var issue : issues) {
+                String key = issue.path("key").asText("");
+                var fieldsNode = issue.path("fields");
+
+                String summary = fieldsNode.path("summary").asText("");
+                String description = extractAdfText(fieldsNode.path("description"));
+                String status = fieldsNode.path("status").path("name").asText("");
+                String reporter = fieldsNode.path("reporter").path("displayName").asText("");
+                String assignee = fieldsNode.path("assignee").path("displayName").asText("");
+
+                var labels = new java.util.ArrayList<String>();
+                for (var lbl : fieldsNode.path("labels")) {
+                    labels.add(lbl.asText(""));
+                }
+
+                var comments = new java.util.ArrayList<String>();
+                for (var c : fieldsNode.path("comment").path("comments")) {
+                    String body = extractAdfText(c.path("body"));
+                    String author = c.path("author").path("displayName").asText("unknown");
+                    if (!body.isBlank()) {
+                        comments.add(author + ": " + body);
+                    }
+                }
+
+                var attachments = new java.util.ArrayList<JiraAttachment>();
+                for (var att : fieldsNode.path("attachment")) {
+                    attachments.add(new JiraAttachment(
+                            att.path("id").asText(""),
+                            att.path("filename").asText(""),
+                            att.path("mimeType").asText(""),
+                            att.path("size").asLong(0),
+                            att.path("content").asText("")
+                    ));
+                }
+
+                results.add(new JiraIssueDetail(key, summary, description, status,
+                        reporter, assignee, labels, comments, attachments));
+            }
+            LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
+            return results;
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse JIRA search results: %s", e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
+    /**
+     * Download binary content for a Jira attachment.
+     * Returns null on error or if the URL is blank.
+     *
+     * @param contentUrl the attachment content URL from {@link JiraAttachment#contentUrl()}
+     */
+    public byte[] downloadAttachment(String contentUrl) {
+        if (contentUrl == null || contentUrl.isBlank()) return null;
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(contentUrl))
+                    .header("Authorization", "Basic " + basicAuth())
+                    .GET()
+                    .build();
+            var response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+            LOG.warnf("Attachment download failed (HTTP %d) for %s", response.statusCode(), contentUrl);
+            return null;
+        } catch (Exception e) {
+            LOG.errorf("Attachment download error for %s: %s", contentUrl, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Fetch all remote links attached to a Jira issue.
+     * Remote links include linked Confluence pages and external URLs.
+     */
+    public java.util.List<JiraRemoteLink> fetchRemoteLinks(String issueKey) {
+        String json = get("/rest/api/3/issue/" + issueKey + "/remotelink", "fetch remote links " + issueKey);
+        if (json == null) return java.util.List.of();
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var arr = mapper.readTree(json);
+            if (!arr.isArray()) return java.util.List.of();
+
+            var results = new java.util.ArrayList<JiraRemoteLink>();
+            for (var link : arr) {
+                String title = link.path("object").path("title").asText("");
+                String url = link.path("object").path("url").asText("");
+                if (!url.isBlank()) {
+                    results.add(new JiraRemoteLink(title, url));
+                }
+            }
+            return results;
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse remote links for %s: %s", issueKey, e.getMessage());
+            return java.util.List.of();
+        }
+    }
+
     private String basicAuth() {
         return Base64.getEncoder()
                 .encodeToString((user + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
