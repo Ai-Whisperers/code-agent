@@ -4,6 +4,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.EnvironmentConfig;
@@ -11,7 +12,6 @@ import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
 
 import io.smallrye.mutiny.Multi;
-import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -36,6 +36,7 @@ public class ChatService {
     private static final int CHAT_MAX_ITERATIONS = 20;
 
     @Inject ClaudeToolUseLoop toolLoop;
+    @Inject ConversationStore conversationStore;
     @Inject CustomerRegistryStore registryStore;
     @Inject PromptTemplateService promptTemplateService;
 
@@ -52,14 +53,16 @@ public class ChatService {
                         ? request.conversationId()
                         : "chat-" + UUID.randomUUID();
 
+                List<MessageParam> history = conversationStore.get(conversationId);
                 String systemPrompt = buildSystemPrompt(request.productId());
                 List<ToolUnion> tools = ToolDefinitions.chat();
 
-                toolLoop.runStreaming(
+                List<MessageParam> updatedHistory = toolLoop.runStreaming(
                         systemPrompt,
                         null,
                         tools,
                         request.message(),
+                        history,
                         conversationId,
                         "CHAT",
                         CHAT_MAX_ITERATIONS,
@@ -70,6 +73,7 @@ public class ChatService {
                             }
                         }
                 );
+                conversationStore.save(conversationId, updatedHistory);
                 // If the loop returned without emitting Done (shouldn't happen), complete anyway
                 emitter.complete();
             } catch (Exception e) {
@@ -77,7 +81,7 @@ public class ChatService {
                 emitter.emit(new ChatEvent.Error(e.getMessage() != null ? e.getMessage() : "Internal error"));
                 emitter.complete();
             }
-        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+        });
     }
 
     // ──────────────────────────────────────────────────────────────────────
