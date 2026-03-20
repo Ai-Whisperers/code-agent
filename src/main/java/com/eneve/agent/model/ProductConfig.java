@@ -11,7 +11,7 @@ public record ProductConfig(
         @Schema(required = true, description = "Unique product identifier (slug)", example = "myproduct-platform")
         String productId,
 
-        @Schema(required = true, description = "Customer this product belongs to", example = "acme-corp")
+        @Schema(description = "Customer this product is linked to (null when product is unlinked)", example = "acme-corp")
         String customerId,
 
         @Schema(required = true, description = "Human-readable product name", example = "MyProduct Platform")

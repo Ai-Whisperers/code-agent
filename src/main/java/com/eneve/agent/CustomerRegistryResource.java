@@ -104,22 +104,15 @@ public class CustomerRegistryResource {
     }
 
     // ──────────────────────────────────────────────────────────────────────
-    // Products
+    // Products (standalone — not tied to a customer)
     // ──────────────────────────────────────────────────────────────────────
 
     @GET
-    @Path("/customers/{customerId}/products")
-    @Operation(operationId = "listProducts", summary = "List all products for a customer")
-    @APIResponses({
-            @APIResponse(responseCode = "200", description = "List of products"),
-            @APIResponse(responseCode = "404", description = "Customer not found")
-    })
-    public Response listProducts(
-            @Parameter(required = true) @PathParam("customerId") String customerId) {
-        if (store.getCustomer(customerId).isEmpty()) {
-            return Response.status(404).entity(Map.of("error", "Customer not found: " + customerId)).build();
-        }
-        return Response.ok(store.listProducts(customerId)).build();
+    @Path("/products")
+    @Operation(operationId = "listAllProducts", summary = "List all products (unlinked and linked)")
+    @APIResponse(responseCode = "200", description = "List of all products")
+    public Response listAllProducts() {
+        return Response.ok(store.listAllProducts()).build();
     }
 
     @GET
@@ -138,7 +131,7 @@ public class CustomerRegistryResource {
 
     @PUT
     @Path("/products/{productId}")
-    @Operation(operationId = "upsertProduct", summary = "Create or update a product")
+    @Operation(operationId = "upsertProduct", summary = "Create or update a product (no customer required)")
     @RequestBody(required = true, content = @Content(schema = @Schema(implementation = UpsertProductRequest.class)))
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Product saved"),
@@ -147,14 +140,11 @@ public class CustomerRegistryResource {
     public Response upsertProduct(
             @Parameter(required = true) @PathParam("productId") String productId,
             UpsertProductRequest request) {
-        if (request == null || request.customerId() == null || request.customerId().isBlank()) {
-            return Response.status(400).entity(Map.of("error", "customerId is required")).build();
-        }
-        if (request.displayName() == null || request.displayName().isBlank()) {
+        if (request == null || request.displayName() == null || request.displayName().isBlank()) {
             return Response.status(400).entity(Map.of("error", "displayName is required")).build();
         }
         ProductConfig config = new ProductConfig(
-                productId, request.customerId(), request.displayName(),
+                productId, null, request.displayName(),
                 request.git(), request.jira(), request.confluence(),
                 request.environments(), request.teams(), request.metadata(),
                 null, null
@@ -178,6 +168,61 @@ public class CustomerRegistryResource {
             return Response.ok(Map.of("deleted", productId)).build();
         }
         return Response.status(404).entity(Map.of("error", "Product not found: " + productId)).build();
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Customer ↔ Product linking
+    // ──────────────────────────────────────────────────────────────────────
+
+    @GET
+    @Path("/customers/{customerId}/products")
+    @Operation(operationId = "listCustomerProducts", summary = "List products linked to a customer")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "List of linked products"),
+            @APIResponse(responseCode = "404", description = "Customer not found")
+    })
+    public Response listCustomerProducts(
+            @Parameter(required = true) @PathParam("customerId") String customerId) {
+        if (store.getCustomer(customerId).isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Customer not found: " + customerId)).build();
+        }
+        return Response.ok(store.listProducts(customerId)).build();
+    }
+
+    @PUT
+    @Path("/customers/{customerId}/products/{productId}")
+    @Operation(operationId = "linkProduct", summary = "Link a product to a customer")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Product linked"),
+            @APIResponse(responseCode = "404", description = "Customer or product not found")
+    })
+    public Response linkProduct(
+            @Parameter(required = true) @PathParam("customerId") String customerId,
+            @Parameter(required = true) @PathParam("productId") String productId) {
+        if (store.getCustomer(customerId).isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Customer not found: " + customerId)).build();
+        }
+        if (store.getProduct(productId).isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Product not found: " + productId)).build();
+        }
+        store.linkProduct(customerId, productId);
+        return Response.ok(Map.of("customerId", customerId, "productId", productId, "linked", true)).build();
+    }
+
+    @DELETE
+    @Path("/customers/{customerId}/products/{productId}")
+    @Operation(operationId = "unlinkProduct", summary = "Unlink a product from a customer")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Product unlinked"),
+            @APIResponse(responseCode = "404", description = "Link not found")
+    })
+    public Response unlinkProduct(
+            @Parameter(required = true) @PathParam("customerId") String customerId,
+            @Parameter(required = true) @PathParam("productId") String productId) {
+        if (store.unlinkProduct(customerId, productId)) {
+            return Response.ok(Map.of("customerId", customerId, "productId", productId, "linked", false)).build();
+        }
+        return Response.status(404).entity(Map.of("error", "Link not found")).build();
     }
 
     @PUT
@@ -240,7 +285,6 @@ public class CustomerRegistryResource {
     ) {}
 
     public record UpsertProductRequest(
-            @Schema(required = true) String customerId,
             @Schema(required = true) String displayName,
             GitConfig git,
             JiraProjectConfig jira,

@@ -63,7 +63,12 @@ public class WebhookSyncService {
             LOG.info("Webhook sync skipped — agent.base.url or webhook.secret.bitbucket not configured");
             return;
         }
+        Thread t = new Thread(this::syncWebhooks, "webhook-sync-startup");
+        t.setDaemon(true);
+        t.start();
+    }
 
+    private void syncWebhooks() {
         List<RepoSettings> repos = settingsStore.listAll();
         if (repos.isEmpty()) {
             LOG.info("Webhook sync skipped — no repos in repo_settings yet");

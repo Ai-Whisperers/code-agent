@@ -62,7 +62,9 @@ public class JobQueue {
         dispatcherThread.setDaemon(true);
         dispatcherThread.start();
 
-        recoverInterruptedJobs();
+        Thread recoveryThread = new Thread(this::recoverInterruptedJobs, "job-queue-recovery");
+        recoveryThread.setDaemon(true);
+        recoveryThread.start();
 
         LOG.infof("JobQueue started: maxConcurrent=%d, maxQueue=%d", maxConcurrentJobs, maxQueueSize);
     }

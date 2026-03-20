@@ -123,13 +123,37 @@ public class CustomerRegistryStore {
     // Products
     // ──────────────────────────────────────────────────────────
 
+    /** List all products regardless of customer assignment. */
+    public List<ProductConfig> listAllProducts() {
+        String sql = """
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                FROM products p
+                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
+                ORDER BY p.display_name
+                """;
+        List<ProductConfig> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                results.add(mapProduct(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list all products: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /** List products linked to a specific customer. */
     public List<ProductConfig> listProducts(String customerId) {
         String sql = """
-                SELECT product_id, customer_id, display_name, git, jira, confluence,
-                       environments, teams, metadata, created_at, updated_at
-                FROM products
-                WHERE customer_id = ?
-                ORDER BY display_name
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                FROM products p
+                JOIN customer_products cp ON cp.product_id = p.product_id
+                WHERE cp.customer_id = ?
+                ORDER BY p.display_name
                 """;
         List<ProductConfig> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
@@ -148,10 +172,11 @@ public class CustomerRegistryStore {
 
     public Optional<ProductConfig> getProduct(String productId) {
         String sql = """
-                SELECT product_id, customer_id, display_name, git, jira, confluence,
-                       environments, teams, metadata, created_at, updated_at
-                FROM products
-                WHERE product_id = ?
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                FROM products p
+                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
+                WHERE p.product_id = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -167,14 +192,14 @@ public class CustomerRegistryStore {
         return Optional.empty();
     }
 
+    /** Create or update a product (customer link is managed separately via linkProduct). */
     public void upsertProduct(ProductConfig product) {
         String sql = """
-                INSERT INTO products (product_id, customer_id, display_name, git, jira, confluence,
+                INSERT INTO products (product_id, display_name, git, jira, confluence,
                                       environments, teams, metadata, created_at, updated_at)
-                VALUES (?, ?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
+                VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
                 ON CONFLICT (product_id) DO UPDATE
-                    SET customer_id  = EXCLUDED.customer_id,
-                        display_name = EXCLUDED.display_name,
+                    SET display_name = EXCLUDED.display_name,
                         git          = EXCLUDED.git,
                         jira         = EXCLUDED.jira,
                         confluence   = EXCLUDED.confluence,
@@ -186,14 +211,13 @@ public class CustomerRegistryStore {
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, product.productId());
-            ps.setString(2, product.customerId());
-            ps.setString(3, product.displayName());
-            ps.setString(4, toJson(product.git()));
-            ps.setString(5, toJson(product.jira()));
-            ps.setString(6, toJson(product.confluence()));
-            ps.setString(7, toJson(product.environments() != null ? product.environments() : List.of()));
-            ps.setString(8, toJson(product.teams() != null ? product.teams() : Map.of()));
-            ps.setString(9, toJson(product.metadata() != null ? product.metadata() : Map.of()));
+            ps.setString(2, product.displayName());
+            ps.setString(3, toJson(product.git()));
+            ps.setString(4, toJson(product.jira()));
+            ps.setString(5, toJson(product.confluence()));
+            ps.setString(6, toJson(product.environments() != null ? product.environments() : List.of()));
+            ps.setString(7, toJson(product.teams() != null ? product.teams() : Map.of()));
+            ps.setString(8, toJson(product.metadata() != null ? product.metadata() : Map.of()));
             ps.executeUpdate();
             LOG.debugf("Upserted product %s", product.productId());
         } catch (SQLException e) {
@@ -215,16 +239,51 @@ public class CustomerRegistryStore {
         }
     }
 
+    /** Link an existing product to a customer (idempotent). */
+    public void linkProduct(String customerId, String productId) {
+        String sql = """
+                INSERT INTO customer_products (customer_id, product_id)
+                VALUES (?, ?)
+                ON CONFLICT (customer_id, product_id) DO NOTHING
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, customerId);
+            ps.setString(2, productId);
+            ps.executeUpdate();
+            LOG.debugf("Linked product %s to customer %s", productId, customerId);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to link product %s to customer %s: %s", productId, customerId, e.getMessage());
+        }
+    }
+
+    /** Remove the link between a product and a customer. */
+    public boolean unlinkProduct(String customerId, String productId) {
+        String sql = "DELETE FROM customer_products WHERE customer_id = ? AND product_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, customerId);
+            ps.setString(2, productId);
+            int rows = ps.executeUpdate();
+            LOG.debugf("Unlinked product %s from customer %s (%d rows)", productId, customerId, rows);
+            return rows > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to unlink product %s from customer %s: %s", productId, customerId, e.getMessage());
+            return false;
+        }
+    }
+
     /**
      * Finds the product whose Jira config contains the given project key.
      * Searches across the JSONB jira.projects map for any matching value.
      */
     public Optional<ProductConfig> findByJiraProject(String projectKey) {
         String sql = """
-                SELECT product_id, customer_id, display_name, git, jira, confluence,
-                       environments, teams, metadata, created_at, updated_at
-                FROM products
-                WHERE jira -> 'projects' @> ?::jsonb
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                FROM products p
+                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
+                WHERE p.jira -> 'projects' @> ?::jsonb
                 LIMIT 1
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -247,9 +306,10 @@ public class CustomerRegistryStore {
      */
     public Optional<ProductConfig> findByRepoSlug(String workspace, String repoSlug) {
         String sql = """
-                SELECT p.product_id, p.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
                        p.environments, p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
+                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 JOIN repo_settings rs ON rs.product_id = p.product_id
                 WHERE rs.workspace = ? AND rs.repo_slug = ?
                 LIMIT 1
@@ -284,9 +344,11 @@ public class CustomerRegistryStore {
     }
 
     private ProductConfig mapProduct(ResultSet rs) throws SQLException {
+        String customerId = rs.getString("customer_id");
+        if (rs.wasNull()) customerId = null;
         return new ProductConfig(
                 rs.getString("product_id"),
-                rs.getString("customer_id"),
+                customerId,
                 rs.getString("display_name"),
                 fromJson(rs.getString("git"), new TypeReference<GitConfig>() {}),
                 fromJson(rs.getString("jira"), new TypeReference<JiraProjectConfig>() {}),

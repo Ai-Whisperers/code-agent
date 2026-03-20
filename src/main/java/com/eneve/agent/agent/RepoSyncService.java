@@ -35,7 +35,12 @@ public class RepoSyncService {
             LOG.warn("bitbucket.workspace is not configured — skipping repo sync");
             return;
         }
+        Thread t = new Thread(this::syncRepos, "repo-sync-startup");
+        t.setDaemon(true);
+        t.start();
+    }
 
+    private void syncRepos() {
         try {
             List<String> repoSlugs = gitPlatformService.listRepositories(workspace);
             int newCount = 0;

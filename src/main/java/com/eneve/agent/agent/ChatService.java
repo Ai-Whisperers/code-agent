@@ -11,6 +11,7 @@ import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
 
 import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -45,7 +46,7 @@ public class ChatService {
      * @return a stream of {@link ChatEvent} items (text deltas, tool events, done/error)
      */
     public Multi<ChatEvent> chatStream(ChatRequest request) {
-        return Multi.createFrom().emitter(emitter -> {
+        return Multi.createFrom().<ChatEvent>emitter(emitter -> {
             try {
                 String conversationId = request.conversationId() != null
                         ? request.conversationId()
@@ -76,7 +77,7 @@ public class ChatService {
                 emitter.emit(new ChatEvent.Error(e.getMessage() != null ? e.getMessage() : "Internal error"));
                 emitter.complete();
             }
-        });
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }
 
     // ──────────────────────────────────────────────────────────────────────
