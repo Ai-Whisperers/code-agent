@@ -54,9 +54,6 @@ public class SemanticSearchTool implements ToolExecutor {
         }
 
         String ws = workspace.getMetadata("workspace");
-        if (ws == null) {
-            return "ERROR: Workspace context not available for semantic search";
-        }
 
         float[] queryVector = voyageService.embedSingle(query, "query");
         if (queryVector == null) {
@@ -64,15 +61,21 @@ public class SemanticSearchTool implements ToolExecutor {
         }
 
         List<EmbeddingStore.SearchResult> results;
-        if (repo != null && !repo.isBlank()) {
+        if (ws != null && repo != null && !repo.isBlank()) {
             results = embeddingStore.searchSimilar(queryVector, ws, repo, topK);
-        } else {
+        } else if (ws != null) {
             results = embeddingStore.searchSimilar(queryVector, ws, topK);
+        } else if (repo != null && !repo.isBlank()) {
+            results = embeddingStore.searchSimilarByRepo(queryVector, repo, topK);
+        } else {
+            results = embeddingStore.searchSimilarGlobal(queryVector, topK);
         }
 
         if (results.isEmpty()) {
-            return "No semantic matches found for: " + query
-                    + (repo != null ? " (in repo: " + repo + ")" : " (across all indexed repos)");
+            String scope = repo != null ? " (in repo: " + repo + ")"
+                    : ws != null ? " (in workspace: " + ws + ")"
+                    : " (across all indexed repos)";
+            return "No semantic matches found for: " + query + scope;
         }
 
         StringBuilder sb = new StringBuilder();

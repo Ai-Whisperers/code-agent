@@ -303,4 +303,70 @@ public class CodeGraphStore {
         }
         return results;
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Workspace-agnostic variants (used in chat mode when workspace is unknown)
+    // ──────────────────────────────────────────────────────────────────────
+
+    public List<EdgeResult> findCallersByRepo(String repoSlug, String symbolName) {
+        String sql = """
+                SELECT source_node, source_file FROM code_graph_edges
+                WHERE repo_slug = ? AND target_node = ? AND edge_type = 'CALLS'
+                """;
+        return queryEdgesByRepo(sql, repoSlug, symbolName);
+    }
+
+    public List<EdgeResult> findImplementationsByRepo(String repoSlug, String interfaceName) {
+        String sql = """
+                SELECT source_node, source_file FROM code_graph_edges
+                WHERE repo_slug = ? AND target_node = ?
+                  AND edge_type IN ('IMPLEMENTS', 'EXTENDS')
+                """;
+        return queryEdgesByRepo(sql, repoSlug, interfaceName);
+    }
+
+    public List<EdgeResult> findDependentsByRepo(String repoSlug, String symbolName) {
+        String sql = """
+                SELECT source_node, source_file FROM code_graph_edges
+                WHERE repo_slug = ? AND target_node = ?
+                """;
+        return queryEdgesByRepo(sql, repoSlug, symbolName);
+    }
+
+    public int countDistinctReposUsingByRepo(String excludeRepo, String symbolName) {
+        String sql = """
+                SELECT COUNT(DISTINCT repo_slug) FROM code_graph_edges
+                WHERE repo_slug != ? AND target_node = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, excludeRepo);
+            ps.setString(2, symbolName);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next() ? rs.getInt(1) : 0;
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to count repos using symbol %s (excluding %s): %s",
+                    symbolName, excludeRepo, e.getMessage());
+            return 0;
+        }
+    }
+
+    private List<EdgeResult> queryEdgesByRepo(String sql, String repoSlug, String symbolName) {
+        List<EdgeResult> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, repoSlug);
+            ps.setString(2, symbolName);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new EdgeResult(rs.getString("source_node"), rs.getString("source_file")));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query edges for symbol %s in repo %s: %s",
+                    symbolName, repoSlug, e.getMessage());
+        }
+        return results;
+    }
 }

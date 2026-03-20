@@ -40,7 +40,26 @@ public class LookupCustomerTool implements ToolExecutor {
         String jiraProject = (String) input.get("jiraProject");
 
         if (productId == null && customerId == null && jiraProject == null) {
-            return "ERROR: at least one of 'productId', 'customerId', or 'jiraProject' is required";
+            List<ProductConfig> all = registryStore.listAllProducts();
+            if (all.isEmpty()) {
+                return "No products are configured in the registry.";
+            }
+            StringBuilder sb = new StringBuilder("Available products:\n\n");
+            for (ProductConfig p : all) {
+                sb.append("- **").append(p.displayName())
+                  .append("** (`").append(p.productId()).append("`)");
+                if (p.git() != null) {
+                    if (p.git().workspace() != null) {
+                        sb.append(" — git workspace: `").append(p.git().workspace()).append("`");
+                    }
+                    if (p.git().repos() != null && !p.git().repos().isEmpty()) {
+                        sb.append(" — repos: ").append(String.join(", ", p.git().repos()));
+                    }
+                }
+                sb.append("\n");
+            }
+            sb.append("\nUse the `productId` to narrow a follow-up lookup, or use the repo slugs directly with `query_code_graph` and `semantic_search`.");
+            return sb.toString();
         }
 
         // Resolve to a ProductConfig

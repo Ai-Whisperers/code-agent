@@ -46,16 +46,23 @@ public class QueryCodeGraphTool implements ToolExecutor {
         }
 
         String ws = workspace.getMetadata("workspace");
-        String repo = workspace.getMetadata("repoSlug");
-        if (ws == null || repo == null) {
-            return "ERROR: Code graph coordinates not available in this context";
+
+        String repo = input.get("repoSlug") instanceof String s && !s.isBlank()
+                ? s : workspace.getMetadata("repoSlug");
+        if (repo == null) {
+            String available = workspace.getMetadata("productRepos");
+            return "ERROR: repoSlug is required. Call lookup_customer_context with no parameters to discover available repositories."
+                    + (available != null ? " Known repos: " + available : "");
         }
 
-        if ("workspace".equalsIgnoreCase(scope) && crossRepoEnabled) {
+        if (ws != null && "workspace".equalsIgnoreCase(scope) && crossRepoEnabled) {
             return executeWorkspaceScope(ws, repo, symbol, relation);
         }
 
-        return executeRepoScope(ws, repo, symbol, relation);
+        if (ws != null) {
+            return executeRepoScope(ws, repo, symbol, relation);
+        }
+        return executeRepoScopeNoWorkspace(repo, symbol, relation);
     }
 
     private String executeRepoScope(String ws, String repo, String symbol, String relation) {
@@ -73,6 +80,44 @@ public class QueryCodeGraphTool implements ToolExecutor {
             }
             case "dependents" -> {
                 results = codeGraphStore.findDependents(ws, repo, symbol);
+                label = "Dependents of " + symbol;
+            }
+            default -> {
+                return "ERROR: Invalid relation '" + relation + "'. Must be one of: callers, implementations, dependents";
+            }
+        }
+
+        if (results.isEmpty()) {
+            return label + ": (none found)";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(label).append(":\n");
+        for (CodeGraphStore.EdgeResult edge : results) {
+            sb.append("- ").append(edge.sourceNode());
+            if (edge.sourceFile() != null) {
+                sb.append(" (").append(edge.sourceFile()).append(")");
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private String executeRepoScopeNoWorkspace(String repo, String symbol, String relation) {
+        List<CodeGraphStore.EdgeResult> results;
+        String label;
+
+        switch (relation.toLowerCase()) {
+            case "callers" -> {
+                results = codeGraphStore.findCallersByRepo(repo, symbol);
+                label = "Callers of " + symbol;
+            }
+            case "implementations" -> {
+                results = codeGraphStore.findImplementationsByRepo(repo, symbol);
+                label = "Implementations/extensions of " + symbol;
+            }
+            case "dependents" -> {
+                results = codeGraphStore.findDependentsByRepo(repo, symbol);
                 label = "Dependents of " + symbol;
             }
             default -> {

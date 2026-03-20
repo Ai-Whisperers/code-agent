@@ -160,6 +160,10 @@ public final class ToolDefinitions {
                                         "type", "string",
                                         "description", "The relation to query: 'callers' (who calls this), 'implementations' (who implements/extends this), or 'dependents' (all edges pointing at this symbol)"
                                 )))
+                                .putAdditionalProperty("repoSlug", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Repository slug to scope the query to (e.g. 'code-agent'). Required when the product has multiple repositories. Check the system prompt for available repository slugs."
+                                )))
                                 .putAdditionalProperty("scope", JsonValue.from(Map.of(
                                         "type", "string",
                                         "description", "Optional: 'repo' (default, current repository only) or 'workspace' (all indexed repos in the workspace). Use 'workspace' when you suspect a symbol is shared across multiple repositories."
@@ -274,8 +278,11 @@ public final class ToolDefinitions {
     private static Tool lookupCustomerContext() {
         return Tool.builder()
                 .name("lookup_customer_context")
-                .description("Look up customer and product information from the registry: "
-                        + "team members by role (productOwner, engineering, devops, operations, qa), "
+                .description("Look up customer and product information from the registry. "
+                        + "Call with NO parameters to list all available products with their repo slugs and git workspace — "
+                        + "use this first when the user's question does not specify a product or repository. "
+                        + "When a productId is known, returns full details: team members by role "
+                        + "(productOwner, engineering, devops, operations, qa), "
                         + "deployment environments with AWS account IDs and regions, "
                         + "Jira project keys, Confluence space keys, and Git workspace details. "
                         + "Use this when you need to know who to notify, which AWS account an environment runs in, "

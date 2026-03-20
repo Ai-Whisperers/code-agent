@@ -142,6 +142,13 @@ public class ChatService {
                 if (product != null && product.git() != null
                         && product.git().workspace() != null) {
                     workspace.putMetadata("workspace", product.git().workspace());
+                    var repos = product.git().repos();
+                    if (repos != null && !repos.isEmpty()) {
+                        workspace.putMetadata("productRepos", String.join(",", repos));
+                        if (repos.size() == 1) {
+                            workspace.putMetadata("repoSlug", repos.get(0));
+                        }
+                    }
                 }
             }
             return workspace;
@@ -167,6 +174,9 @@ public class ChatService {
                 }
                 productContext = buildProductContext(product);
             }
+        } else {
+            productContext = "No product is pre-selected. Call `lookup_customer_context` with **no parameters** "
+                    + "to list all available products and identify which one the user is asking about.\n\n";
         }
 
         return promptTemplateService.resolve("chat-system", Map.of(
@@ -219,6 +229,15 @@ public class ChatService {
         if (product.confluence() != null && product.confluence().spaceKey() != null) {
             sb.append("### Confluence Space: `")
               .append(product.confluence().spaceKey()).append("`\n\n");
+        }
+
+        if (product.git() != null && product.git().repos() != null
+                && !product.git().repos().isEmpty()) {
+            sb.append("### Repositories\n");
+            for (String repo : product.git().repos()) {
+                sb.append("- `").append(repo).append("`\n");
+            }
+            sb.append("\nWhen using `query_code_graph`, pass the `repoSlug` parameter with one of the repository slugs listed above.\n\n");
         }
 
         return sb.toString();

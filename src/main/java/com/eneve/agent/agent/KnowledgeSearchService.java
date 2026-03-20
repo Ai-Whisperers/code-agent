@@ -39,6 +39,8 @@ public class KnowledgeSearchService {
             String productId,
             int topK) {
 
+        LOG.infof("Searching for query: %s", query);
+
         if (!voyageService.isConfigured()) {
             LOG.warn("Voyage AI not configured — knowledge search unavailable");
             return List.of();

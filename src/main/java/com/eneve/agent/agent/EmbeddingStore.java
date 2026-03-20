@@ -99,6 +99,92 @@ public class EmbeddingStore {
         return executeSearch(sql, queryVector, workspace, repoSlug, topK);
     }
 
+    /**
+     * Search for similar code within a specific repo across all workspaces.
+     * Used in chat mode when the workspace is not known but the repo slug is.
+     */
+    public List<SearchResult> searchSimilarByRepo(float[] queryVector, String repoSlug, int topK) {
+        String sql = """
+                SELECT workspace, repo_slug, file_path, symbol_name, symbol_type,
+                       source_text, line_start, line_end,
+                       1 - (embedding <=> ?::vector) AS score
+                FROM code_embeddings
+                WHERE repo_slug = ?
+                ORDER BY embedding <=> ?::vector
+                LIMIT ?
+                """;
+        List<SearchResult> results = new ArrayList<>();
+        String vecLiteral = toVectorLiteral(queryVector);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, vecLiteral);
+            ps.setString(2, repoSlug);
+            ps.setString(3, vecLiteral);
+            ps.setInt(4, topK);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Integer ls = rs.getObject("line_start") != null ? rs.getInt("line_start") : null;
+                    Integer le = rs.getObject("line_end") != null ? rs.getInt("line_end") : null;
+                    results.add(new SearchResult(
+                            rs.getString("workspace"),
+                            rs.getString("repo_slug"),
+                            rs.getString("file_path"),
+                            rs.getString("symbol_name"),
+                            rs.getString("symbol_type"),
+                            rs.getString("source_text"),
+                            ls, le,
+                            rs.getDouble("score")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Semantic search by repo %s failed: %s", repoSlug, e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Search for similar code across all repos and workspaces.
+     * Used in chat mode when neither workspace nor repo is known.
+     */
+    public List<SearchResult> searchSimilarGlobal(float[] queryVector, int topK) {
+        String sql = """
+                SELECT workspace, repo_slug, file_path, symbol_name, symbol_type,
+                       source_text, line_start, line_end,
+                       1 - (embedding <=> ?::vector) AS score
+                FROM code_embeddings
+                ORDER BY embedding <=> ?::vector
+                LIMIT ?
+                """;
+        List<SearchResult> results = new ArrayList<>();
+        String vecLiteral = toVectorLiteral(queryVector);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, vecLiteral);
+            ps.setString(2, vecLiteral);
+            ps.setInt(3, topK);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Integer ls = rs.getObject("line_start") != null ? rs.getInt("line_start") : null;
+                    Integer le = rs.getObject("line_end") != null ? rs.getInt("line_end") : null;
+                    results.add(new SearchResult(
+                            rs.getString("workspace"),
+                            rs.getString("repo_slug"),
+                            rs.getString("file_path"),
+                            rs.getString("symbol_name"),
+                            rs.getString("symbol_type"),
+                            rs.getString("source_text"),
+                            ls, le,
+                            rs.getDouble("score")
+                    ));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Global semantic search failed: %s", e.getMessage());
+        }
+        return results;
+    }
+
     private List<SearchResult> executeSearch(String sql, float[] queryVector,
                                              String workspace, String repoSlug, int topK) {
         List<SearchResult> results = new ArrayList<>();

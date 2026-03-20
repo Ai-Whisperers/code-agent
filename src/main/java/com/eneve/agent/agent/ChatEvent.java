@@ -11,17 +11,23 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", include = JsonTypeInfo.As.EXISTING_PROPERTY)
 @JsonSubTypes({
-        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,  name = "text"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,  name = "tool_start"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,    name = "tool_end"),
-        @JsonSubTypes.Type(value = ChatEvent.Done.class,       name = "done"),
-        @JsonSubTypes.Type(value = ChatEvent.Error.class,      name = "error")
+        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,     name = "text"),
+        @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class, name = "thinking"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,     name = "tool_start"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,       name = "tool_end"),
+        @JsonSubTypes.Type(value = ChatEvent.Done.class,          name = "done"),
+        @JsonSubTypes.Type(value = ChatEvent.Error.class,         name = "error")
 })
 public sealed interface ChatEvent {
 
     /** Incremental text output from Claude. Accumulate all deltas for the full response. */
     record TextDelta(String type, String text) implements ChatEvent {
         public TextDelta(String text) { this("text", text); }
+    }
+
+    /** Intermediate reasoning text emitted by Claude before or between tool calls. */
+    record ThinkingDelta(String type, String text) implements ChatEvent {
+        public ThinkingDelta(String text) { this("thinking", text); }
     }
 
     /** Claude is about to execute a tool call. Show a progress indicator in the UI. */
