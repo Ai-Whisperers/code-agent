@@ -464,7 +464,7 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, MetricsJobRequest.class));
                 case QUALITY_REPORT -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, QualityReportJobRequest.class));
-                case CHAT -> new JobRecord(jobId, objectMapper.readValue(payloadJson, Object.class));
+                case CHAT -> null;
             };
         } catch (Exception e) {
             LOG.errorf("Failed to deserialize request payload for job %s (type=%s): %s",
