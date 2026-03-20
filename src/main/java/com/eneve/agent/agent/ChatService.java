@@ -70,7 +70,8 @@ public class ChatService {
                 if (requestedId != null && conversationRepository.exists(requestedId, userId)) {
                     // Resume existing conversation
                     conversationId = requestedId;
-                    history = conversationRepository.loadMessages(conversationId, userId);
+                    history = sanitizeHistory(
+                            conversationRepository.loadMessages(conversationId, userId));
                 } else {
                     // New conversation — generate a stable UUID and create the DB record
                     conversationId = "chat-" + UUID.randomUUID();
@@ -183,6 +184,50 @@ public class ChatService {
                 "CUSTOMER_NAME", customerName,
                 "PRODUCT_CONTEXT", productContext
         ));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // History sanitization
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Removes trailing incomplete tool exchanges from a conversation history.
+     *
+     * <p>An incomplete exchange occurs when a session was interrupted after Claude emitted an
+     * assistant message containing {@code tool_use} blocks but before the corresponding
+     * {@code tool_result} user message was appended (e.g. max-iterations hit, crash, redeploy).
+     * Sending such history to the Anthropic API causes a 400 error.
+     *
+     * <p>The method scans forward and trims from the first assistant message that has
+     * {@code tool_use} blocks but is not immediately followed by a user message that has
+     * {@code tool_result} blocks.
+     */
+    private List<MessageParam> sanitizeHistory(List<MessageParam> history) {
+        for (int i = 0; i < history.size(); i++) {
+            MessageParam msg = history.get(i);
+            if (msg.role() == MessageParam.Role.ASSISTANT && hasToolUseBlocks(msg)) {
+                boolean nextIsToolResult = i + 1 < history.size()
+                        && history.get(i + 1).role() == MessageParam.Role.USER
+                        && hasToolResultBlocks(history.get(i + 1));
+                if (!nextIsToolResult) {
+                    int trimmed = history.size() - i;
+                    LOG.warnf("Trimming %d dangling message(s) from conversation history "
+                            + "(incomplete tool exchange at index %d)", trimmed, i);
+                    return new ArrayList<>(history.subList(0, i));
+                }
+            }
+        }
+        return history;
+    }
+
+    private static boolean hasToolUseBlocks(MessageParam msg) {
+        if (!msg.content().isBlockParams()) return false;
+        return msg.content().asBlockParams().stream().anyMatch(b -> b.toolUse().isPresent());
+    }
+
+    private static boolean hasToolResultBlocks(MessageParam msg) {
+        if (!msg.content().isBlockParams()) return false;
+        return msg.content().asBlockParams().stream().anyMatch(b -> b.toolResult().isPresent());
     }
 
     private String buildProductContext(ProductConfig product) {
