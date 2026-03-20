@@ -6,7 +6,10 @@ import com.eneve.agent.agent.ChatEvent;
 import com.eneve.agent.agent.ChatService;
 import com.eneve.agent.model.ChatRequest;
 
+import io.quarkus.security.identity.SecurityIdentity;
+import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -48,7 +51,14 @@ public class ChatResource {
     @Inject
     ChatService chatService;
 
+    @Inject
+    SecurityIdentity securityIdentity;
+
+    @Inject
+    JsonWebToken jwt;
+
     @POST
+    @Blocking
     @Consumes(MediaType.APPLICATION_JSON)
     @Produces(MediaType.SERVER_SENT_EVENTS)
     @RestStreamElementType(MediaType.APPLICATION_JSON)
@@ -78,6 +88,24 @@ public class ChatResource {
                             .build()
             );
         }
-        return chatService.chatStream(request);
+        return chatService.chatStream(request, resolveUserId());
+    }
+
+    private String resolveUserId() {
+        if (securityIdentity.isAnonymous()) {
+            // OIDC disabled (dev mode / API-key-only setup) — fall back to anonymous user
+            return "anonymous";
+        }
+        try {
+            // Use the stable 'sub' claim (UUID assigned by Keycloak) rather than
+            // preferred_username which may change on user rename.
+            String sub = jwt.getClaim("sub");
+            if (sub != null && !sub.isBlank()) {
+                return sub;
+            }
+        } catch (Exception ignored) {
+            // fall through to principal name
+        }
+        return securityIdentity.getPrincipal().getName();
     }
 }
