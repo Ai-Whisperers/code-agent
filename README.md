@@ -1,6 +1,6 @@
 # Code Agent Runner
 
-A self-hosted coding agent that automates issue fixing, dependency upgrades, and AI-powered code reviews. Built with Quarkus (Java 21), it clones your repos from Bitbucket Cloud or Azure DevOps, uses Claude (Anthropic) in an agentic tool-use loop to make changes, validates with Maven, creates pull requests, and keeps JIRA and Teams in sync.
+A self-hosted coding agent that automates issue fixing, dependency upgrades, AI-powered code reviews, execution planning, documentation generation, and unit test generation. Built with Quarkus (Java 21), it clones your repos from Bitbucket Cloud, Azure DevOps, GitLab, or GitHub, uses Claude (Anthropic) in an agentic tool-use loop to make changes, validates builds, creates pull requests, and keeps JIRA and Teams in sync.
 
 ## Architecture
 
@@ -14,51 +14,59 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
   JIRA wh ───►│  POST /webhooks/jira (auto on assignment)       │
   BB wh ─────►│  POST /webhooks/bitbucket/pull-request          │
   ADO wh ────►│  POST /webhooks/azuredevops/pull-request        │
+  GL wh ─────►│  POST /webhooks/gitlab/merge-request            │
+  GH wh ─────►│  POST /webhooks/github/pull-request             │
               │  POST /review-pr    (AI code review)            │
               │  POST /fix-pr       (auto-fix review comments)  │
+              │  POST /generate-tests (unit test generation)    │
+              │  POST /generate-docs  (documentation gen)       │
+              │  POST /plans          (execution plans)         │
               └──────────────┬──────────────────────────────────┘
                              │
-                    ┌────────┴────────┐
-                    ▼                 ▼
-             Fix / Upgrade       PR Review
-                    │                 │
-            AgentRunner         AgentRunner
-            .execute()          .executeReview()
-                    │                 │
-       ┌────────────┼────────┐       │
-       ▼            ▼        ▼       ▼
-  Clone repo  Resolve   Load     Compute diff
-  (BB/ADO)    prompt    rules    against target
-              (JIRA/    (Cursor   branch
-               Aikido)   rules)       │
-       │            │        │       ▼
-       └────────────┼────────┘  Claude review
-                    ▼           (security, design,
-           Claude tool-use      quality, tests,
-           loop (read/write/    performance)
-           run/list)                 │
-                    │                ▼
-                    ▼           Post inline
-           mvn test / build     comments on PR
-                    │                │
-                    ▼                ▼
-           git commit & push   Track comments
-                    │           in CommentStore
-             ┌──────┴──────┐
-             ▼              ▼
-      BB/ADO PR      JIRA + Teams + n8n
-      (create)       (comment, transition,
-                      worklog, notify)
-             │
-             ▼
-      AWAITING_APPROVAL
-             │
-       ┌─────┴─────┐
-       ▼            ▼
- POST /approve  POST /reject
- (merge PR,     (decline PR,
-  JIRA → Done)   JIRA → Rejected)
+               ┌─────────────┼──────────────┐
+               ▼             ▼              ▼
+         Fix / Upgrade   PR Review     Plan / Docs / Tests
+               │             │              │
+        AgentRunner    AgentRunner     PlannerService /
+        .execute()     .executeReview() AgentRunner
+               │             │              │
+  ┌────────────┼────────┐    │         ┌────┴────────┐
+  ▼            ▼        ▼    ▼         ▼             ▼
+Clone repo  Resolve   Load  Compute  Generate     Execute plan
+(BB/ADO/    prompt    rules diff     plan via     steps (fix,
+ GL/GH)     (JIRA/    (Cursor against  Claude       test, docs)
+             Aikido)  rules) target        │
+  │            │        │  branch    ┌─────┴─────┐
+  └────────────┼────────┘    │       ▼           ▼
+               ▼             ▼     DRAFT →   APPROVED →
+      Claude tool-use   Index code  Human     Auto-execute
+      loop (read/write/ graph +     review    each step
+      run/list/search/  impact      & edit
+      fetch_url)        analysis
+               │             │
+               │             ▼
+               ▼        Claude review
+      mvn test / build  (security, design,
+               │        quality, tests,
+               ▼        performance)
+      git commit & push      │
+               │             ▼
+        ┌──────┴──────┐ Post inline
+        ▼              ▼ comments on PR
+ BB/ADO/GL/GH   JIRA + Teams + n8n
+ PR (create)    (comment, transition,
+                 worklog, notify)
+        │
+        ▼
+ AWAITING_APPROVAL
+        │
+  ┌─────┴─────┐
+  ▼            ▼
+POST /approve  POST /reject
+(merge PR,     (decline PR,
+ JIRA → Done)   JIRA → Rejected)
 ```
+
 
 ## Endpoints
 
@@ -78,6 +86,14 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | POST | `/review-pr` | Submit a PR for AI-powered code review |
 | POST | `/fix-pr` | Auto-fix a PR based on its review comments |
 
+### Test & Documentation Generation
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/generate-tests` | Generate unit tests for a PR or branch |
+| POST | `/generate-docs` | Generate documentation for a repository |
+| POST | `/sync-confluence` | Sync generated docs to Confluence Cloud |
+
 ### Job Management
 
 | Method | Path | Description |
@@ -86,6 +102,25 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | POST | `/jobs/{jobId}/approve` | Merge the PR, transition JIRA to Done |
 | POST | `/jobs/{jobId}/reject` | Decline the PR, add JIRA comment |
 | GET | `/health` | Health check with queue status and available slots |
+
+### Execution Plans
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/plans` | Generate an execution plan from a specification |
+| POST | `/plans/from-jira/{jiraKey}` | Generate a plan from a JIRA ticket |
+| POST | `/plans/improve-quality` | Generate a code-quality improvement plan (cyclomatic complexity) |
+| GET | `/plans` | List all plans (filterable by status) |
+| GET | `/plans/{planId}` | Get a specific plan with all steps |
+| PUT | `/plans/{planId}` | Replace plan metadata (title, repo URL, target branch) |
+| PATCH | `/plans/{planId}/steps/{stepId}` | Edit a single step (prompt, rules, etc.) |
+| POST | `/plans/{planId}/steps` | Add a new step to a plan |
+| DELETE | `/plans/{planId}/steps/{stepId}` | Remove a step from a plan |
+| POST | `/plans/{planId}/phases` | Add a new phase to a plan |
+| DELETE | `/plans/{planId}/phases/{phaseOrder}` | Remove a phase and its steps |
+| POST | `/plans/{planId}/approve` | Approve a plan for execution |
+| POST | `/plans/{planId}/execute` | Execute an approved plan |
+| DELETE | `/plans/{planId}` | Delete a plan |
 
 ### Review Memory
 
@@ -104,7 +139,58 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PUT | `/settings/repos/{workspace}/{repoSlug}` | Create or update repository settings |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/enable` | Enable automated review for a repo |
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/enable` | Enable semantic vector indexing for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/vector/disable` | Disable semantic vector indexing for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/docs/enable` | Enable documentation generation for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/docs/disable` | Disable documentation generation for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/upgrade/enable` | Enable automatic upgrades for a repo |
+| PATCH | `/settings/repos/{workspace}/{repoSlug}/upgrade/disable` | Disable automatic upgrades for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
+
+### Automation Hooks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/settings/hooks` | List all automation hooks |
+| GET | `/settings/hooks/{name}` | Get a specific hook by name |
+| POST | `/settings/hooks` | Create a new automation hook |
+| PUT | `/settings/hooks/{name}` | Update an existing hook |
+| PATCH | `/settings/hooks/{name}/enable` | Enable a hook |
+| PATCH | `/settings/hooks/{name}/disable` | Disable a hook |
+| DELETE | `/settings/hooks/{name}` | Delete a hook |
+
+### Prompt Templates
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/settings/prompts` | List all prompt templates (defaults + overrides) |
+| GET | `/settings/prompts/{key}` | Get a specific prompt template |
+| PUT | `/settings/prompts/{key}` | Override a prompt template |
+| DELETE | `/settings/prompts/{key}` | Remove override (revert to JSON default) |
+| POST | `/settings/prompts/{key}/preview` | Preview a template with placeholder substitution |
+
+### Code Graph
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/graph/build-missing` | Build code graphs for all repos that lack one |
+| POST | `/graph/rebuild/{workspace}/{repoSlug}` | Rebuild the code graph for a single repository |
+| POST | `/graph/detect-archetypes` | Detect framework archetypes for all repos |
+| POST | `/graph/detect-archetypes/{workspace}/{repoSlug}` | Detect archetype for a single repo |
+
+### Upgrades
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/upgrades/check` | Check all Quarkus repos for available upgrades |
+| POST | `/upgrades/check/{workspace}/{repoSlug}` | Check a single repo for upgrades |
+| GET | `/upgrades/latest-versions` | Get cached latest versions for tracked frameworks |
+
+### Review Quality Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/metrics/review-quality/{workspace}/{repoSlug}` | Resolution rate, false-positive rate, FP breakdown by category, auto-suppressed pattern count |
 
 ### AI Statistics
 
@@ -121,9 +207,13 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 |--------|------|-------------|
 | POST | `/webhooks/jira` | JIRA Cloud — auto-triggers jobs on issue assignment |
 | POST | `/webhooks/bitbucket/pull-request` | Bitbucket — auto-review on PR create/update |
-| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/bitbucket/pull-request-comment` | Bitbucket — reply/fix/learn/fp/generate-tests on agent comment reply |
 | POST | `/webhooks/azuredevops/pull-request` | Azure DevOps — auto-review on PR create/update |
-| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix when developer replies to agent comment |
+| POST | `/webhooks/azuredevops/pull-request-comment` | Azure DevOps — reply/fix/learn/fp when developer replies to agent comment |
+| POST | `/webhooks/gitlab/merge-request` | GitLab — auto-review on MR create/update |
+| POST | `/webhooks/gitlab/merge-request-comment` | GitLab — reply/fix/learn/fp when developer replies to agent note |
+| POST | `/webhooks/github/pull-request` | GitHub — auto-review on PR opened/synchronized/reopened; hook evaluation on merge |
+| POST | `/webhooks/github/pull-request-comment` | GitHub — reply/fix/learn/fp/generate-tests on agent comment reply |
 
 All submission endpoints queue jobs instead of rejecting them. Jobs are processed FIFO up to `RUN_FIX_MAX_CONCURRENT_JOBS` in parallel. A 429 is only returned when the queue itself is full (default capacity: 20). Poll `/status/{jobId}` to see queue position.
 
@@ -272,7 +362,36 @@ Receives Bitbucket Cloud webhook payloads for `pullrequest:created` and `pullreq
 
 ### POST /webhooks/bitbucket/pull-request-comment (conversational reply)
 
-Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent (fix request vs. discussion) and triggers the appropriate job. Supports a `/learn` command to store team preferences for future reviews.
+Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent and triggers the appropriate action:
+
+| Reply | Action |
+|-------|--------|
+| `/fp` or `/false-positive` | Mark as false positive, close thread, trigger auto-suppression if threshold reached |
+| `/learn <preference>` | Store team preference in review memory |
+| Fix request (natural language) | Modify code and push to branch |
+| Discussion (natural language) | Reply conversationally in the same thread |
+
+### GET /metrics/review-quality/{workspace}/{repoSlug}
+
+Returns review quality metrics for a repository:
+
+```json
+{
+  "workspace": "my-workspace",
+  "repoSlug": "my-repo",
+  "totalFindings": 142,
+  "resolvedByDeveloper": 98,
+  "resolutionRate": 0.69,
+  "falsePositives": 12,
+  "fpRate": 0.085,
+  "fpByCategory": {
+    "Code Quality": 7,
+    "Best Practices": 4,
+    "Security": 1
+  },
+  "autoSuppressedPatterns": 2
+}
+```
 
 ### POST /webhooks/azuredevops/pull-request (auto-review)
 
@@ -320,6 +439,9 @@ All config via environment variables (or `application.properties` for local dev)
 | `ANTHROPIC_API_KEY` | Anthropic API key | (required) |
 | `ANTHROPIC_MODEL` | Claude model ID | `claude-sonnet-4-20250514` |
 | `ANTHROPIC_MAX_TOKENS` | Max tokens per API call | `8192` |
+| `ANTHROPIC_FAST_MODEL` | Faster model for binary decisions (intent classification, finding resolution, learning extraction) | `claude-3-5-haiku-20241022` |
+| `ANTHROPIC_TOKENS_PER_MINUTE` | Rate-limit budget (tokens/min for your API tier) | `80000` |
+| `ANTHROPIC_RATE_LIMIT_SAFETY_MARGIN` | Fraction of budget to stay under (proactive throttling) | `0.80` |
 | `ANTHROPIC_PRICING_INPUT` | USD per million input tokens | `3.0` |
 | `ANTHROPIC_PRICING_OUTPUT` | USD per million output tokens | `15.0` |
 | `ANTHROPIC_PRICING_CACHE_WRITE` | USD per million cache-write tokens | `3.75` |
@@ -344,7 +466,7 @@ All config via environment variables (or `application.properties` for local dev)
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `GIT_PLATFORM` | SCM platform: `bitbucket` or `azuredevops` | `bitbucket` |
+| `GIT_PLATFORM` | SCM platform: `bitbucket`, `azuredevops`, `gitlab`, or `github` | `bitbucket` |
 | `GIT_USERNAME` | Git clone/push user (defaults to platform user) | |
 | `GIT_PASSWORD` | Git clone/push password (defaults to platform token) | |
 | `GIT_AUTHOR_NAME` | Git commit author name | `code-agent` |
@@ -366,6 +488,22 @@ All config via environment variables (or `application.properties` for local dev)
 | `AZUREDEVOPS_BASE_URL` | Azure DevOps base URL | `https://dev.azure.com` |
 | `AZUREDEVOPS_PAT` | Azure DevOps Personal Access Token | (required) |
 | `AZUREDEVOPS_AGENT_USER` | Agent user display name in Azure DevOps | (optional) |
+
+### GitLab
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GITLAB_BASE_URL` | GitLab API base URL | `https://gitlab.com/api/v4` |
+| `GITLAB_TOKEN` | GitLab Personal Access Token or Group Token | (required) |
+| `GITLAB_AGENT_USER` | Agent user display name in GitLab | (optional) |
+
+### GitHub
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GITHUB_BASE_URL` | GitHub API base URL | `https://api.github.com` |
+| `GITHUB_TOKEN` | GitHub Personal Access Token or fine-grained token | (required) |
+| `GITHUB_AGENT_USER` | Agent user login in GitHub (used to skip self-authored PRs and comments) | (optional) |
 
 ### Notifications
 
@@ -398,14 +536,75 @@ All config via environment variables (or `application.properties` for local dev)
 | `API_KEY` | Shared API key to protect REST endpoints (blank = disabled) | (optional) |
 | `WEBHOOK_SECRET_BITBUCKET` | HMAC-SHA256 secret for Bitbucket webhooks | (optional) |
 | `WEBHOOK_SECRET_AZUREDEVOPS` | HMAC/basic-auth secret for Azure DevOps webhooks | (optional) |
+| `WEBHOOK_SECRET_GITLAB` | Secret for GitLab webhook verification | (optional) |
+| `WEBHOOK_SECRET_GITHUB` | HMAC-SHA256 secret for GitHub webhooks | (optional) |
 | `WEBHOOK_SECRET_JIRA` | Secret for JIRA webhook verification | (optional) |
 
-### PR Review Webhooks
+### PR Review
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `REVIEW_WEBHOOK_SKIP_AUTHORS` | Comma-separated PR authors to skip (avoid self-review) | `code-agent` |
 | `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | Only review PRs whose title contains this keyword | (optional) |
+| `REVIEW_FP_AUTO_SUPPRESS_THRESHOLD` | Number of `/fp` marks on the same pattern before auto-suppression creates a memory entry | `3` |
+| `REVIEW_PR_SUMMARY_ENABLED` | Generate a PR summary & walkthrough comment before the detailed review | `true` |
+| `REVIEW_SEQUENCE_DIAGRAMS_ENABLED` | Include Mermaid sequence/class diagrams in the PR summary | `true` |
+| `PR_SUMMARY_DIAGRAM_UPLOAD_ENABLED` | Render diagrams as PNG via mmdc and upload to Bitbucket Downloads (instead of mermaid.ink URLs) | `true` |
+
+### Planner
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `PLANNER_ENABLED` | Enable execution plan generation | `true` |
+| `PLANNER_MAX_TOKENS` | Max tokens for plan generation AI call | `8192` |
+
+### Code Metrics
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `METRICS_CC_THRESHOLD` | Maximum cyclomatic complexity per method before flagging | `10` |
+| `METRICS_MAX_ITERATIONS` | Maximum FIX→METRICS improvement iterations per quality plan | `3` |
+| `METRICS_MAX_METHODS_PER_FIX` | Maximum high-CC methods per FIX step prompt | `10` |
+| `METRICS_JOB_TIMEOUT_MINUTES` | Timeout for cloning and scanning in a METRICS job | `30` |
+
+### Unit Test Generation
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GENERATE_TESTS_MAX_LOOP_ITERATIONS` | Max agentic loop iterations for test generation | `500` |
+| `GENERATE_TESTS_JOB_TIMEOUT_MINUTES` | Overall timeout for test generation jobs | `60` |
+
+### Documentation Generation
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GENERATE_DOCS_MAX_LOOP_ITERATIONS` | Max agentic loop iterations for docs generation | `200` |
+
+### Confluence Cloud
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CONFLUENCE_BASE_URL` | Confluence Cloud REST API base URL | (optional) |
+| `CONFLUENCE_USER` | Confluence user email | (optional) |
+| `CONFLUENCE_API_TOKEN` | Atlassian API token for Confluence | (optional) |
+
+Per-repo Confluence space key and parent page ID are configured in repo settings.
+
+### Documentation Lookup (fetch_url tool)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `TOOLS_FETCH_URL_ENABLED` | Enable the `fetch_url` tool during agent loops | `true` |
+| `TOOLS_FETCH_URL_TIMEOUT` | HTTP timeout in seconds | `15` |
+| `TOOLS_FETCH_URL_ALLOWED_DOMAINS` | Comma-separated domain allowlist (blank = allow all public HTTPS) | `quarkus.io,search.maven.org` |
+
+### Upgrade Scheduler
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `UPGRADE_SCHEDULER_ENABLED` | Enable daily Quarkus upgrade checks | `false` |
+| `UPGRADE_SCHEDULER_DEFAULT_BRANCH` | Default branch to compare against | `develop` |
+| `UPGRADE_VERSION_CACHE_MINUTES` | Cache duration for Maven Central version lookups | `60` |
 
 ### Job Queue & Guardrails
 
@@ -417,17 +616,40 @@ All config via environment variables (or `application.properties` for local dev)
 | `RUN_FIX_ALLOWED_COMMANDS` | Comma-separated allowed command prefixes | `mvn,git diff,...` |
 | `RUN_FIX_MAX_FILES_CHANGED` | Max files the agent may change | `10` |
 | `RUN_FIX_MAX_LINES_CHANGED` | Max lines the agent may change | `500` |
-| `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
+| `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `150` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
+
+### Voyage AI (Semantic Search)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `VOYAGE_API_KEY` | Voyage AI API key (sign up at [dash.voyageai.com](https://dash.voyageai.com)) | (optional) |
+| `VOYAGE_MODEL` | Voyage embedding model | `voyage-code-3` |
+| `VOYAGE_BATCH_SIZE` | Max texts per API call | `128` |
+| `EMBEDDING_MAX_SOURCE_CHARS` | Max source code characters per symbol embedding | `16000` |
+
+Vector indexing is controlled per-repo via `repo_settings.vector_enabled` (default: `false`). The Voyage API key must be set for semantic search to function. Without it, the feature is silently disabled.
+
+### Code Graph
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `CODE_GRAPH_SCHEDULER_ENABLED` | Enable background graph pre-building | `true` |
+| `CODE_GRAPH_SCHEDULER_DEFAULT_BRANCH` | Default branch to clone for graph builds | `main` |
+| `CODE_GRAPH_SCHEDULER_CLONE_TIMEOUT` | Clone timeout in minutes for scheduled builds | `10` |
+| `CODE_GRAPH_CROSS_REPO_ENABLED` | Enable cross-repo impact analysis and queries | `true` |
+| `CODE_GRAPH_CROSS_REPO_CRITICAL_THRESHOLD` | Number of distinct repos using a symbol before labelling it CRITICAL | `3` |
 
 ### Linter / SAST
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LINTER_ENABLED` | Enable linter integration | `true` |
-| `LINTER_CHECKSTYLE_ENABLED` | Enable Checkstyle | `true` |
-| `LINTER_PMD_ENABLED` | Enable PMD | `true` |
-| `LINTER_SPOTBUGS_ENABLED` | Enable SpotBugs | `true` |
+| `LINTER_CHECKSTYLE_ENABLED` | Enable Checkstyle (Java) | `true` |
+| `LINTER_PMD_ENABLED` | Enable PMD (Java) | `true` |
+| `LINTER_SPOTBUGS_ENABLED` | Enable SpotBugs (Java) | `true` |
+| `LINTER_ESLINT_ENABLED` | Enable ESLint (JavaScript/TypeScript) | `true` |
+| `LINTER_DOTNET_FORMAT_ENABLED` | Enable dotnet-format (C#) | `true` |
 | `LINTER_MAX_FIX_ITERATIONS` | Max iterations for auto-fixing linter issues | `2` |
 | `LINTER_FAIL_ON_NEW_ISSUES` | Fail the build on new linter issues | `false` |
 | `LINTER_TIMEOUT_MINUTES` | Linter execution timeout | `10` |
@@ -464,9 +686,12 @@ export BITBUCKET_USER=your-bb-user
 export BITBUCKET_APP_PASSWORD=your-app-password
 export BITBUCKET_WORKSPACE=your-workspace
 export DATABASE_PASSWORD=your-db-password
+export VOYAGE_API_KEY=pa-...              # optional, for semantic search
 
 mvn quarkus:dev
 ```
+
+**Note:** Semantic search requires pgvector installed in your local PostgreSQL. See [Semantic search — local setup](#semantic-search-cross-repo-vector-search) for instructions.
 
 The server starts on `http://localhost:8080`. Swagger UI is available at `http://localhost:8080/q/swagger-ui`.
 
@@ -543,6 +768,7 @@ aws secretsmanager create-secret \
   --region eu-central-1 \
   --secret-string '{
     "ANTHROPIC_API_KEY": "sk-ant-...",
+    "VOYAGE_API_KEY": "pa-...",
     "JIRA_API_TOKEN": "ATATT3x...",
     "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
     "DATABASE_PASSWORD": "...",
@@ -666,41 +892,40 @@ Create an ECS service with:
 
 ## Bitbucket Configuration
 
-### App Password
+### Token
 
-The agent uses a Bitbucket App Password for Git operations and the Bitbucket API.
+The agent uses a GitHub Personal Access Token (classic) or fine-grained token for Git operations and the GitHub REST API.
 
-1. Go to **Personal settings > App passwords** (or use a team service account)
-2. Click **Create app password** with these permissions:
-   - **Repositories:** Read, Write
-   - **Pull requests:** Read, Write
-3. Set the credentials in your environment:
+1. Go to **Settings > Developer settings > Personal access tokens**
+2. Create a token with these scopes:
+   - **repo** (full control of private repositories)
+   - Or for fine-grained tokens: Contents (read/write), Pull requests (read/write), Issues (read)
+3. Set the credentials:
 
 | Variable | Value |
 |----------|-------|
-| `BITBUCKET_USER` | `x-token-auth` (for App Passwords) or your Bitbucket username |
-| `BITBUCKET_APP_PASSWORD` | The generated app password |
-| `BITBUCKET_WORKSPACE` | Your Bitbucket workspace slug |
-| `GIT_USERNAME` | `x-token-auth` |
-| `GIT_PASSWORD` | Same as `BITBUCKET_APP_PASSWORD` |
+| `GIT_PLATFORM` | `github` |
+| `GITHUB_TOKEN` | The generated token |
+| `GITHUB_AGENT_USER` | Your GitHub username or bot login |
+| `GIT_USERNAME` | `x-access-token` |
+| `GIT_PASSWORD` | Same as `GITHUB_TOKEN` |
 
 ### Webhooks
 
 #### PR auto-review webhook
 
-1. Go to **Repository Settings > Webhooks** (per repo) or configure at workspace level
+1. Go to **Repository Settings > Webhooks** (or configure at org level)
 2. Click **Add webhook**:
-   - **Title:** `Code Agent PR Review`
-   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request`
-   - **Secret:** A random string (set the same value as `WEBHOOK_SECRET_BITBUCKET`)
-   - **Events:** select `Pull Request: Created` and `Pull Request: Updated`
-3. The agent automatically skips PRs authored by itself (configurable via `REVIEW_WEBHOOK_SKIP_AUTHORS`)
+   - **Payload URL:** `https://<your-agent-host>/webhooks/github/pull-request`
+   - **Content type:** `application/json`
+   - **Secret:** A random string (set the same value as `WEBHOOK_SECRET_GITHUB`)
+   - **Events:** select `Pull requests`
+3. The agent reviews on `opened`, `synchronize`, and `reopened` events. On `closed` (merged), it evaluates automation hooks.
 
 #### PR comment interaction webhook
 
-1. Add another webhook:
-   - **Title:** `Code Agent Comment Reply`
-   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request-comment`
+1. Add another webhook (or add events to the same one):
+   - **Payload URL:** `https://<your-agent-host>/webhooks/github/pull-request-comment`
    - **Secret:** Same as above
    - **Events:** select `Pull Request: Comment Created`
 2. This enables developers to reply to agent review comments and have the agent respond or fix code
@@ -734,7 +959,33 @@ Rules are prepended to the system prompt in order: shared rules, repo rules, inl
 
 ## AI Code Review
 
-The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps webhooks.
+The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps/GitLab webhooks.
+
+### PR Summary & Walkthrough
+
+When a PR is reviewed, the agent first generates a CodeRabbit-style summary comment with:
+
+- **High-level summary** — 2-3 sentences describing the purpose and impact of the PR
+- **Walkthrough table** — per-file breakdown of what changed and why
+
+This comment is posted before the detailed code review begins, so developers get an immediate overview of the PR while the full review runs. On re-reviews (new commits pushed), the summary comment is updated in-place rather than duplicated.
+
+**Example output:**
+
+> ## PR Summary
+>
+> ### Walkthrough
+> Adds a new caching layer for the user service that reduces database round-trips for frequently accessed profiles. The implementation uses Caffeine as the in-memory cache with configurable TTL and size limits.
+>
+> ### Changes
+> | File | Summary |
+> |------|---------|
+> | `src/main/java/UserCacheService.java` | New Caffeine-based cache service with TTL and eviction support |
+> | `src/main/java/UserService.java` | Updated to delegate reads through the cache layer |
+> | `pom.xml` | Added `com.github.ben-manes.caffeine` dependency |
+> | `src/test/java/UserCacheServiceTest.java` | Unit tests for cache hit, miss, and eviction scenarios |
+
+Disable per-environment with `REVIEW_PR_SUMMARY_ENABLED=false`.
 
 ### What it reviews
 
@@ -745,16 +996,118 @@ The agent performs automated code reviews on pull requests, triggered either via
 - **Performance** — N+1 queries, unnecessary allocations, algorithm complexity
 - **Best practices** — framework conventions, idiomatic patterns
 
+### Contextual repo exploration
+
+Before generating findings, the agent proactively explores the cloned repository for context. It uses five tools:
+
+- **`search_code`** — grep-based code search over the full repo (e.g. find all callers of a changed method, locate interface implementations). Accepts a `pattern` (required), optional directory `path`, and optional file-type `include` glob (e.g. `*.java`).
+- **`query_code_graph`** — query the per-repo code graph to find callers, implementations, or dependents of a specific symbol. See [Code graph](#code-graph-impact-analysis) below.
+- **`semantic_search`** — search across all vector-indexed repositories by meaning. Useful for finding library implementations, shared utilities, or similar patterns in other repos. See [Semantic search](#semantic-search-cross-repo-vector-search) below.
+- **`read_file`** — read the full contents of any file in the repo (interfaces, base classes, configuration).
+- **`list_files`** — directory listing up to 5 levels deep, configurable via an optional `depth` parameter (default 3, max 5).
+
+This prevents false positives that arise from reviewing a diff without its wider context — the same capability BugBot uses to browse the whole repository.
+
+### Code graph (impact analysis)
+
+The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+
+**How it works:**
+
+1. On the first review of a repository, a full index is built from all `.java` and `.cs` files in the workspace
+2. On subsequent reviews, only the files touched in the diff are re-indexed (typically 5–20 files)
+3. The agent queries the graph to find code that depends on the changed symbols and injects this as context
+4. During the review tool-use loop, the agent can query the graph on-demand via `query_code_graph`
+
+**Available tools during review:**
+
+- **`query_code_graph`** — find callers, implementations, or dependents of a specific symbol. Parameters: `symbol` (e.g. `MyClass.myMethod`), `relation` (`callers`, `implementations`, or `dependents`)
+
+**Background pre-building:** A scheduler runs every 6 hours to pre-build graphs for repos that don't have one yet, so the first review isn't slowed down by a full index. This can also be triggered on demand via `POST /graph/build-missing`.
+
+**Rebuild a single repo:**
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
+```
+
+**Supported languages:** Java (full AST via JavaParser), C# (regex-based — classes, interfaces, structs, enums, methods, fields, inheritance, using directives, method calls). Non-supported files are silently skipped.
+
+### Semantic search (cross-repo vector search)
+
+The agent can search across all indexed repositories by meaning using vector embeddings, powered by Voyage AI and pgvector. This lets Claude find library implementations, shared utilities, base classes, or similar patterns in other repos during reviews — even when the exact terms don't appear in the code.
+
+**How it works:**
+
+1. When vector indexing is enabled for a repo, the agent extracts class and method source code and generates vector embeddings via Voyage AI (`voyage-code-3`)
+2. Embeddings are stored in PostgreSQL using pgvector (1024-dimensional vectors with IVFFlat indexing)
+3. During reviews, Claude can invoke `semantic_search` with a natural language query (e.g. "payment refund handling logic")
+4. The query is embedded and matched against all vector-indexed repos using cosine similarity
+5. Claude receives the top matching code snippets with file paths, repo names, and line numbers
+
+**Enable vector indexing for a repo:**
+
+```bash
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+```
+
+Then rebuild the graph to generate embeddings:
+
+```bash
+curl -X POST http://localhost:8080/graph/rebuild/myworkspace/shared-lib
+```
+
+Vector indexing is opt-in per repo (default: disabled). Start by enabling it on shared libraries that other repos depend on.
+
+**Available tools during review:**
+
+- **`semantic_search`** — search across all vector-indexed repos by meaning. Parameters: `query` (required, natural language), `repo` (optional, restrict to one repo), `top_k` (optional, default 10, max 25)
+
+**Local setup — pgvector:**
+
+pgvector must be installed in your PostgreSQL instance. On macOS with Homebrew:
+
+```bash
+# Check your PostgreSQL version
+brew list | grep postgres
+
+# Build and install pgvector for your version (e.g. postgresql@14)
+cd /tmp
+git clone --branch v0.8.0 https://github.com/pgvector/pgvector.git
+cd pgvector
+export PG_CONFIG=/opt/homebrew/opt/postgresql@14/bin/pg_config
+make
+make install
+
+# Verify
+ls /opt/homebrew/share/postgresql@14/extension/vector.control
+```
+
+On AWS RDS for PostgreSQL, pgvector is available natively on versions 14.7+, 15.2+, and later — no manual installation needed.
+
 ### Review memory
 
 The agent learns team preferences over time. When a developer replies to a review comment with `/learn <preference>`, the agent stores it and respects it in future reviews of that repository. Memories can also be managed via the `/memory` REST endpoints.
 
+### False-positive feedback
+
+When a developer replies to a review comment with `/fp` (or `/false-positive`), the agent:
+
+1. Records the finding as a false positive in the `comment_feedback` table
+2. Marks the comment as resolved and closes the thread on the platform
+3. Posts an in-thread confirmation reply
+4. Checks whether this pattern has now hit the auto-suppress threshold (default: 3 occurrences). If so, a `review_memory` entry is automatically created, suppressing that pattern in all future reviews
+
+False-positive patterns are injected into every subsequent review prompt as a **"Known False Positives"** section, reducing noise before a finding is even generated.
+
+Track false-positive rates and resolution rates per repo at `GET /metrics/review-quality/{workspace}/{repoSlug}`.
+
 ### Comment interaction
 
 When a developer replies to an agent review comment:
-1. The agent classifies the intent as either a **fix request** or a **discussion**
-2. For fix requests, the agent modifies the code and pushes the change
-3. For discussions, the agent replies conversationally in the same thread
+1. `/fp` or `/false-positive` — marks the finding as a false positive (see above)
+2. `/learn <preference>` — stores a team preference for future reviews
+3. Natural-language fix request — the agent modifies the code and pushes the change
+4. Natural-language discussion — the agent replies conversationally in the same thread
 
 ### Repo settings
 
@@ -770,15 +1123,26 @@ curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/disable
 curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
 ```
 
+**Enable/disable vector indexing:** Turn semantic vector indexing on or off per repo. When enabled, embeddings are generated during graph builds and the repo becomes searchable via `semantic_search`. Default: disabled.
+
+```bash
+# Enable vector indexing for a shared library
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/enable
+
+# Disable
+curl -X PATCH http://localhost:8080/settings/repos/myworkspace/shared-lib/vector/disable
+```
+
 **Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
 
-**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{FALSE_POSITIVE_SECTION}}`, `{{IMPACT_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
 
 ```bash
 curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
   -H 'Content-Type: application/json' \
   -d '{
     "reviewEnabled": true,
+    "vectorEnabled": false,
     "ruleNames": ["java-conventions", "security-standards"],
     "reviewPrompt": "You are reviewing a pull request for {{PR_TITLE}}.\n\n{{MEMORY_SECTION}}\n\nFocus only on security and performance issues.\n\n## Diff\n```\n{{DIFF}}\n```"
   }'
@@ -901,36 +1265,75 @@ The agent uses PostgreSQL for persistent storage. Flyway handles schema migratio
 
 | Table | Purpose |
 |-------|---------|
-| `agent_comments` | Maps comment IDs to agent findings for reply tracking |
+| `agent_comments` | Maps comment IDs to agent findings for reply tracking and resolution |
 | `ai_calls` | AI call metrics (tokens, cost, duration) per job |
-| `review_memory` | Team preferences learned during PR reviews |
-| `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
+| `review_memory` | Team preferences learned during PR reviews (via `/learn` and auto-suppression) |
+| `repo_settings` | Per-repo configuration (review enabled, vector enabled, docs enabled, upgrade enabled, archetype, Confluence settings, rule names, custom prompt, disabled hooks) |
+| `automation_hooks` | Configurable triggers that run agent tasks on PR merges or schedules |
+| `jobs` | Active job queue with status, PR URL, and diff stats |
+| `job_history` | Archived completed jobs |
+| `comment_feedback` | Developer feedback on individual findings (`/fp` marks); powers FP rate metrics and auto-suppression |
+| `code_graph_nodes` | Code graph symbols (classes, methods, fields, enums) per repo |
+| `code_graph_edges` | Code graph relationships (calls, extends, implements, imports) per repo |
+| `code_embeddings` | Vector embeddings for semantic code search (pgvector, 1024-dim) per repo |
+| `execution_plans` | Execution plans with status, phases, steps, and source references |
+| `code_metrics_snapshots` | Cyclomatic complexity snapshots per plan/repo for quality tracking |
+| `prompt_templates` | AI prompt template overrides (by key) |
 
 ## Project Structure
 
 ```
 src/main/java/com/eneve/agent/
-├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr)
+├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr, /generate-tests, /generate-docs, /sync-confluence)
 ├── MemoryResource.java          # REST endpoints (/memory)
 ├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
+├── HooksResource.java           # REST endpoints (/settings/hooks)
+├── PromptTemplateResource.java  # REST endpoints (/settings/prompts)
+├── CodeGraphResource.java       # REST endpoints (/graph/build-missing, /graph/rebuild, /graph/detect-archetypes)
 ├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
+├── ReviewMetricsResource.java   # REST endpoints (/metrics/review-quality)
 ├── agent/
-│   ├── AgentRunner.java         # Job orchestrator (fix + review)
-│   ├── AgentPromptBuilder.java  # System prompt construction
+│   ├── AgentRunner.java         # Job orchestrator (fix, review, test gen, docs gen)
+│   ├── AgentPromptBuilder.java  # System prompt construction (context, memory, FP sections)
 │   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude
-│   ├── BuildValidator.java      # Maven build validation
+│   ├── ToolDefinitions.java     # Tool schemas for Claude (read_file, search_code, query_code_graph, semantic_search, list_files, run_command, fetch_url)
+│   ├── AnthropicClientProducer.java # CDI producer for Anthropic Java SDK client
+│   ├── TokenBudgetTracker.java  # Proactive rate-limit throttling (tokens-per-minute budget)
+│   ├── BuildValidator.java      # Maven / dotnet build validation
+│   ├── FindingResolver.java     # Determines if past findings were addressed in new commits
 │   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
 │   ├── ReviewCommentProcessor.java # Turns PR comments into fix instructions
 │   ├── LearningExtractor.java   # Extracts learnable patterns from interactions
 │   ├── JobQueue.java            # Concurrent job queue
-│   ├── JobStore.java            # In-memory job store
-│   ├── CommentStore.java        # Tracks agent comments for reply detection
+│   ├── JobStore.java            # In-memory + PostgreSQL job store
+│   ├── CommentStore.java        # Tracks agent comments for reply detection and resolution metrics
+│   ├── PrSummaryGenerator.java  # PR description & walkthrough generation (single Claude call)
+│   ├── MermaidRenderer.java     # Mermaid diagram generation for PR summaries
+│   ├── MermaidPngRenderer.java  # Local mmdc CLI rendering + Bitbucket upload
+│   ├── CommentFeedbackStore.java # False-positive feedback persistence (PostgreSQL)
+│   ├── CommentFeedbackEntry.java # False-positive feedback record
 │   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)
 │   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
 │   ├── RepoSettings.java        # Per-repo settings record
 │   ├── RepoSettingsStore.java   # Repo settings persistence (PostgreSQL)
-│   └── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
+│   ├── RepoSyncService.java     # Syncs platform repos into settings on startup
+│   ├── CodeGraphStore.java      # Code graph persistence (nodes + edges in PostgreSQL)
+│   ├── CodeGraphIndexer.java    # JavaParser (Java) + regex (C#) AST indexer
+│   ├── CodeGraphQueryService.java # Impact analysis prompt builder from graph
+│   ├── CodeGraphBuildService.java # Clone-and-index logic for background/on-demand builds
+│   ├── CodeGraphScheduler.java  # Scheduled pre-building of missing code graphs
+│   ├── ArchetypeDetector.java   # Detect framework archetype (Quarkus, Spring, .NET, etc.)
+│   ├── CodeMetricsCalculator.java # Cyclomatic complexity calculator
+│   ├── CodeMetricsStore.java    # Metrics snapshots persistence (PostgreSQL)
+│   ├── CoverageReporter.java    # Test coverage reporting
+│   ├── VoyageEmbeddingService.java # Voyage AI embeddings HTTP client (batching, document/query types)
+│   ├── EmbeddingStore.java      # Vector embedding persistence (pgvector cosine search)
+│   ├── EmbeddingIndexer.java    # Extracts symbol source code and generates embeddings
+│   ├── PromptTemplateService.java # Prompt template resolution (JSON defaults + DB overrides)
+│   ├── PromptTemplateStore.java # Prompt template DB persistence
+│   ├── HookStore.java           # Automation hook persistence (PostgreSQL)
+│   ├── HookEvaluator.java       # Evaluates hook triggers on events (PR merge, schedule)
+│   └── AutomationHook.java      # Automation hook record
 ├── aikido/
 │   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
 │   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
@@ -941,17 +1344,24 @@ src/main/java/com/eneve/agent/
 ├── jira/
 │   └── JiraService.java         # JIRA Cloud API (comments, transitions, issue fetch)
 ├── linter/
-│   ├── LinterService.java       # Orchestrates Checkstyle, PMD, SpotBugs
+│   ├── LinterService.java       # Orchestrates all linters
 │   ├── LinterRunner.java        # Linter execution engine
-│   ├── CheckstyleLinter.java    # Checkstyle integration
-│   ├── PmdLinter.java           # PMD integration
-│   └── SpotBugsLinter.java      # SpotBugs integration
+│   ├── CheckstyleLinter.java    # Checkstyle integration (Java)
+│   ├── PmdLinter.java           # PMD integration (Java)
+│   ├── SpotBugsLinter.java      # SpotBugs integration (Java)
+│   ├── EsLintRunner.java        # ESLint integration (JS/TS)
+│   └── DotnetFormatLinter.java  # dotnet-format integration (C#)
 ├── model/
 │   ├── RunFixRequest.java
 │   ├── QuickFixRequest.java
 │   ├── AikidoFixRequest.java
 │   ├── ReviewPrRequest.java
 │   ├── FixPrRequest.java
+│   ├── GenerateTestsRequest.java
+│   ├── GenerateDocsRequest.java
+│   ├── SyncConfluenceRequest.java
+│   ├── MetricsJobRequest.java
+│   ├── HookJobRequest.java
 │   ├── ReplyCommentRequest.java
 │   ├── JobRecord.java
 │   ├── JobStatus.java
@@ -963,17 +1373,26 @@ src/main/java/com/eneve/agent/
 ├── notifications/
 │   ├── TeamsNotifier.java
 │   └── N8nWebhookNotifier.java
+├── planner/
+│   ├── PlanResource.java        # REST endpoints (/plans)
+│   ├── PlannerService.java      # AI plan generation from specifications
+│   ├── PlanStore.java           # Execution plan persistence (PostgreSQL)
+│   └── PlanOrchestratorService.java # Orchestrates plan step execution
 ├── rules/
 │   ├── CursorRulesLoader.java
 │   ├── MdcParser.java
 │   └── MdcRule.java
 ├── scm/
 │   ├── GitPlatformService.java          # SCM abstraction interface
-│   ├── GitPlatformProducer.java         # CDI producer (selects BB or ADO)
+│   ├── GitPlatformProducer.java         # CDI producer (selects BB, ADO, GitLab, or GitHub)
 │   ├── bitbucket/
 │   │   └── BitbucketPlatformService.java
-│   └── azuredevops/
-│       └── AzureDevOpsPlatformService.java
+│   ├── azuredevops/
+│   │   └── AzureDevOpsPlatformService.java
+│   ├── gitlab/
+│   │   └── GitLabPlatformService.java
+│   └── github/
+│       └── GitHubPlatformService.java
 ├── security/
 │   ├── ApiKeyFilter.java                # API key authentication filter
 │   └── WebhookSignatureFilter.java      # HMAC-SHA256 webhook verification
@@ -983,14 +1402,28 @@ src/main/java/com/eneve/agent/
 │   ├── ToolRegistry.java
 │   ├── ReadFileTool.java
 │   ├── WriteFileTool.java
+│   ├── SearchCodeTool.java              # grep-based code search for review context
+│   ├── QueryCodeGraphTool.java          # On-demand code graph queries during review
+│   ├── SemanticSearchTool.java          # Cross-repo semantic search via pgvector
+│   ├── ListFilesTool.java
 │   ├── RunCommandTool.java
-│   └── ListFilesTool.java
+│   ├── FetchUrlTool.java                # HTTPS documentation/guide fetcher (SSRF-safe, domain-allowlisted)
+│   └── PublishConfluenceTool.java       # Publish Markdown to Confluence during docs generation
+├── upgrade/
+│   ├── UpgradeResource.java     # REST endpoints (/upgrades)
+│   ├── UpgradeService.java      # Framework upgrade detection and plan creation
+│   ├── UpgradeScheduler.java    # Periodic upgrade checks
+│   └── MavenCentralClient.java  # Maven Central version lookups
 ├── webhooks/
 │   ├── JiraWebhookResource.java
 │   ├── BitbucketWebhookResource.java
-│   ├── BitbucketCommentWebhookResource.java
+│   ├── BitbucketCommentWebhookResource.java   # /learn, /fp, /generate-tests, fix, reply
 │   ├── AzureDevOpsWebhookResource.java
-│   └── AzureDevOpsCommentWebhookResource.java
+│   ├── AzureDevOpsCommentWebhookResource.java
+│   ├── GitLabWebhookResource.java
+│   ├── GitLabCommentWebhookResource.java      # /learn, /fp, fix, reply
+│   ├── GitHubWebhookResource.java             # PR review + hook evaluation on merge
+│   └── GitHubCommentWebhookResource.java      # /learn, /fp, /generate-tests, fix, reply
 └── workspace/
-    └── WorkspaceContext.java
+    └── WorkspaceContext.java    # Per-job workspace: clone, branch, commit, push, path traversal protection
 ```

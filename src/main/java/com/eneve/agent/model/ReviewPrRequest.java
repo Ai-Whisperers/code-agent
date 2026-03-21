@@ -37,6 +37,11 @@ public record ReviewPrRequest(
 
         @Schema(description = "n8n webhook URL for job completion callback",
                 example = "https://n8n.example.com/webhook/abc")
-        String n8nWebhookUrl
+        String n8nWebhookUrl,
+
+        @Schema(description = "Current HEAD commit SHA of the source branch at the time the webhook fired. "
+                + "Used to skip reviews when this commit has already been reviewed.",
+                example = "a1b2c3d4e5f6")
+        String headCommitSha
 ) {
 }

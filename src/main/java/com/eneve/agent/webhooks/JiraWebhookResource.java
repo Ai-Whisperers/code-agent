@@ -9,7 +9,6 @@ import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.RunFixRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -68,9 +67,8 @@ public class JiraWebhookResource {
                     + "uses the enriched /aikido-fix flow. Otherwise falls back to /quick-fix behavior."
     )
     @APIResponses({
-            @APIResponse(responseCode = "200", description = "Webhook processed (job may or may not have been triggered)",
+            @APIResponse(responseCode = "200", description = "Webhook processed — job triggered, or event ignored (not a matching issue or assignee change)",
                     content = @Content(schema = @Schema(example = "{\"action\": \"job_triggered\", \"jobId\": \"...\", \"branch\": \"...\"}"))),
-            @APIResponse(responseCode = "200", description = "Event ignored (not a matching issue or assignee change)"),
             @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response handleJiraWebhook(String rawPayload) {
@@ -182,7 +180,7 @@ public class JiraWebhookResource {
 
         RunFixRequest fullRequest = new RunFixRequest(
                 repoUrl, branchName, issueKey, prompt,
-                "develop", null, null, null, null
+                "develop", null, null, null, null, null, null
         );
 
         String jobId = UUID.randomUUID().toString();
@@ -190,8 +188,6 @@ public class JiraWebhookResource {
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
-            job.setStatus(JobStatus.FAILED);
-            job.setErrorMessage("Job queue is full");
             return Response.status(429)
                     .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
                     .build();

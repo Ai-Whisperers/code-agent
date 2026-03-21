@@ -47,8 +47,9 @@ public class AiCallStore {
                 INSERT INTO ai_calls
                     (job_id, job_type, model, iteration,
                      input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                     stop_reason, tool_names, duration_ms, is_error, error_message, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                     prompt_text, response_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -70,6 +71,8 @@ public class AiCallStore {
             ps.setBoolean(12, record.isError());
             setNullableString(ps, 13, record.errorMessage());
             ps.setTimestamp(14, Timestamp.from(record.createdAt() != null ? record.createdAt() : Instant.now()));
+            setNullableString(ps, 15, record.promptText());
+            setNullableString(ps, 16, record.responseText());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to store AI call record: %s", e.getMessage());
@@ -80,7 +83,8 @@ public class AiCallStore {
         String sql = """
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at
+                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                       prompt_text, response_text
                 FROM ai_calls WHERE job_id = ?
                 ORDER BY iteration ASC NULLS FIRST, created_at ASC
                 """;
@@ -104,7 +108,8 @@ public class AiCallStore {
         StringBuilder sql = new StringBuilder("""
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
-                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at
+                       stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
+                       prompt_text, response_text
                 FROM ai_calls WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
@@ -179,6 +184,147 @@ public class AiCallStore {
             LOG.errorf("Failed to query AI call summary: %s", e.getMessage());
         }
         return results;
+    }
+
+    /**
+     * Returns enhanced summary with job type breakdown and CHAT-excluded averages.
+     */
+    public Map<String, Object> getSummaryByJobType(Instant from, Instant to) {
+        // Get job type breakdown
+        List<Map<String, Object>> jobTypeBreakdown = getSummaryGroupedByJobType(from, to);
+        
+        // Calculate overall stats excluding CHAT
+        Map<String, Object> overallStats = getOverallStatsExcludingChat(from, to);
+        
+        // Get CHAT-specific stats
+        Map<String, Object> chatStats = getChatStats(from, to);
+        
+        Map<String, Object> result = new HashMap<>();
+        result.put("jobTypeBreakdown", jobTypeBreakdown);
+        result.put("overallStats", overallStats);
+        result.put("chatStats", chatStats);
+        
+        return result;
+    }
+    
+    private List<Map<String, Object>> getSummaryGroupedByJobType(Instant from, Instant to) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT job_type,
+                       COUNT(*) AS call_count,
+                       SUM(input_tokens) AS total_input_tokens,
+                       SUM(output_tokens) AS total_output_tokens,
+                       SUM(cache_creation_input_tokens) AS total_cache_write_tokens,
+                       SUM(cache_read_input_tokens) AS total_cache_read_tokens,
+                       COUNT(DISTINCT job_id) AS unique_jobs
+                FROM ai_calls WHERE 1=1
+                """);
+        List<Object> params = new ArrayList<>();
+        appendTimeFilters(sql, params, from, to);
+        sql.append(" GROUP BY job_type ORDER BY SUM(input_tokens + output_tokens) DESC");
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            bindParams(ps, params);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> row = new HashMap<>();
+                    long inputTokens = rs.getLong("total_input_tokens");
+                    long outputTokens = rs.getLong("total_output_tokens");
+                    long cacheWriteTokens = rs.getLong("total_cache_write_tokens");
+                    long cacheReadTokens = rs.getLong("total_cache_read_tokens");
+                    
+                    row.put("jobType", rs.getString("job_type"));
+                    row.put("callCount", rs.getLong("call_count"));
+                    row.put("totalTokens", inputTokens + outputTokens);
+                    row.put("totalInputTokens", inputTokens);
+                    row.put("totalOutputTokens", outputTokens);
+                    row.put("uniqueJobs", rs.getLong("unique_jobs"));
+                    row.put("estimatedCostUsd", estimateCost(inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens));
+                    results.add(row);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query job type breakdown: %s", e.getMessage());
+        }
+        return results;
+    }
+    
+    private Map<String, Object> getOverallStatsExcludingChat(Instant from, Instant to) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT 
+                       COUNT(*) AS total_calls,
+                       SUM(input_tokens) AS total_input_tokens,
+                       SUM(output_tokens) AS total_output_tokens,
+                       SUM(cache_creation_input_tokens) AS total_cache_write_tokens,
+                       SUM(cache_read_input_tokens) AS total_cache_read_tokens,
+                       COUNT(DISTINCT job_id) AS unique_jobs_excluding_chat
+                FROM ai_calls WHERE job_type != 'CHAT'
+                """);
+        List<Object> params = new ArrayList<>();
+        appendTimeFilters(sql, params, from, to);
+
+        Map<String, Object> result = new HashMap<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            bindParams(ps, params);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long inputTokens = rs.getLong("total_input_tokens");
+                    long outputTokens = rs.getLong("total_output_tokens");
+                    long cacheWriteTokens = rs.getLong("total_cache_write_tokens");
+                    long cacheReadTokens = rs.getLong("total_cache_read_tokens");
+                    long uniqueJobs = rs.getLong("unique_jobs_excluding_chat");
+                    double totalCost = estimateCost(inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens);
+                    
+                    result.put("totalCalls", rs.getLong("total_calls"));
+                    result.put("totalInputTokens", inputTokens);
+                    result.put("totalOutputTokens", outputTokens);
+                    result.put("totalCostUsd", totalCost);
+                    result.put("uniqueJobsExcludingChat", uniqueJobs);
+                    result.put("avgCostPerJobExcludingChat", uniqueJobs > 0 ? totalCost / uniqueJobs : 0.0);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query overall stats excluding chat: %s", e.getMessage());
+        }
+        return result;
+    }
+    
+    private Map<String, Object> getChatStats(Instant from, Instant to) {
+        StringBuilder sql = new StringBuilder("""
+                SELECT 
+                       COUNT(*) AS chat_calls,
+                       SUM(input_tokens) AS total_input_tokens,
+                       SUM(output_tokens) AS total_output_tokens,
+                       SUM(cache_creation_input_tokens) AS total_cache_write_tokens,
+                       SUM(cache_read_input_tokens) AS total_cache_read_tokens
+                FROM ai_calls WHERE job_type = 'CHAT'
+                """);
+        List<Object> params = new ArrayList<>();
+        appendTimeFilters(sql, params, from, to);
+
+        Map<String, Object> result = new HashMap<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            bindParams(ps, params);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    long inputTokens = rs.getLong("total_input_tokens");
+                    long outputTokens = rs.getLong("total_output_tokens");
+                    long cacheWriteTokens = rs.getLong("total_cache_write_tokens");
+                    long cacheReadTokens = rs.getLong("total_cache_read_tokens");
+                    
+                    result.put("chatCalls", rs.getLong("chat_calls"));
+                    result.put("totalInputTokens", inputTokens);
+                    result.put("totalOutputTokens", outputTokens);
+                    result.put("estimatedCostUsd", estimateCost(inputTokens, outputTokens, cacheWriteTokens, cacheReadTokens));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query chat stats: %s", e.getMessage());
+        }
+        return result;
     }
 
     /**
@@ -257,7 +403,9 @@ public class AiCallStore {
                 rs.getLong("duration_ms"),
                 rs.getBoolean("is_error"),
                 rs.getString("error_message"),
-                ts != null ? ts.toInstant() : null
+                ts != null ? ts.toInstant() : null,
+                rs.getString("prompt_text"),
+                rs.getString("response_text")
         );
     }
 

@@ -2,7 +2,7 @@ package com.eneve.agent.agent;
 
 import java.util.List;
 
-import com.eneve.agent.bitbucket.BitbucketCloudService;
+import com.eneve.agent.scm.GitPlatformService;
 
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -12,7 +12,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
- * Syncs Bitbucket repositories into the {@code repo_settings} table on startup.
+ * Syncs repositories into the {@code repo_settings} table on startup.
  * New repos get default settings (review enabled, no custom prompt).
  * Existing settings are left untouched.
  */
@@ -22,7 +22,7 @@ public class RepoSyncService {
     private static final Logger LOG = Logger.getLogger(RepoSyncService.class);
 
     @Inject
-    BitbucketCloudService bitbucketService;
+    GitPlatformService gitPlatformService;
 
     @Inject
     RepoSettingsStore settingsStore;
@@ -35,9 +35,14 @@ public class RepoSyncService {
             LOG.warn("bitbucket.workspace is not configured — skipping repo sync");
             return;
         }
+        Thread t = new Thread(this::syncRepos, "repo-sync-startup");
+        t.setDaemon(true);
+        t.start();
+    }
 
+    private void syncRepos() {
         try {
-            List<String> repoSlugs = bitbucketService.listRepositories(workspace);
+            List<String> repoSlugs = gitPlatformService.listRepositories(workspace);
             int newCount = 0;
             for (String slug : repoSlugs) {
                 if (settingsStore.insertIfAbsent(workspace, slug)) {

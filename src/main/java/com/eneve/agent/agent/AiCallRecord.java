@@ -17,5 +17,7 @@ public record AiCallRecord(
         long durationMs,
         boolean isError,
         String errorMessage,
-        Instant createdAt
+        Instant createdAt,
+        String promptText,
+        String responseText
 ) {}

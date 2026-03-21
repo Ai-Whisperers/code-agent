@@ -1,0 +1,1 @@
+ALTER TABLE repo_settings ADD COLUMN upgrade_enabled BOOLEAN NOT NULL DEFAULT TRUE;

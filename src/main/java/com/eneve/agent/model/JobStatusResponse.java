@@ -10,6 +10,9 @@ public record JobStatusResponse(
         @Schema(description = "Unique job identifier", example = "550e8400-e29b-41d4-a716-446655440000")
         String jobId,
 
+        @Schema(description = "Type of the job", enumeration = {"FIX", "REVIEW", "FIX_PR", "REPLY", "FIX_COMMENT", "HOOK", "GENERATE_TESTS", "GENERATE_DOCS", "SYNC_CONFLUENCE", "METRICS", "QUALITY_REPORT"})
+        JobType jobType,
+
         @Schema(description = "Current job status", enumeration = {"PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "AWAITING_APPROVAL"})
         JobStatus status,
 
@@ -37,6 +40,7 @@ public record JobStatusResponse(
     public static JobStatusResponse from(JobRecord record, int queuePosition) {
         return new JobStatusResponse(
                 record.getJobId(),
+                record.getJobType(),
                 record.getStatus(),
                 record.getCreatedAt(),
                 record.getSummary(),

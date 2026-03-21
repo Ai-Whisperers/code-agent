@@ -6,6 +6,7 @@ package com.eneve.agent.aikido;
  */
 public record AikidoIssueInfo(
         int issueGroupId,
+        String issueType,
         String severity,
         String packageName,
         String currentVersion,
@@ -25,6 +26,9 @@ public record AikidoIssueInfo(
         var sb = new StringBuilder();
         sb.append("## Security Vulnerability Fix\n\n");
 
+        if (issueType != null && !issueType.isBlank() && !"unknown".equals(issueType)) {
+            sb.append("**Type:** ").append(issueType.toUpperCase()).append("\n");
+        }
         if (cveId != null && !cveId.isBlank()) {
             sb.append("**CVE:** ").append(cveId);
             if (cvssScore != null) {

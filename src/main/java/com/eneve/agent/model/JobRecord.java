@@ -10,6 +10,11 @@ public class JobRecord {
     private final FixPrRequest fixPrRequest;
     private final ReplyCommentRequest replyRequest;
     private final HookJobRequest hookRequest;
+    private final GenerateTestsRequest generateTestsRequest;
+    private final GenerateDocsRequest generateDocsRequest;
+    private final SyncConfluenceRequest syncConfluenceRequest;
+    private final MetricsJobRequest metricsRequest;
+    private final QualityReportJobRequest qualityReportRequest;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -19,6 +24,7 @@ public class JobRecord {
     private volatile int filesChanged;
     private volatile int linesChanged;
     private volatile String prId;
+    private volatile String planId;
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
@@ -27,6 +33,11 @@ public class JobRecord {
         this.fixPrRequest = null;
         this.replyRequest = null;
         this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -39,6 +50,11 @@ public class JobRecord {
         this.fixPrRequest = null;
         this.replyRequest = null;
         this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -51,6 +67,11 @@ public class JobRecord {
         this.fixPrRequest = fixPrRequest;
         this.replyRequest = null;
         this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -67,6 +88,11 @@ public class JobRecord {
         this.fixPrRequest = null;
         this.replyRequest = replyRequest;
         this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -79,7 +105,97 @@ public class JobRecord {
         this.fixPrRequest = null;
         this.replyRequest = null;
         this.hookRequest = hookRequest;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
         this.jobType = JobType.HOOK;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, GenerateTestsRequest generateTestsRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = generateTestsRequest;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jobType = JobType.GENERATE_TESTS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, GenerateDocsRequest generateDocsRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = generateDocsRequest;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jobType = JobType.GENERATE_DOCS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, SyncConfluenceRequest syncConfluenceRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = syncConfluenceRequest;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jobType = JobType.SYNC_CONFLUENCE;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, MetricsJobRequest metricsRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = metricsRequest;
+        this.qualityReportRequest = null;
+        this.jobType = JobType.METRICS;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+    }
+
+    public JobRecord(String jobId, QualityReportJobRequest qualityReportRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = qualityReportRequest;
+        this.jobType = JobType.QUALITY_REPORT;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
     }
@@ -90,6 +206,11 @@ public class JobRecord {
     public FixPrRequest getFixPrRequest() { return fixPrRequest; }
     public ReplyCommentRequest getReplyRequest() { return replyRequest; }
     public HookJobRequest getHookRequest() { return hookRequest; }
+    public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
+    public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
+    public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
+    public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
+    public QualityReportJobRequest getQualityReportRequest() { return qualityReportRequest; }
     public JobType getJobType() { return jobType; }
     public Instant getCreatedAt() { return createdAt; }
 
@@ -113,4 +234,7 @@ public class JobRecord {
 
     public String getPrId() { return prId; }
     public void setPrId(String prId) { this.prId = prId; }
+
+    public String getPlanId() { return planId; }
+    public void setPlanId(String planId) { this.planId = planId; }
 }

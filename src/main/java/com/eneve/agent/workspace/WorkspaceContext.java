@@ -4,6 +4,8 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -12,15 +14,37 @@ import org.jboss.logging.Logger;
 /**
  * Manages an isolated workspace directory for a single agent job.
  * Handles cloning the repo, path resolution with traversal protection, and cleanup.
+ *
+ * <p>Plan-managed workspaces ({@link #createPlanManaged}) survive across multiple job steps:
+ * {@link #close()} is a no-op so the try-with-resources in each handler does not delete the
+ * directory. The owning {@code PlanWorkspaceManager} calls {@link #forceClose()} when the
+ * plan reaches a terminal state.
  */
 public class WorkspaceContext implements AutoCloseable {
 
     private static final Logger LOG = Logger.getLogger(WorkspaceContext.class);
 
     private final Path root;
+    private final Map<String, String> metadata = new HashMap<>();
+    private boolean planManaged;
+    private String userId;
 
     private WorkspaceContext(Path root) {
         this.root = root;
+    }
+
+    /**
+     * Set the user ID for MCP tool credential resolution.
+     */
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    /**
+     * Get the user ID for MCP tool credential resolution.
+     */
+    public String getUserId() {
+        return userId;
     }
 
     public static WorkspaceContext create(String jobId) throws IOException {
@@ -29,8 +53,36 @@ public class WorkspaceContext implements AutoCloseable {
         return new WorkspaceContext(tmp);
     }
 
+    /**
+     * Creates a workspace whose lifecycle is managed by {@code PlanWorkspaceManager}.
+     * {@link #close()} is a no-op; use {@link #forceClose()} to actually delete it.
+     */
+    public static WorkspaceContext createPlanManaged(String planId) throws IOException {
+        Path tmp = Files.createTempDirectory("agent-plan-" + planId.substring(0, 8) + "-");
+        LOG.infof("Created plan-managed workspace: %s (plan %s)", tmp, planId);
+        WorkspaceContext ws = new WorkspaceContext(tmp);
+        ws.planManaged = true;
+        return ws;
+    }
+
+    /**
+     * Returns {@code true} if a git repository has already been cloned into this workspace
+     * (i.e. {@code .git} directory exists at the root).
+     */
+    public boolean hasClonedRepo() {
+        return Files.exists(root.resolve(".git"));
+    }
+
     public Path getRoot() {
         return root;
+    }
+
+    public void putMetadata(String key, String value) {
+        metadata.put(key, value);
+    }
+
+    public String getMetadata(String key) {
+        return metadata.get(key);
     }
 
     /**
@@ -42,6 +94,18 @@ public class WorkspaceContext implements AutoCloseable {
 
         runGit(timeoutMinutes, "clone", "--depth", "50", "--branch", branchName, authenticatedUrl, ".");
         LOG.infof("Cloned repo into %s on branch %s", root, branchName);
+    }
+
+    /**
+     * Shallow clone (depth 1) suitable for read-only operations such as metrics scanning.
+     * Fetches only the latest tree, which is significantly faster for large repos with
+     * long histories compared to the standard depth-50 clone.
+     */
+    public void cloneRepoShallow(String authenticatedUrl, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+
+        runGit(timeoutMinutes, "clone", "--depth", "1", "--branch", branchName, authenticatedUrl, ".");
+        LOG.infof("Shallow-cloned repo into %s on branch %s", root, branchName);
     }
 
     /**
@@ -89,6 +153,14 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Pull with rebase to incorporate remote changes before pushing.
+     * Used when committing directly to a shared branch to avoid push rejections.
+     */
+    public void pullRebase(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
+        runGit(timeoutMinutes, "pull", "--rebase", "origin", branchName);
+    }
+
+    /**
      * Fetch a remote branch so it is available as origin/{branch} for diff operations.
      */
     public void fetchBranch(String branchName, long timeoutMinutes) throws IOException, InterruptedException {
@@ -110,6 +182,16 @@ public class WorkspaceContext implements AutoCloseable {
      */
     public String getDiffFromCommit(String commitSha) throws IOException, InterruptedException {
         return runGitOutput(2, "diff", commitSha + "...HEAD");
+    }
+
+    /**
+     * Get the full unified diff of all uncommitted changes in the working tree.
+     * Stages everything first (git add -A) then returns the staged diff.
+     * Used by the self-review step to show the agent what it has changed before committing.
+     */
+    public String getWorkingDiff() throws IOException, InterruptedException {
+        runGit(1, "add", "-A");
+        return runGitOutput(2, "diff", "--cached");
     }
 
     /**
@@ -138,6 +220,18 @@ public class WorkspaceContext implements AutoCloseable {
     public int countFilesChanged() throws IOException, InterruptedException {
         String output = runGitOutput(2, "diff", "--name-only", "HEAD~1");
         return (int) output.lines().filter(l -> !l.isBlank()).count();
+    }
+
+    /**
+     * Returns the relative paths of files changed in the most recent commit,
+     * suitable for scoping linter reports to only agent-touched files.
+     */
+    public java.util.Set<String> getChangedFileNames() throws IOException, InterruptedException {
+        String output = runGitOutput(2, "diff", "--name-only", "HEAD~1");
+        return output.lines()
+                .map(String::trim)
+                .filter(l -> !l.isBlank())
+                .collect(java.util.stream.Collectors.toUnmodifiableSet());
     }
 
     public int countLinesChanged() throws IOException, InterruptedException {
@@ -171,6 +265,21 @@ public class WorkspaceContext implements AutoCloseable {
 
     @Override
     public void close() {
+        if (planManaged) {
+            return;
+        }
+        doClose();
+    }
+
+    /**
+     * Unconditionally deletes the workspace directory regardless of whether it is
+     * plan-managed. Called by {@code PlanWorkspaceManager} when the plan completes or fails.
+     */
+    public void forceClose() {
+        doClose();
+    }
+
+    private void doClose() {
         try {
             if (Files.exists(root)) {
                 try (Stream<Path> walk = Files.walk(root)) {

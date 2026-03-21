@@ -2,6 +2,8 @@ package com.eneve.agent.scm;
 
 import com.eneve.agent.scm.azuredevops.AzureDevOpsPlatformService;
 import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
+import com.eneve.agent.scm.github.GitHubPlatformService;
+import com.eneve.agent.scm.gitlab.GitLabPlatformService;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -24,6 +26,8 @@ public class GitPlatformProducer {
 
     @Inject BitbucketPlatformService bitbucket;
     @Inject AzureDevOpsPlatformService azureDevOps;
+    @Inject GitLabPlatformService gitlab;
+    @Inject GitHubPlatformService github;
 
     @Produces
     @ApplicationScoped
@@ -37,9 +41,17 @@ public class GitPlatformProducer {
                 LOG.info("Git platform: Azure DevOps");
                 yield azureDevOps;
             }
+            case "gitlab", "gitlab-cloud" -> {
+                LOG.info("Git platform: GitLab Cloud");
+                yield gitlab;
+            }
+            case "github" -> {
+                LOG.info("Git platform: GitHub");
+                yield github;
+            }
             default -> throw new IllegalArgumentException(
                     "Unknown git.platform value: '" + platform
-                            + "'. Supported values: bitbucket, azuredevops");
+                            + "'. Supported values: bitbucket, azuredevops, gitlab, github");
         };
     }
 }

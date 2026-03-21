@@ -3,24 +3,30 @@ package com.eneve.agent.security;
 import java.util.Map;
 import java.util.Set;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
+import com.eneve.agent.settings.SettingsService;
 
-import jakarta.annotation.Priority;
-import jakarta.ws.rs.Priorities;
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.server.ServerRequestFilter;
+
+import io.quarkus.security.identity.CurrentIdentityAssociation;
+import io.smallrye.mutiny.Uni;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.container.ContainerRequestContext;
-import jakarta.ws.rs.container.ContainerRequestFilter;
 import jakarta.ws.rs.core.Response;
-import jakarta.ws.rs.ext.Provider;
 
 /**
- * Authenticates REST API requests using a shared API key in the X-API-Key header.
+ * Authenticates REST API requests using either:
+ *   1. A Keycloak OIDC Bearer token (when quarkus.oidc.tenant-enabled=true), or
+ *   2. A shared API key in the X-API-Key header (legacy / external callers).
+ *
  * Skips public paths (/health, /q/*) and webhook paths (handled by WebhookSignatureFilter).
- * When api.key is blank, authentication is disabled (development mode).
+ * When api.key is blank and OIDC is disabled, authentication is fully disabled (dev mode).
+ *
+ * Implemented as a RESTEasy Reactive {@code @ServerRequestFilter} returning a {@code Uni} so
+ * that {@link CurrentIdentityAssociation#getDeferredIdentity()} can be awaited on the IO thread
+ * without triggering a {@code BlockingOperationNotAllowedException}.
  */
-@Provider
-@Priority(Priorities.AUTHENTICATION)
-public class ApiKeyFilter implements ContainerRequestFilter {
+public class ApiKeyFilter {
 
     private static final Logger LOG = Logger.getLogger(ApiKeyFilter.class);
     private static final String API_KEY_HEADER = "X-API-Key";
@@ -30,33 +36,58 @@ public class ApiKeyFilter implements ContainerRequestFilter {
             "q/"
     );
 
-    @ConfigProperty(name = "api.key", defaultValue = "")
-    String apiKey;
+    @Inject
+    SettingsService settingsService;
 
-    @Override
-    public void filter(ContainerRequestContext ctx) {
-        if (isNotConfigured(apiKey)) {
-            return;
+    @Inject
+    CurrentIdentityAssociation identityAssociation;
+
+    @ServerRequestFilter
+    public Uni<Response> filter(ContainerRequestContext ctx) {
+        // Always let CORS preflight through — OPTIONS carries no credentials
+        if ("OPTIONS".equalsIgnoreCase(ctx.getMethod())) {
+            return pass();
         }
 
         String path = ctx.getUriInfo().getPath();
 
         if (PUBLIC_PATH_PREFIXES.stream().anyMatch(path::startsWith)) {
-            return;
+            return pass();
         }
         if (path.startsWith("webhooks/")) {
-            return;
+            return pass();
         }
 
-        String provided = ctx.getHeaderString(API_KEY_HEADER);
-        if (apiKey.equals(provided)) {
-            return;
-        }
+        return identityAssociation.getDeferredIdentity()
+                .onItem().transformToUni(identity -> {
+                    // Allow requests already authenticated by Keycloak OIDC
+                    if (!identity.isAnonymous()) {
+                        return pass();
+                    }
 
-        LOG.warnf("Rejected request to /%s — invalid or missing API key", path);
-        ctx.abortWith(Response.status(Response.Status.UNAUTHORIZED)
-                .entity(Map.of("error", "Invalid or missing API key"))
-                .build());
+                    // Fall back to API key check (read per-request to support live rotation)
+                    String apiKey = settingsService.getSecret("api.key");
+                    if (isNotConfigured(apiKey)) {
+                        return pass();
+                    }
+
+                    String provided = ctx.getHeaderString(API_KEY_HEADER);
+                    if (apiKey.equals(provided)) {
+                        return pass();
+                    }
+
+                    LOG.warnf("Rejected request to /%s — invalid or missing credentials", path);
+                    return Uni.createFrom().item(
+                            Response.status(Response.Status.UNAUTHORIZED)
+                                    .entity(Map.of("error", "Invalid or missing credentials"))
+                                    .build()
+                    );
+                });
+    }
+
+    // null item = pass through; non-null Response = abort with that response
+    private static Uni<Response> pass() {
+        return Uni.createFrom().nullItem();
     }
 
     private static boolean isNotConfigured(String value) {

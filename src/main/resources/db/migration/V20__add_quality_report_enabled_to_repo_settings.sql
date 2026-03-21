@@ -1,0 +1,2 @@
+ALTER TABLE repo_settings
+    ADD COLUMN IF NOT EXISTS quality_report_enabled BOOLEAN NOT NULL DEFAULT FALSE;

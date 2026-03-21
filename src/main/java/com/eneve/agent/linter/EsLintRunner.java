@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import com.eneve.agent.util.ProcessHelper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -46,7 +47,7 @@ public class EsLintRunner implements LinterRunner {
 
             String eslintCommand = "npx eslint . --format json --no-error-on-unmatched-pattern 2>/dev/null; true";
 
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", eslintCommand)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", eslintCommand)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(false);
 
@@ -85,7 +86,7 @@ public class EsLintRunner implements LinterRunner {
                 ? "npm ci --ignore-scripts"
                 : "npm install --ignore-scripts";
         try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 

@@ -5,6 +5,9 @@ import java.util.Map;
 
 import com.eneve.agent.agent.RepoSettings;
 import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.WebhookSyncService;
+
+import org.jboss.logging.Logger;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -35,8 +38,13 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Repo Settings", description = "Manage per-repository review settings and prompt templates")
 public class RepoSettingsResource {
 
+    private static final Logger LOG = Logger.getLogger(RepoSettingsResource.class);
+
     @Inject
     RepoSettingsStore settingsStore;
+
+    @Inject
+    WebhookSyncService webhookSyncService;
 
     @GET
     @Operation(
@@ -92,17 +100,42 @@ public class RepoSettingsResource {
             UpsertRepoSettingsRequest request) {
 
         boolean enabled = request.reviewEnabled() != null ? request.reviewEnabled() : true;
+        boolean vectorEnabled = request.vectorEnabled() != null ? request.vectorEnabled() : false;
+        boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
+        boolean upgradeEnabled = request.upgradeEnabled() != null ? request.upgradeEnabled() : true;
+        boolean qualityReportEnabled = request.qualityReportEnabled() != null ? request.qualityReportEnabled() : false;
+        boolean archived = request.archived() != null ? request.archived() : false;
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
         String prompt = request.reviewPrompt();
         List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
+        String confluenceSpaceKey = request.confluenceSpaceKey();
+        String confluenceParentPageId = request.confluenceParentPageId();
+        String gitPlatformUrl = request.gitPlatformUrl();
 
-        settingsStore.upsert(workspace, repoSlug, enabled, ruleNames, prompt, disabledHooks);
+        settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
+                qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId,
+                gitPlatformUrl);
+
+        try {
+            if (enabled && !archived) {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } else {
+                webhookSyncService.removeWebhooks(workspace, repoSlug);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after upsert for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
 
         return Response.ok(Map.of(
                 "action", "saved",
                 "workspace", workspace,
                 "repoSlug", repoSlug,
-                "reviewEnabled", enabled
+                "reviewEnabled", enabled,
+                "vectorEnabled", vectorEnabled,
+                "docsEnabled", docsEnabled,
+                "upgradeEnabled", upgradeEnabled,
+                "qualityReportEnabled", qualityReportEnabled,
+                "archived", archived
         )).build();
     }
 
@@ -123,12 +156,20 @@ public class RepoSettingsResource {
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
 
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+        var existing = settingsStore.find(workspace, repoSlug);
+        if (existing.isEmpty()) {
             return Response.status(404)
                     .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
                     .build();
         }
         settingsStore.setReviewEnabled(workspace, repoSlug, true);
+        if (!existing.get().archived()) {
+            try {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Webhook sync failed after enable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            }
+        }
         return Response.ok(Map.of("action", "enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
@@ -156,7 +197,292 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setReviewEnabled(workspace, repoSlug, false);
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after disable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
         return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/vector/enable")
+    @Operation(
+            operationId = "enableRepoVector",
+            summary = "Enable vector indexing for a repository",
+            description = "Turns on semantic vector indexing for the specified repository. "
+                    + "Embeddings will be generated on the next scheduled or manual graph build."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Vector indexing enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableVector(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setVectorEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "vector_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/vector/disable")
+    @Operation(
+            operationId = "disableRepoVector",
+            summary = "Disable vector indexing for a repository",
+            description = "Turns off semantic vector indexing for the specified repository. "
+                    + "Existing embeddings are retained but no new ones will be generated."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Vector indexing disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableVector(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setVectorEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "vector_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/docs/enable")
+    @Operation(
+            operationId = "enableRepoDocs",
+            summary = "Enable documentation generation for a repository",
+            description = "Turns on automated documentation generation for the specified repository."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Docs generation enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableDocs(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setDocsEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "docs_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/docs/disable")
+    @Operation(
+            operationId = "disableRepoDocs",
+            summary = "Disable documentation generation for a repository",
+            description = "Turns off automated documentation generation for the specified repository."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Docs generation disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableDocs(
+            @Parameter(description = "Bitbucket workspace slug", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Bitbucket repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setDocsEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/upgrade/enable")
+    @Operation(
+            operationId = "enableRepoUpgrade",
+            summary = "Enable automatic upgrades for a repository",
+            description = "Turns on automated framework version upgrades for the specified repository. "
+                    + "The repo will be included in the next upgrade scheduler run."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Auto-upgrade enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableUpgrade(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setUpgradeEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "upgrade_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/upgrade/disable")
+    @Operation(
+            operationId = "disableRepoUpgrade",
+            summary = "Disable automatic upgrades for a repository",
+            description = "Prevents the automated upgrade scheduler from creating upgrade plans "
+                    + "for the specified repository. Manual triggers via the /upgrades API still work."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Auto-upgrade disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableUpgrade(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setUpgradeEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/quality-report/enable")
+    @Operation(
+            operationId = "enableRepoQualityReport",
+            summary = "Enable quality report collection for a repository",
+            description = "Turns on automated quality report collection for the specified repository. "
+                    + "The repo will be included in the next scheduled quality report run."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Quality report enabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response enableQualityReport(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setQualityReportEnabled(workspace, repoSlug, true);
+        return Response.ok(Map.of("action", "quality_report_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/quality-report/disable")
+    @Operation(
+            operationId = "disableRepoQualityReport",
+            summary = "Disable quality report collection for a repository",
+            description = "Prevents the quality report scheduler from collecting reports for this repository. "
+                    + "Existing report history is retained."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Quality report disabled"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response disableQualityReport(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setQualityReportEnabled(workspace, repoSlug, false);
+        return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/archive")
+    @Operation(
+            operationId = "archiveRepo",
+            summary = "Archive a repository",
+            description = "Marks the repository as archived. Archived repositories are excluded from "
+                    + "scheduled jobs and can be filtered out in the frontend."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Repository archived"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response archive(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setArchived(workspace, repoSlug, true);
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook sync failed after archive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
+        return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
+    }
+
+    @PATCH
+    @Path("/{workspace}/{repoSlug}/unarchive")
+    @Operation(
+            operationId = "unarchiveRepo",
+            summary = "Unarchive a repository",
+            description = "Removes the archived flag from the repository, making it visible and active again."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Repository unarchived"),
+            @APIResponse(responseCode = "404", description = "No settings found for this repo")
+    })
+    public Response unarchive(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+            @Parameter(description = "Repository slug", required = true)
+            @PathParam("repoSlug") String repoSlug) {
+
+        var unarchiveSettings = settingsStore.find(workspace, repoSlug);
+        if (unarchiveSettings.isEmpty()) {
+            return Response.status(404)
+                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+        settingsStore.setArchived(workspace, repoSlug, false);
+        if (unarchiveSettings.get().reviewEnabled()) {
+            try {
+                webhookSyncService.ensureWebhooks(workspace, repoSlug);
+            } catch (Exception e) {
+                LOG.warnf("Webhook sync failed after unarchive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            }
+        }
+        return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @DELETE
@@ -182,13 +508,26 @@ public class RepoSettingsResource {
                     .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
                     .build();
         }
+        try {
+            webhookSyncService.removeWebhooks(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Webhook removal failed after delete for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+        }
         return Response.ok(Map.of("action", "deleted", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     public record UpsertRepoSettingsRequest(
             Boolean reviewEnabled,
+            Boolean vectorEnabled,
+            Boolean docsEnabled,
+            Boolean upgradeEnabled,
+            Boolean qualityReportEnabled,
+            Boolean archived,
             List<String> ruleNames,
             String reviewPrompt,
-            List<String> disabledHooks
+            List<String> disabledHooks,
+            String confluenceSpaceKey,
+            String confluenceParentPageId,
+            String gitPlatformUrl
     ) {}
 }

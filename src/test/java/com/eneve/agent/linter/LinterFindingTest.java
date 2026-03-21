@@ -6,6 +6,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class LinterFindingTest {
 
+    private static LinterFinding finding(String file, int line, String rule) {
+        return new LinterFinding("checkstyle", file, line, LinterFinding.SEVERITY_WARNING, rule, "msg");
+    }
+
+    // ─── constants ───────────────────────────────────────────────────────────
+
     @Test
     void constantsHaveCorrectValues() {
         assertEquals("ERROR", LinterFinding.SEVERITY_ERROR);
@@ -13,232 +19,175 @@ class LinterFindingTest {
         assertEquals("INFO", LinterFinding.SEVERITY_INFO);
     }
 
+    // ─── record accessors / equality / toString ──────────────────────────────
+
     @Test
     void recordCreationAndAccessors() {
-        LinterFinding finding = new LinterFinding(
-            "CheckStyle",
-            "src/Test.java", 
-            42,
-            LinterFinding.SEVERITY_ERROR,
-            "UnusedVariable",
-            "Variable 'x' is never used"
+        LinterFinding f = new LinterFinding(
+            "CheckStyle", "src/Test.java", 42,
+            LinterFinding.SEVERITY_ERROR, "UnusedVariable", "Variable 'x' is never used"
         );
-        
-        assertEquals("CheckStyle", finding.linterName());
-        assertEquals("src/Test.java", finding.file());
-        assertEquals(42, finding.line());
-        assertEquals(LinterFinding.SEVERITY_ERROR, finding.severity());
-        assertEquals("UnusedVariable", finding.rule());
-        assertEquals("Variable 'x' is never used", finding.message());
-    }
-
-    @Test
-    void matchesReturnsTrueForIdenticalFindings() {
-        LinterFinding finding1 = new LinterFinding(
-            "PMD",
-            "src/Foo.java",
-            10,
-            LinterFinding.SEVERITY_WARNING,
-            "ShortVariable",
-            "Variable name too short"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "PMD",
-            "src/Foo.java",
-            10,
-            LinterFinding.SEVERITY_WARNING,
-            "ShortVariable",
-            "Variable name too short"
-        );
-        
-        assertTrue(finding1.matches(finding2));
-        assertTrue(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsTrueForSameFindingWithDifferentMessage() {
-        LinterFinding finding1 = new LinterFinding(
-            "SpotBugs",
-            "src/Bar.java",
-            5,
-            LinterFinding.SEVERITY_ERROR,
-            "NullPointer",
-            "Possible null pointer dereference"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "SpotBugs",
-            "src/Bar.java",
-            5,
-            LinterFinding.SEVERITY_ERROR,
-            "NullPointer",
-            "Null pointer dereference detected"
-        );
-        
-        assertTrue(finding1.matches(finding2));
-        assertTrue(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsTrueForSameFindingWithDifferentSeverity() {
-        LinterFinding finding1 = new LinterFinding(
-            "ESLint",
-            "src/app.js",
-            15,
-            LinterFinding.SEVERITY_WARNING,
-            "no-console",
-            "Console statement"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "ESLint",
-            "src/app.js",
-            15,
-            LinterFinding.SEVERITY_ERROR,
-            "no-console",
-            "Console statement"
-        );
-        
-        assertTrue(finding1.matches(finding2));
-        assertTrue(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsFalseForDifferentLinter() {
-        LinterFinding finding1 = new LinterFinding(
-            "CheckStyle",
-            "src/Test.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "PMD",
-            "src/Test.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        assertFalse(finding1.matches(finding2));
-        assertFalse(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsFalseForDifferentFile() {
-        LinterFinding finding1 = new LinterFinding(
-            "PMD",
-            "src/A.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "PMD",
-            "src/B.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        assertFalse(finding1.matches(finding2));
-        assertFalse(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsFalseForDifferentLine() {
-        LinterFinding finding1 = new LinterFinding(
-            "SpotBugs",
-            "src/Test.java",
-            10,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "SpotBugs",
-            "src/Test.java",
-            20,
-            LinterFinding.SEVERITY_ERROR,
-            "Rule1",
-            "Message"
-        );
-        
-        assertFalse(finding1.matches(finding2));
-        assertFalse(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesReturnsFalseForDifferentRule() {
-        LinterFinding finding1 = new LinterFinding(
-            "CheckStyle",
-            "src/Test.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "RuleA",
-            "Message"
-        );
-        
-        LinterFinding finding2 = new LinterFinding(
-            "CheckStyle",
-            "src/Test.java",
-            1,
-            LinterFinding.SEVERITY_ERROR,
-            "RuleB",
-            "Message"
-        );
-        
-        assertFalse(finding1.matches(finding2));
-        assertFalse(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesHandlesNullValues() {
-        LinterFinding finding1 = new LinterFinding(null, null, 0, null, null, null);
-        LinterFinding finding2 = new LinterFinding(null, null, 0, null, null, "Different message");
-        
-        assertTrue(finding1.matches(finding2));
-        assertTrue(finding2.matches(finding1));
-    }
-
-    @Test
-    void matchesHandlesMixedNullValues() {
-        LinterFinding finding1 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Msg");
-        LinterFinding finding2 = new LinterFinding(null, "file.java", 1, "ERROR", "Rule", "Msg");
-        
-        assertFalse(finding1.matches(finding2));
-        assertFalse(finding2.matches(finding1));
+        assertEquals("CheckStyle", f.linterName());
+        assertEquals("src/Test.java", f.file());
+        assertEquals(42, f.line());
+        assertEquals(LinterFinding.SEVERITY_ERROR, f.severity());
+        assertEquals("UnusedVariable", f.rule());
+        assertEquals("Variable 'x' is never used", f.message());
     }
 
     @Test
     void recordEquality() {
-        LinterFinding finding1 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Message");
-        LinterFinding finding2 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Message");
-        LinterFinding finding3 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Different");
-        
-        assertEquals(finding1, finding2);
-        assertNotEquals(finding1, finding3);
-        assertEquals(finding1.hashCode(), finding2.hashCode());
+        LinterFinding f1 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Message");
+        LinterFinding f2 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Message");
+        LinterFinding f3 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Different");
+        assertEquals(f1, f2);
+        assertNotEquals(f1, f3);
+        assertEquals(f1.hashCode(), f2.hashCode());
     }
 
     @Test
     void recordToString() {
-        LinterFinding finding = new LinterFinding("PMD", "Test.java", 42, "ERROR", "Rule", "Msg");
-        String toString = finding.toString();
-        
-        assertTrue(toString.contains("PMD"));
-        assertTrue(toString.contains("Test.java"));
-        assertTrue(toString.contains("42"));
-        assertTrue(toString.contains("ERROR"));
-        assertTrue(toString.contains("Rule"));
-        assertTrue(toString.contains("Msg"));
+        LinterFinding f = new LinterFinding("PMD", "Test.java", 42, "ERROR", "Rule", "Msg");
+        String s = f.toString();
+        assertTrue(s.contains("PMD"));
+        assertTrue(s.contains("Test.java"));
+        assertTrue(s.contains("42"));
+        assertTrue(s.contains("ERROR"));
+        assertTrue(s.contains("Rule"));
+        assertTrue(s.contains("Msg"));
+    }
+
+    // ─── matches() (strict) ──────────────────────────────────────────────────
+
+    @Test
+    void strictMatchesIdenticalFinding() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 10, "MagicNumber");
+        assertTrue(a.matches(b));
+    }
+
+    @Test
+    void strictDoesNotMatchDifferentLine() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 15, "MagicNumber");
+        assertFalse(a.matches(b));
+    }
+
+    @Test
+    void strictDoesNotMatchDifferentFile() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Bar.java", 10, "MagicNumber");
+        assertFalse(a.matches(b));
+    }
+
+    @Test
+    void strictDoesNotMatchDifferentRule() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 10, "UnusedImport");
+        assertFalse(a.matches(b));
+    }
+
+    @Test
+    void matchesIgnoresDifferentMessage() {
+        LinterFinding f1 = new LinterFinding("SpotBugs", "src/Bar.java", 5, "ERROR", "NullPointer", "Possible null pointer");
+        LinterFinding f2 = new LinterFinding("SpotBugs", "src/Bar.java", 5, "ERROR", "NullPointer", "Null pointer detected");
+        assertTrue(f1.matches(f2));
+        assertTrue(f2.matches(f1));
+    }
+
+    @Test
+    void matchesIgnoresDifferentSeverity() {
+        LinterFinding f1 = new LinterFinding("ESLint", "src/app.js", 15, LinterFinding.SEVERITY_WARNING, "no-console", "Console statement");
+        LinterFinding f2 = new LinterFinding("ESLint", "src/app.js", 15, LinterFinding.SEVERITY_ERROR,   "no-console", "Console statement");
+        assertTrue(f1.matches(f2));
+        assertTrue(f2.matches(f1));
+    }
+
+    @Test
+    void matchesHandlesNullValues() {
+        LinterFinding f1 = new LinterFinding(null, null, 0, null, null, null);
+        LinterFinding f2 = new LinterFinding(null, null, 0, null, null, "Different message");
+        assertTrue(f1.matches(f2));
+        assertTrue(f2.matches(f1));
+    }
+
+    @Test
+    void matchesHandlesMixedNullValues() {
+        LinterFinding f1 = new LinterFinding("Linter", "file.java", 1, "ERROR", "Rule", "Msg");
+        LinterFinding f2 = new LinterFinding(null,     "file.java", 1, "ERROR", "Rule", "Msg");
+        assertFalse(f1.matches(f2));
+        assertFalse(f2.matches(f1));
+    }
+
+    // ─── matchesLoose() (fuzzy) ──────────────────────────────────────────────
+
+    @Test
+    void looseMatchesExactLine() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 10, "MagicNumber");
+        assertTrue(a.matchesLoose(b, 5));
+    }
+
+    @Test
+    void looseMatchesWithinTolerance() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 14, "MagicNumber");
+        assertTrue(a.matchesLoose(b, 5));
+    }
+
+    @Test
+    void looseMatchesAtExactTolerance() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 15, "MagicNumber");
+        assertTrue(a.matchesLoose(b, 5));
+    }
+
+    @Test
+    void looseDoesNotMatchBeyondTolerance() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 16, "MagicNumber");
+        assertFalse(a.matchesLoose(b, 5));
+    }
+
+    @Test
+    void looseMatchesNegativeShiftWithinTolerance() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 7, "MagicNumber");
+        assertTrue(a.matchesLoose(b, 5));
+    }
+
+    @Test
+    void looseDoesNotMatchDifferentFile() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Bar.java", 10, "MagicNumber");
+        assertFalse(a.matchesLoose(b, 10));
+    }
+
+    @Test
+    void looseDoesNotMatchDifferentRule() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 10, "UnusedImport");
+        assertFalse(a.matchesLoose(b, 10));
+    }
+
+    @Test
+    void looseDoesNotMatchDifferentLinter() {
+        LinterFinding a = new LinterFinding("checkstyle", "Foo.java", 10, LinterFinding.SEVERITY_WARNING, "Rule", "msg");
+        LinterFinding b = new LinterFinding("pmd",        "Foo.java", 10, LinterFinding.SEVERITY_WARNING, "Rule", "msg");
+        assertFalse(a.matchesLoose(b, 10));
+    }
+
+    @Test
+    void looseMatchesWithZeroToleranceExactLine() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 10, "MagicNumber");
+        assertTrue(a.matchesLoose(b, 0));
+    }
+
+    @Test
+    void looseDoesNotMatchWithZeroToleranceDifferentLine() {
+        LinterFinding a = finding("Foo.java", 10, "MagicNumber");
+        LinterFinding b = finding("Foo.java", 11, "MagicNumber");
+        assertFalse(a.matchesLoose(b, 0));
     }
 }

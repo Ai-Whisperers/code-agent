@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -12,6 +14,8 @@ import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.rules.CursorRulesLoader;
@@ -33,7 +37,9 @@ public class AgentPromptBuilder {
     @Inject CursorRulesLoader rulesLoader;
     @Inject GuardrailConfig guardrails;
     @Inject MemoryStore memoryStore;
+    @Inject CommentFeedbackStore feedbackStore;
     @Inject RepoSettingsStore repoSettingsStore;
+    @Inject PromptTemplateService promptTemplates;
 
     @ConfigProperty(name = "rules.repo.url", defaultValue = "")
     String defaultRulesRepoUrl;
@@ -46,8 +52,8 @@ public class AgentPromptBuilder {
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
-        String guardrailText = buildWritableGuardrailText(
-                "Stop as soon as the task is complete. Do not refactor unrelated code.");
+        String guardrailText = resolveWritableGuardrails(
+                "Stop as soon as the task is complete. Do not refactor unrelated code.", workspace.getRoot());
 
         if (baselineLinterSummary != null && !baselineLinterSummary.isBlank()) {
             guardrailText += """
@@ -67,6 +73,16 @@ public class AgentPromptBuilder {
                                                 List<AgentComment> existingComments,
                                                 WorkspaceContext workspace,
                                                 String bbWorkspace, String repoSlug) {
+        return buildReviewPrompt(request, prTitle, targetBranch, diff, existingComments,
+                workspace, bbWorkspace, repoSlug, "");
+    }
+
+    public ReviewPromptResult buildReviewPrompt(ReviewPrRequest request, String prTitle,
+                                                String targetBranch, String diff,
+                                                List<AgentComment> existingComments,
+                                                WorkspaceContext workspace,
+                                                String bbWorkspace, String repoSlug,
+                                                String impactSection) {
 
         RepoSettings settings = loadRepoSettings(bbWorkspace, repoSlug);
 
@@ -78,6 +94,7 @@ public class AgentPromptBuilder {
 
         String previousCommentsSection = buildPreviousCommentsSection(existingComments);
         String memorySection = buildMemorySection(bbWorkspace, repoSlug);
+        String falsePositiveSection = buildFalsePositiveSection(bbWorkspace, repoSlug);
 
         List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
 
@@ -93,19 +110,22 @@ public class AgentPromptBuilder {
             LOG.infof("Using custom review prompt for %s/%s", bbWorkspace, repoSlug);
             reviewInstructions = applyPlaceholders(settings.reviewPrompt(),
                     prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+                    falsePositiveSection, impactSection, diffTruncated, annotatedDiff);
         } else {
-            reviewInstructions = buildDefaultReviewInstructions(
-                    prTitle, targetBranch, previousCommentsSection, memorySection,
-                    diffTruncated, annotatedDiff);
+            reviewInstructions = promptTemplates.resolve("review", Map.of(
+                    "PR_TITLE", prTitle != null ? prTitle : "(untitled)",
+                    "TARGET_BRANCH", targetBranch != null ? targetBranch : "",
+                    "DIFF_NOTE", diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
+                    "MEMORY_SECTION", memorySection,
+                    "FALSE_POSITIVE_SECTION", falsePositiveSection,
+                    "IMPACT_SECTION", impactSection != null ? impactSection : "",
+                    "PREVIOUS_COMMENTS", previousCommentsSection,
+                    "DIFF_TRUNCATION_NOTE", diffTruncated ? "(truncated — some files omitted)\n" : "",
+                    "DIFF", annotatedDiff
+            ));
         }
 
-        String guardrailText = """
-                You MUST follow these rules without exception:
-                - This is a READ-ONLY review. Do NOT create, modify, or delete any files.
-                - Only run read-only commands: git diff, git status, git log, ls, find, cat, grep
-                - Never read or write files outside the repository root.
-                """;
+        String guardrailText = promptTemplates.resolve("guardrails.readonly", Map.of());
 
         String prompt = rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, reviewInstructions);
@@ -118,135 +138,282 @@ public class AgentPromptBuilder {
                                    WorkspaceContext workspace) {
         String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
         List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
-
         List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
         List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+        return buildFixPrPrompt(request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
+                sharedRules, repoRules, workspace.getRoot());
+    }
 
+    /**
+     * Builds the fix-PR system prompt using pre-loaded rules. Callers that load rules in parallel
+     * (e.g. while the repo is being cloned) should use this overload to avoid redundant loading.
+     */
+    public String buildFixPrPrompt(FixPrRequest request, String prTitle,
+                                   String sourceBranch, String targetBranch,
+                                   String diff, List<String> reviewComments,
+                                   List<String> sharedRules, List<String> repoRules) {
+        return buildFixPrPrompt(request, prTitle, sourceBranch, targetBranch, diff, reviewComments,
+                sharedRules, repoRules, null);
+    }
+
+    /**
+     * Core fix-PR prompt builder. Accepts an optional {@code workspaceRoot} for
+     * language-aware test command resolution.
+     */
+    public String buildFixPrPrompt(FixPrRequest request, String prTitle,
+                                   String sourceBranch, String targetBranch,
+                                   String diff, List<String> reviewComments,
+                                   List<String> sharedRules, List<String> repoRules,
+                                   Path workspaceRoot) {
         StringBuilder commentsSection = new StringBuilder();
         for (int i = 0; i < reviewComments.size(); i++) {
             commentsSection.append(i + 1).append(". ").append(reviewComments.get(i)).append("\n");
         }
 
-        String fixInstructions = """
-                You are fixing review comments on a pull request.
-                Your goal is to address each review comment by making the appropriate code changes.
+        String fixInstructions = promptTemplates.resolve("fix-pr", Map.of(
+                "PR_TITLE", prTitle != null ? prTitle : "(untitled)",
+                "SOURCE_BRANCH", sourceBranch,
+                "TARGET_BRANCH", targetBranch,
+                "COMMENTS", commentsSection.toString(),
+                "DIFF", diff.isEmpty() ? "(diff not available)" : diff,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
+        ));
 
-                ## PR Information
-                - **Title**: %s
-                - **Source branch**: %s
-                - **Target branch**: %s
-
-                ## Review Comments to Address
-                %s
-
-                ## Current PR Diff (for context)
-                ```diff
-                %s
-                ```
-
-                ## Instructions
-                - Read and understand each review comment carefully.
-                - Comments prefixed with [file:line] indicate the exact location of the issue.
-                - Use `read_file` to examine the current code around each comment.
-                - Use `write_file` to make the necessary fixes.
-                - Address ALL review comments, not just some of them.
-                - Only change code that is relevant to the review comments. Do not refactor unrelated code.
-                - After making changes, run: mvn test (or gradle test if build.gradle is present)
-                - If tests fail, fix the test failures before completing.
-                - Provide a summary of all changes you made.
-                """.formatted(
-                prTitle != null ? prTitle : "(untitled)",
-                sourceBranch,
-                targetBranch,
-                commentsSection.toString(),
-                diff.isEmpty() ? "(diff not available)" : diff
-        );
-
-        String guardrailText = buildWritableGuardrailText(
-                "Stop as soon as all review comments are addressed. Do not refactor unrelated code.");
+        String guardrailText = resolveWritableGuardrails(
+                "Stop as soon as all review comments are addressed. Do not refactor unrelated code.",
+                workspaceRoot);
 
         return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
                 request.extraRules(), guardrailText, fixInstructions);
+    }
+
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace) {
+        return buildGenerateTestsPrompt(request, workspace, null);
+    }
+
+    public String buildGenerateTestsPrompt(GenerateTestsRequest request, WorkspaceContext workspace,
+                                           CoverageReporter.CoverageSnapshot baseline) {
+        String rulesRepoUrl = resolveRulesRepoUrl(request.rulesRepoUrl());
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
+
+        Path workspaceRoot = workspace.getRoot();
+        String testCommand = resolveTestCommand(workspaceRoot);
+        String sourceDir = resolveSourceDir(workspaceRoot);
+        String testDir = resolveTestDir(workspaceRoot);
+
+        String targetFilesSection;
+        if (request.targetFiles() != null && !request.targetFiles().isEmpty()) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("Focus ONLY on generating tests for these specific source files/packages:\n");
+            for (String f : request.targetFiles()) {
+                sb.append("  - ").append(f).append("\n");
+            }
+            targetFilesSection = sb.toString();
+        } else if (baseline != null) {
+            targetFilesSection = "Scan `" + sourceDir + "` to find source files that currently have low or no test coverage. " +
+                    "Use the coverage baseline below to identify the highest-impact targets. " +
+                    "Prioritize service classes, utility classes, and files with non-trivial business logic. " +
+                    "Skip generated/compiled code.\n";
+        } else {
+            targetFilesSection = "Scan `" + sourceDir + "` to find source files that currently have no corresponding test file " +
+                    "in `" + testDir + "`. Prioritize service classes, utility classes, and files with " +
+                    "non-trivial business logic. Skip generated/compiled code.\n";
+        }
+
+        String coverageSection = baseline != null
+                ? "\n" + baseline.formatForPrompt() + "\n"
+                : "";
+
+        String generateTestsInstructions = promptTemplates.resolve("generate-tests", Map.of(
+                "COVERAGE_SECTION", coverageSection,
+                "TARGET_FILES_SECTION", targetFilesSection,
+                "BUILD_AND_TEST_COMMAND", testCommand
+        ));
+
+        String guardrailText = promptTemplates.resolve("guardrails.tests", Map.of(
+                "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
+                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands()),
+                "BUILD_AND_TEST_COMMAND", testCommand,
+                "SOURCE_DIR", sourceDir,
+                "TEST_DIR", testDir
+        ));
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, generateTestsInstructions);
     }
 
     public String buildReplyPrompt(CommentContext ctx, List<ThreadComment> thread,
                                    String latestHumanMessage) {
         String threadSection = formatThreadSection(thread);
 
-        return """
-                You are an AI code reviewer engaged in a conversation on a Bitbucket pull request.
-                A developer has replied to one of your review comments and you need to respond.
-
-                ## Original Finding
-                - **File**: %s (line %d)
-                - **Severity**: %s | **Category**: %s
-                - **Your original comment**: %s
-
-                ## Conversation Thread
-                %s
-
-                ## Latest Message from Developer
-                %s
-
-                ## Instructions
-                - Respond helpfully and concisely to the developer's message.
-                - If they ask for clarification, explain your reasoning in more detail with code references.
-                - If they disagree, consider their argument carefully. Acknowledge if they make a valid point.
-                - If they provide additional context that changes your assessment, say so explicitly.
-                - You can use `read_file` and `list_files` to examine the code for additional context.
-                - Keep your response focused and conversational — this is a thread reply, not a full review.
-                - Do NOT output JSON. Write your response in natural language (markdown is fine).
-                - Your final message will be posted directly as a Bitbucket comment, so make it clean.
-                """.formatted(
-                ctx.filePath() != null ? ctx.filePath() : "(general)",
-                ctx.line(),
-                ctx.severity() != null ? ctx.severity() : "INFO",
-                ctx.category() != null ? ctx.category() : "General",
-                ctx.findingText(),
-                threadSection.isBlank() ? "(no previous thread messages)" : threadSection,
-                latestHumanMessage
-        );
+        return promptTemplates.resolve("reply", Map.of(
+                "FILE", ctx.filePath() != null ? ctx.filePath() : "(general)",
+                "LINE", String.valueOf(ctx.line()),
+                "SEVERITY", ctx.severity() != null ? ctx.severity() : "INFO",
+                "CATEGORY", ctx.category() != null ? ctx.category() : "General",
+                "FINDING", ctx.findingText(),
+                "THREAD", threadSection.isBlank() ? "(no previous thread messages)" : threadSection,
+                "LATEST_MESSAGE", latestHumanMessage
+        ));
     }
 
     public String buildFixCommentPrompt(CommentContext ctx, List<ThreadComment> thread,
                                         String humanMessage) {
+        return buildFixCommentPrompt(ctx, thread, humanMessage, null);
+    }
+
+    public String buildFixCommentPrompt(CommentContext ctx, List<ThreadComment> thread,
+                                        String humanMessage, Path workspaceRoot) {
         String threadSection = formatThreadSection(thread);
 
-        return """
-                You are an AI code reviewer implementing a fix for a specific finding on a pull request.
-                A developer has asked you to apply the suggested change.
+        return promptTemplates.resolve("fix-comment", Map.of(
+                "FILE", ctx.filePath() != null ? ctx.filePath() : "(general)",
+                "LINE", String.valueOf(ctx.line()),
+                "SEVERITY", ctx.severity() != null ? ctx.severity() : "INFO",
+                "CATEGORY", ctx.category() != null ? ctx.category() : "General",
+                "FINDING", ctx.findingText(),
+                "HUMAN_MESSAGE", humanMessage != null ? humanMessage : "(no additional instructions)",
+                "THREAD", threadSection.isBlank() ? "(no previous thread)" : threadSection,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
+        ));
+    }
 
-                ## Finding to Fix
-                - **File**: %s (line %d)
-                - **Severity**: %s | **Category**: %s
-                - **Your original review comment**: %s
+    public String buildGenerateDocsPrompt(GenerateDocsRequest request, WorkspaceContext workspace,
+                                          RepoSettings settings) {
+        String rulesRepoUrl = resolveRulesRepoUrl(null);
+        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
 
-                ## Developer's Request
-                %s
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(rulesRepoUrl, ruleNames);
+        List<String> repoRules = rulesLoader.loadFromTargetRepo(workspace.getRoot());
 
-                ## Conversation Thread
-                %s
+        String docsInstructions = promptTemplates.resolve("generate-docs", Map.of());
 
-                ## Instructions
-                - Fix ONLY the issue described in the finding above.
-                - Use `read_file` to examine the current code around the issue.
-                - Use `write_file` to apply the fix.
-                - Do NOT change unrelated code. Keep the fix as minimal and targeted as possible.
-                - After fixing, run: mvn test (or gradle test if build.gradle is present)
-                - If tests fail, fix the test failures before completing.
-                - Provide a brief summary of what you changed.
-                """.formatted(
-                ctx.filePath() != null ? ctx.filePath() : "(general)",
-                ctx.line(),
-                ctx.severity() != null ? ctx.severity() : "INFO",
-                ctx.category() != null ? ctx.category() : "General",
-                ctx.findingText(),
-                humanMessage != null ? humanMessage : "(no additional instructions)",
-                threadSection.isBlank() ? "(no previous thread)" : threadSection
-        );
+        String guardrailText = promptTemplates.resolve("guardrails.docs", Map.of(
+                "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
+                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands())
+        ));
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules,
+                request.extraRules(), guardrailText, docsInstructions);
+    }
+
+    /**
+     * Builds the system prompt for a quality-improvement FIX job driven by cyclomatic
+     * complexity metrics. The agent's goal is to refactor methods above the CC threshold
+     * without changing observable behaviour, then commit the result.
+     *
+     * @param snapshot   the CC snapshot from the preceding METRICS step
+     * @param maxMethods how many of the worst-offending methods to include in the prompt
+     */
+    public String buildMetricsFixPrompt(
+            CodeMetricsCalculator.CodeMetricsSnapshot snapshot,
+            int maxMethods) {
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(null, Collections.emptyList());
+
+        String metricsSection = snapshot.formatForPrompt(maxMethods);
+
+        String instructions = promptTemplates.resolve("metrics-fix", Map.of(
+                "METRICS_SECTION", metricsSection,
+                "THRESHOLD", String.valueOf(snapshot.threshold()),
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(null)
+        ));
+
+        String guardrailText = resolveWritableGuardrails(
+                "Stop as soon as all listed high-CC methods have been refactored and tests pass.", null);
+
+        return rulesLoader.buildSystemPrompt(sharedRules, Collections.emptyList(),
+                null, guardrailText, instructions);
     }
 
     // ─── Private helpers ────────────────────────────────────────────────
+
+    private String resolveWritableGuardrails(String stopCondition, Path workspaceRoot) {
+        return promptTemplates.resolve("guardrails.writable", Map.of(
+                "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
+                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands()),
+                "MAX_FILES", String.valueOf(guardrails.getMaxFilesChanged()),
+                "MAX_LINES", String.valueOf(guardrails.getMaxLinesChanged()),
+                "STOP_CONDITION", stopCondition,
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
+        ));
+    }
+
+    /**
+     * Resolves the appropriate test command for the given workspace root.
+     * Falls back to a human-readable instruction when workspace is null or detection fails.
+     */
+    static String resolveTestCommand(Path workspaceRoot) {
+        if (workspaceRoot == null) {
+            return "run the appropriate test command for this project's build system";
+        }
+        if (Files.exists(workspaceRoot.resolve("mvnw"))) {
+            return "./mvnw test";
+        }
+        if (Files.exists(workspaceRoot.resolve("pom.xml"))) {
+            return "mvn test";
+        }
+        if (Files.exists(workspaceRoot.resolve("build.gradle"))
+                || Files.exists(workspaceRoot.resolve("build.gradle.kts"))) {
+            return "gradle test";
+        }
+        if (Files.exists(workspaceRoot.resolve("package.json"))) {
+            return "npm test";
+        }
+        if (hasDotnetProject(workspaceRoot)) {
+            return "dotnet test";
+        }
+        if (Files.exists(workspaceRoot.resolve("composer.json"))) {
+            // Check for Laravel Artisan first, fall back to direct PHPUnit
+            if (Files.exists(workspaceRoot.resolve("artisan"))) {
+                return "php artisan test";
+            }
+            return "vendor/bin/phpunit";
+        }
+        return "run the appropriate test command for this project's build system";
+    }
+
+    /**
+     * Resolves the primary source directory for test generation scoping.
+     */
+    static String resolveSourceDir(Path workspaceRoot) {
+        if (workspaceRoot == null) return "src";
+        if (Files.exists(workspaceRoot.resolve("src/main/java"))) return "src/main/java";
+        if (Files.exists(workspaceRoot.resolve("src/main"))) return "src/main";
+        if (Files.exists(workspaceRoot.resolve("src"))) return "src";
+        if (Files.exists(workspaceRoot.resolve("app"))) return "app";   // Laravel convention
+        if (Files.exists(workspaceRoot.resolve("lib"))) return "lib";
+        return "src";
+    }
+
+    /**
+     * Resolves the primary test directory for test generation scoping.
+     */
+    static String resolveTestDir(Path workspaceRoot) {
+        if (workspaceRoot == null) return "tests";
+        if (Files.exists(workspaceRoot.resolve("src/test/java"))) return "src/test/java";
+        if (Files.exists(workspaceRoot.resolve("src/test"))) return "src/test";
+        if (Files.exists(workspaceRoot.resolve("tests"))) return "tests";
+        if (Files.exists(workspaceRoot.resolve("test"))) return "test";
+        if (Files.exists(workspaceRoot.resolve("__tests__"))) return "__tests__";
+        if (Files.exists(workspaceRoot.resolve("spec"))) return "spec";
+        return "tests";
+    }
+
+    private static boolean hasDotnetProject(Path workspaceRoot) {
+        try (var stream = Files.list(workspaceRoot)) {
+            return stream.anyMatch(p -> {
+                String name = p.getFileName().toString().toLowerCase();
+                return name.endsWith(".sln") || name.endsWith(".csproj")
+                        || name.endsWith(".fsproj") || name.endsWith(".vbproj");
+            });
+        } catch (Exception e) {
+            return false;
+        }
+    }
 
     private RepoSettings loadRepoSettings(String workspace, String repoSlug) {
         try {
@@ -274,6 +441,7 @@ public class AgentPromptBuilder {
 
     private String applyPlaceholders(String template, String prTitle, String targetBranch,
                                      String previousComments, String memorySection,
+                                     String falsePositiveSection, String impactSection,
                                      boolean diffTruncated, String annotatedDiff) {
         String diffNote = diffTruncated
                 ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n"
@@ -283,145 +451,14 @@ public class AgentPromptBuilder {
                 .replace("{{TARGET_BRANCH}}", targetBranch != null ? targetBranch : "")
                 .replace("{{PREVIOUS_COMMENTS}}", previousComments != null ? previousComments : "")
                 .replace("{{MEMORY_SECTION}}", memorySection != null ? memorySection : "")
+                .replace("{{FALSE_POSITIVE_SECTION}}", falsePositiveSection != null ? falsePositiveSection : "")
+                .replace("{{IMPACT_SECTION}}", impactSection != null ? impactSection : "")
                 .replace("{{DIFF_NOTE}}", diffNote)
                 .replace("{{DIFF}}", annotatedDiff != null ? annotatedDiff : "");
     }
 
-    private String buildDefaultReviewInstructions(String prTitle, String targetBranch,
-                                                  String previousCommentsSection,
-                                                  String memorySection,
-                                                  boolean diffTruncated,
-                                                  String annotatedDiff) {
-        return """
-                You are performing an automated code review of a pull request.
-                Your goal is to review the changes for quality, correctness, and adherence to best practices.
-
-                ## PR Information
-                - **Title**: %s
-                - **Target branch**: %s
-                %s
-                %s
-                ## Review Categories
-                Analyze the diff and provide findings organized in these categories:
-
-                ### 1. Security
-                - SQL injection, XSS, CSRF vulnerabilities
-                - Secrets or credentials in code
-                - Authentication/authorization bypasses
-                - Insecure deserialization or input handling
-                - Dependency vulnerabilities
-
-                ### 2. Design Principles
-                - SOLID principles adherence
-                - Separation of concerns
-                - Appropriate abstractions and encapsulation
-                - Coupling and cohesion
-                - API design consistency
-
-                ### 3. Code Quality
-                - Naming conventions and clarity
-                - Cyclomatic complexity
-                - Code duplication
-                - Error handling and edge cases
-                - Readability and maintainability
-                - Magic numbers or hardcoded values
-
-                ### 4. Testing
-                - Are the changes covered by unit tests?
-                - Are edge cases and error paths tested?
-                - Are test assertions meaningful?
-                - Are there missing test scenarios?
-
-                ### 5. Performance
-                - N+1 queries or inefficient data access
-                - Unnecessary object allocations
-                - Blocking calls in async contexts
-                - Resource leaks (connections, streams)
-
-                ### 6. Best Practices
-                - Framework-specific patterns and conventions
-                - Logging (appropriate levels, no sensitive data)
-                - Input validation
-                - Documentation for public APIs
-                - Backward compatibility
-
-                ## Output Format
-                You MUST output your review as a JSON object inside a ```json code fence.
-                Each finding will be posted as an inline comment on the exact file and line in Bitbucket.
-
-                ```json
-                {
-                  "findings": [
-                    {
-                      "file": "src/main/java/com/example/Foo.java",
-                      "line": 42,
-                      "severity": "HIGH",
-                      "category": "Security",
-                      "description": "User input is concatenated directly into SQL query",
-                      "suggestion": "Use a parameterized PreparedStatement instead"
-                    }
-                  ],
-                  "verdict": "REQUEST_CHANGES",
-                  "summary": "Brief overall assessment of the PR quality."
-                }
-                ```
-
-                Field definitions:
-                - **file**: exact relative path from the repo root (must match a file shown in the diff header)
-                - **line**: the line number shown to the LEFT of each line in the annotated diff below. Use EXACTLY the number displayed — do not compute or guess line numbers.
-                - **severity**: one of CRITICAL, HIGH, MEDIUM, LOW, INFO
-                - **category**: one of Security, Design, Code Quality, Testing, Performance, Best Practices
-                - **description**: clear explanation of the issue
-                - **suggestion**: how to fix or improve it
-                - **verdict**: one of APPROVE, REQUEST_CHANGES, COMMENT
-                - **summary**: 2-4 sentence overall assessment
-                %s
-                ## Instructions
-                - You can use `read_file` and `list_files` to examine files in the repository for context beyond what the diff shows.
-                - Focus your review ONLY on the changed code in the diff. Do not review unchanged code.
-                - Be constructive and specific. Provide actionable feedback.
-                - Each line in the diff below is annotated with its actual line number in the new version of the file. Lines marked with `+` are added lines. Lines marked with `-` are removed lines (no line number). Use the displayed line number exactly as your `line` value.
-                - If the code looks good with no issues, return an empty findings array and APPROVE verdict.
-                - Do NOT modify any files. This is a read-only review.
-                - Your final message MUST contain ONLY the JSON block — no extra text before or after.
-
-                ## Diff
-                %s
-                ```
-                %s
-                ```
-                """.formatted(
-                prTitle != null ? prTitle : "(untitled)",
-                targetBranch,
-                diffTruncated ? "**Note**: The diff was truncated due to size. Focus on the portions shown.\n" : "",
-                memorySection,
-                previousCommentsSection,
-                diffTruncated ? "(truncated — some files omitted)\n" : "",
-                annotatedDiff
-        );
-    }
-
     private String resolveRulesRepoUrl(String requestUrl) {
         return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;
-    }
-
-    private String buildWritableGuardrailText(String stopCondition) {
-        return """
-                You MUST follow these rules without exception:
-                - Do NOT modify files under these paths: %s
-                - Only run allowed commands: %s
-                - Do NOT modify more than %d files or %d lines
-                - After making changes, run: mvn test (or gradle test if build.gradle is present)
-                - If tests fail, report the failure and do NOT proceed
-                - %s
-                - Never read or write files outside the repository root.
-                """.formatted(
-                String.join(", ", guardrails.getBlockedPaths()),
-                String.join(", ", guardrails.getAllowedCommands()),
-                guardrails.getMaxFilesChanged(),
-                guardrails.getMaxLinesChanged(),
-                stopCondition
-        );
     }
 
     private static String formatThreadSection(List<ThreadComment> thread) {
@@ -498,6 +535,60 @@ public class AgentPromptBuilder {
 
         LOG.debugf("Injected %d memories (%d chars) into review prompt for %s/%s",
                 memories.size(), sb.length(), workspace, repoSlug);
+        return sb.toString();
+    }
+
+    /**
+     * Builds a prompt section listing finding patterns the team has marked as false positives.
+     * Injected into the review prompt so the agent avoids repeating noise.
+     * Capped at ~1500 chars to stay within token budget.
+     */
+    private String buildFalsePositiveSection(String workspace, String repoSlug) {
+        List<CommentFeedbackEntry> fps;
+        try {
+            fps = feedbackStore.findFalsePositives(workspace, repoSlug);
+        } catch (Exception e) {
+            LOG.warnf("Failed to load false positives for %s/%s (non-fatal): %s",
+                    workspace, repoSlug, e.getMessage());
+            return "";
+        }
+
+        if (fps.isEmpty()) {
+            return "";
+        }
+
+        java.util.LinkedHashSet<String> patterns = new java.util.LinkedHashSet<>();
+        for (CommentFeedbackEntry fp : fps) {
+            if (fp.pattern() != null && !fp.pattern().isBlank()) {
+                patterns.add(fp.pattern());
+            }
+        }
+        if (patterns.isEmpty()) {
+            return "";
+        }
+
+        final int maxChars = 1500;
+        StringBuilder sb = new StringBuilder();
+        sb.append("## Known False Positives (flagged by this team)\n");
+        sb.append("The following finding patterns have been marked as false positives by this team. ");
+        sb.append("Do NOT report findings matching these patterns unless there is a clear, genuine issue:\n\n");
+
+        int headerLen = sb.length();
+        for (String pattern : patterns) {
+            String bullet = "- " + pattern + "\n";
+            if (sb.length() + bullet.length() > maxChars) {
+                sb.append("- ... (additional patterns truncated)\n");
+                break;
+            }
+            sb.append(bullet);
+        }
+        sb.append("\n");
+
+        if (sb.length() <= headerLen + 1) {
+            return "";
+        }
+
+        LOG.debugf("Injected %d FP patterns into review prompt for %s/%s", patterns.size(), workspace, repoSlug);
         return sb.toString();
     }
 }

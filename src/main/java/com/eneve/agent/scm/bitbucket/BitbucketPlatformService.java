@@ -7,6 +7,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -140,6 +141,21 @@ public class BitbucketPlatformService implements GitPlatformService {
         long commentId = parseCommentId(responseBody);
         LOG.infof("Added review comment %d to PR #%s in %s/%s", commentId, prId, org, repo);
         return commentId;
+    }
+
+    @Override
+    public void updatePrComment(String org, String project, String repo, String prId,
+                                long commentId, String commentBody) {
+        String safeId = sanitizeId(prId);
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + safeId + "/comments/" + commentId;
+        String body = """
+                {
+                  "content": { "raw": "%s" }
+                }
+                """.formatted(escapeJson(commentBody));
+        putAndReturn(path, body, "update comment #" + commentId + " on PR #" + safeId);
+        LOG.infof("Updated review comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
     }
 
     @Override
@@ -323,9 +339,249 @@ public class BitbucketPlatformService implements GitPlatformService {
         return comments;
     }
 
+    /**
+     * Uploads a file to the Bitbucket repository Downloads section.
+     * The uploaded file is publicly accessible (subject to repository visibility) at:
+     * {@code https://bitbucket.org/{org}/{repo}/downloads/{filename}}
+     * <p>
+     * Re-uploading a file with the same name replaces the existing file.
+     *
+     * @return public download URL, or {@code null} on failure
+     */
+    @Override
+    public String uploadDownload(String org, String repo, String filename,
+                                 byte[] data, String contentType) {
+        String path = "/repositories/" + org + "/" + repo + "/downloads";
+        requireTrustedUrl(baseUrl + path);
+        String boundary = "----DownloadBoundary" + System.nanoTime();
+        byte[] body = buildMultipartBody(boundary, filename, data, contentType);
+
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + path))
+                    .header("Authorization", authHeader())
+                    .header("Content-Type", "multipart/form-data; boundary=" + boundary)
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                String downloadUrl = "https://bitbucket.org/" + org + "/" + repo + "/downloads/" + filename;
+                LOG.infof("Uploaded diagram '%s' to Bitbucket downloads: %s", filename, downloadUrl);
+                return downloadUrl;
+            } else {
+                LOG.warnf("Bitbucket download upload failed (HTTP %d): %s",
+                        response.statusCode(), response.body());
+                return null;
+            }
+        } catch (Exception e) {
+            LOG.warnf("Bitbucket download upload error for '%s': %s", filename, e.getMessage());
+            return null;
+        }
+    }
+
+    private static byte[] buildMultipartBody(String boundary, String filename,
+                                             byte[] data, String contentType) {
+        try {
+            java.io.ByteArrayOutputStream bos = new java.io.ByteArrayOutputStream();
+            String header = "--" + boundary + "\r\n"
+                    + "Content-Disposition: form-data; name=\"files\"; filename=\"" + filename + "\"\r\n"
+                    + "Content-Type: " + contentType + "\r\n\r\n";
+            bos.write(header.getBytes(StandardCharsets.UTF_8));
+            bos.write(data);
+            String footer = "\r\n--" + boundary + "--\r\n";
+            bos.write(footer.getBytes(StandardCharsets.UTF_8));
+            return bos.toByteArray();
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to build multipart body", e);
+        }
+    }
+
+    @Override
+    public void resolveComment(String org, String project, String repo, String prId, long commentId) {
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + prId + "/comments/" + commentId;
+        String body = """
+                {
+                  "resolution": { "type": "resolved" }
+                }
+                """;
+        putAndReturn(path, body, "resolve comment #" + commentId + " on PR #" + prId);
+        LOG.infof("Resolved comment %d on PR #%s in %s/%s", commentId, prId, org, repo);
+    }
+
+    @Override
+    public List<String> listRepositories(String org) {
+        List<String> slugs = new ArrayList<>();
+        String path = "/repositories/" + org + "?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list repos for workspace " + org);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode repo : values) {
+                        String slug = repo.path("slug").asText("");
+                        if (!slug.isEmpty()) {
+                            slugs.add(slug);
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse repository list response: %s", e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d repositories in workspace '%s'", slugs.size(), org);
+        return slugs;
+    }
+
+    /**
+     * Returns a map of {@code uuid → url} for all webhooks registered on the given repository.
+     * Bitbucket Cloud API 2.0 exposes the webhook identifier as {@code "uuid"}, not {@code "uid"}.
+     */
+    public Map<String, String> listWebhooks(String workspace, String repo) {
+        Map<String, String> hooks = new LinkedHashMap<>();
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list webhooks for " + workspace + "/" + repo);
+            try {
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode hook : values) {
+                        String uuid = hook.path("uuid").asText("");
+                        String url = hook.path("url").asText("");
+                        if (!uuid.isEmpty() && !url.isEmpty()) {
+                            hooks.put(uuid, url);
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
+                break;
+            }
+        }
+
+        return hooks;
+    }
+
+    /**
+     * Creates a webhook on the given repository.
+     *
+     * @param workspace  Bitbucket workspace slug
+     * @param repo       Repository slug
+     * @param webhookUrl Public URL the webhook will POST to
+     * @param secret     HMAC-SHA256 secret for payload signing
+     * @param events     Bitbucket event keys (e.g. {@code pullrequest:created})
+     */
+    public void createWebhook(String workspace, String repo, String webhookUrl, String secret, List<String> events) {
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks";
+        try {
+            List<String> quotedEvents = events.stream()
+                    .map(e -> "\"" + e + "\"")
+                    .toList();
+            String eventsJson = "[" + String.join(",", quotedEvents) + "]";
+            String body = """
+                    {
+                      "description": "code-agent",
+                      "url": "%s",
+                      "active": true,
+                      "secret": "%s",
+                      "events": %s
+                    }
+                    """.formatted(webhookUrl, secret, eventsJson);
+            postAndReturn(path, body, "create webhook " + webhookUrl + " on " + workspace + "/" + repo);
+            LOG.infof("Created webhook %s on %s/%s", webhookUrl, workspace, repo);
+        } catch (Exception e) {
+            LOG.errorf("Failed to create webhook %s on %s/%s: %s", webhookUrl, workspace, repo, e.getMessage());
+            throw e;
+        }
+    }
+
+    /**
+     * Deletes all webhooks on the given repository whose URL matches {@code targetUrl}.
+     */
+    public void deleteWebhooksByUrl(String workspace, String repo, String targetUrl) {
+        Map<String, String> existing = listWebhooks(workspace, repo);
+        for (Map.Entry<String, String> entry : existing.entrySet()) {
+            if (targetUrl.equals(entry.getValue())) {
+                deleteWebhookByUuid(workspace, repo, entry.getKey(), targetUrl);
+            }
+        }
+    }
+
+    /**
+     * Deletes all webhooks on the given repository whose {@code description} field matches
+     * {@code targetDescription}. Use this to remove all agent-owned hooks regardless of the
+     * URL they were registered with (handles hostname changes between deployments).
+     */
+    public void deleteWebhooksByDescription(String workspace, String repo, String targetDescription) {
+        String path = "/repositories/" + workspace + "/" + repo + "/hooks?pagelen=100";
+
+        while (path != null) {
+            String responseBody = getAndReturn(path, "list webhooks for " + workspace + "/" + repo);
+            List<String[]> toDelete = new java.util.ArrayList<>();
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = objectMapper.readTree(responseBody);
+                com.fasterxml.jackson.databind.JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (com.fasterxml.jackson.databind.JsonNode hook : values) {
+                        String uuid = hook.path("uuid").asText("");
+                        String url = hook.path("url").asText("");
+                        String description = hook.path("description").asText("");
+                        if (!uuid.isEmpty() && targetDescription.equals(description)) {
+                            toDelete.add(new String[]{uuid, url});
+                        }
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null ? next.replace(baseUrl, "") : null;
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
+                break;
+            }
+            for (String[] hook : toDelete) {
+                deleteWebhookByUuid(workspace, repo, hook[0], hook[1]);
+            }
+        }
+    }
+
+    private void deleteWebhookByUuid(String workspace, String repo, String uuid, String urlForLog) {
+        // Bitbucket returns UUIDs wrapped in curly braces (e.g. "{abc-123}"); strip them
+        // before embedding in a URI path where { and } are illegal characters.
+        String bareUuid = uuid.replaceAll("[{}]", "");
+        String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + bareUuid;
+        requireTrustedUrl(baseUrl + deletePath);
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(baseUrl + deletePath))
+                    .header("Authorization", authHeader())
+                    .DELETE()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                LOG.infof("Deleted webhook %s (uuid=%s) from %s/%s", urlForLog, uuid, workspace, repo);
+            } else {
+                LOG.warnf("Failed to delete webhook uuid=%s from %s/%s: HTTP %d",
+                        uuid, workspace, repo, response.statusCode());
+            }
+        } catch (Exception e) {
+            LOG.errorf("Error deleting webhook uuid=%s from %s/%s: %s", uuid, workspace, repo, e.getMessage());
+        }
+    }
+
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {
+        requireTrustedUrl(baseUrl + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
@@ -352,13 +608,22 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private String postAndReturn(String path, String body, String operation) {
+        return sendAndReturn(path, body, "POST", operation);
+    }
+
+    private String putAndReturn(String path, String body, String operation) {
+        return sendAndReturn(path, body, "PUT", operation);
+    }
+
+    private String sendAndReturn(String path, String body, String method, String operation) {
+        requireTrustedUrl(baseUrl + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .method(method, HttpRequest.BodyPublishers.ofString(body))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -400,6 +665,40 @@ public class BitbucketPlatformService implements GitPlatformService {
             LOG.warnf("Failed to parse comment ID from response: %s", e.getMessage());
             return 0;
         }
+    }
+
+    @Override
+    public String buildCloneUrl(String workspace, String repoSlug) {
+        return "https://" + bbUser + ":" + appPassword
+                + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
+    }
+
+    /**
+     * Validates that the target URL is directed at the configured Bitbucket host,
+     * preventing SSRF by ensuring requests never leave the configured API endpoint.
+     */
+    private void requireTrustedUrl(String url) {
+        try {
+            String configuredHost = URI.create(baseUrl).getHost();
+            String targetHost = URI.create(url).getHost();
+            if (!targetHost.equalsIgnoreCase(configuredHost)) {
+                throw new IllegalArgumentException(
+                        "URL host '" + targetHost + "' does not match configured host '" + configuredHost + "'");
+            }
+        } catch (IllegalArgumentException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalArgumentException("Invalid URL: " + url, e);
+        }
+    }
+
+    /**
+     * Removes characters from an identifier that are not word characters, hyphens, or dots,
+     * preventing injection of metacharacters via user-supplied IDs.
+     */
+    private static String sanitizeId(String id) {
+        if (id == null) return "";
+        return id.replaceAll("[^\\w.-]", "");
     }
 
     private static String escapeJson(String text) {

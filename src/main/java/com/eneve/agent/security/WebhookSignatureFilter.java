@@ -8,15 +8,17 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.HexFormat;
 import java.util.Map;
-import java.util.Optional;
+
+import com.eneve.agent.settings.SettingsService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.annotation.Priority;
+import jakarta.inject.Inject;
 import jakarta.ws.rs.Priorities;
 import jakarta.ws.rs.container.ContainerRequestContext;
 import jakarta.ws.rs.container.ContainerRequestFilter;
@@ -41,15 +43,11 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
     private static final Logger LOG = Logger.getLogger(WebhookSignatureFilter.class);
     private static final String HMAC_SHA256 = "HmacSHA256";
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final long REPLAY_WINDOW_SECONDS = 30;
 
-    @ConfigProperty(name = "webhook.secret.bitbucket")
-    Optional<String> bitbucketSecret;
-
-    @ConfigProperty(name = "webhook.secret.azuredevops")
-    Optional<String> azureDevOpsSecret;
-
-    @ConfigProperty(name = "webhook.secret.jira")
-    Optional<String> jiraSecret;
+    @Inject
+    SettingsService settingsService;
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
@@ -62,8 +60,14 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
             verifyBitbucket(ctx);
         } else if (path.contains("azuredevops/")) {
             verifyAzureDevOps(ctx);
+        } else if (path.contains("gitlab/")) {
+            verifyGitLab(ctx);
+        } else if (path.contains("github/")) {
+            verifyGitHub(ctx);
         } else if (path.contains("jira")) {
             verifyJira(ctx);
+        } else if (path.contains("aikido")) {
+            verifyAikido(ctx);
         }
     }
 
@@ -72,7 +76,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * in the X-Hub-Signature header as "sha256=<hex-encoded-digest>".
      */
     private void verifyBitbucket(ContainerRequestContext ctx) throws IOException {
-        String secret = bitbucketSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.bitbucket");
         if (isNotConfigured(secret)) return;
 
         String signatureHeader = ctx.getHeaderString("X-Hub-Signature");
@@ -100,7 +104,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
      * (Basic :secret) or fall back to an X-Azure-Signature HMAC check.
      */
     private void verifyAzureDevOps(ContainerRequestContext ctx) throws IOException {
-        String secret = azureDevOpsSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.azuredevops");
         if (isNotConfigured(secret)) return;
 
         String authHeader = ctx.getHeaderString("Authorization");
@@ -140,13 +144,64 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
     }
 
     /**
+     * GitHub signs the payload with HMAC-SHA256 and sends the signature
+     * in the {@code X-Hub-Signature-256} header as {@code sha256=<hex-encoded-digest>}.
+     */
+    private void verifyGitHub(ContainerRequestContext ctx) throws IOException {
+        String secret = settingsService.getSecret("webhook.secret.github");
+        if (isNotConfigured(secret)) return;
+
+        String signatureHeader = ctx.getHeaderString("X-Hub-Signature-256");
+        if (signatureHeader == null || !signatureHeader.startsWith("sha256=")) {
+            LOG.warn("GitHub webhook rejected — missing or malformed X-Hub-Signature-256 header");
+            abort(ctx);
+            return;
+        }
+
+        byte[] body = readAndRestoreBody(ctx);
+        String expectedHex = signatureHeader.substring("sha256=".length());
+        String computedHex = hmacSha256Hex(body, secret);
+
+        if (!MessageDigest.isEqual(
+                expectedHex.getBytes(StandardCharsets.UTF_8),
+                computedHex.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("GitHub webhook rejected — HMAC signature mismatch");
+            abort(ctx);
+        }
+    }
+
+    /**
+     * GitLab sends the webhook secret token as the {@code X-Gitlab-Token} header value.
+     * Verification is a constant-time string comparison (no HMAC — GitLab does not sign
+     * the payload body by default for standard webhooks).
+     */
+    private void verifyGitLab(ContainerRequestContext ctx) {
+        String secret = settingsService.getSecret("webhook.secret.gitlab");
+        if (isNotConfigured(secret)) return;
+
+        String tokenHeader = ctx.getHeaderString("X-Gitlab-Token");
+        if (tokenHeader == null) {
+            LOG.warn("GitLab webhook rejected — missing X-Gitlab-Token header");
+            abort(ctx);
+            return;
+        }
+
+        if (!MessageDigest.isEqual(
+                secret.getBytes(StandardCharsets.UTF_8),
+                tokenHeader.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("GitLab webhook rejected — X-Gitlab-Token mismatch");
+            abort(ctx);
+        }
+    }
+
+    /**
      * JIRA Cloud native webhooks can be configured with a secret.
      * When set, JIRA includes it as the X-Hub-Secret header value for simple comparison,
      * or it may use a signed approach depending on the integration type.
      * We support both: direct secret comparison and HMAC signature.
      */
     private void verifyJira(ContainerRequestContext ctx) throws IOException {
-        String secret = jiraSecret.orElse("");
+        String secret = settingsService.getSecret("webhook.secret.jira");
         if (isNotConfigured(secret)) return;
 
         String hubSecret = ctx.getHeaderString("X-Hub-Secret");
@@ -181,13 +236,70 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
         abort(ctx);
     }
 
+    /**
+     * Aikido sends the payload signed with HMAC-SHA256 and includes the hex digest in
+     * the {@code X-Aikido-Webhook-Signature} header (raw hex, no {@code sha256=} prefix).
+     * The payload also contains a top-level {@code dispatched_at} epoch timestamp;
+     * requests older than {@value #REPLAY_WINDOW_SECONDS} seconds are rejected to prevent
+     * replay attacks.
+     */
+    private void verifyAikido(ContainerRequestContext ctx) throws IOException {
+        String secret = settingsService.getSecret("webhook.secret.aikido");
+        if (isNotConfigured(secret)) return;
+
+        String signatureHeader = ctx.getHeaderString("X-Aikido-Webhook-Signature");
+        if (signatureHeader == null || signatureHeader.isBlank()) {
+            LOG.warn("Aikido webhook rejected — missing X-Aikido-Webhook-Signature header");
+            abort(ctx);
+            return;
+        }
+
+        byte[] body = readAndRestoreBody(ctx);
+        String computedHex = hmacSha256Hex(body, secret);
+
+        if (!MessageDigest.isEqual(
+                signatureHeader.getBytes(StandardCharsets.UTF_8),
+                computedHex.getBytes(StandardCharsets.UTF_8))) {
+            LOG.warn("Aikido webhook rejected — HMAC signature mismatch");
+            abort(ctx);
+            return;
+        }
+
+        // Replay-attack guard: dispatched_at must be present and within the allowed window
+        try {
+            com.fasterxml.jackson.databind.JsonNode node = MAPPER.readTree(body).path("dispatched_at");
+            if (node.isMissingNode() || node.isNull()) {
+                LOG.warn("Aikido webhook rejected — dispatched_at field is missing from payload");
+                abort(ctx);
+                return;
+            }
+            long dispatchedAt = node.asLong();
+            if (!isTimestampFresh(dispatchedAt)) {
+                LOG.warnf("Aikido webhook rejected — dispatched_at %d is older than %d seconds",
+                        dispatchedAt, REPLAY_WINDOW_SECONDS);
+                abort(ctx);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Aikido webhook rejected — could not parse dispatched_at: %s", e.getMessage());
+            abort(ctx);
+        }
+    }
+
+    /**
+     * Returns {@code true} when {@code dispatchedAt} (epoch seconds) is within the replay window.
+     */
+    public static boolean isTimestampFresh(long dispatchedAt) {
+        long nowSeconds = System.currentTimeMillis() / 1000L;
+        return (nowSeconds - dispatchedAt) <= REPLAY_WINDOW_SECONDS;
+    }
+
     private byte[] readAndRestoreBody(ContainerRequestContext ctx) throws IOException {
         byte[] body = ctx.getEntityStream().readAllBytes();
         ctx.setEntityStream(new ByteArrayInputStream(body));
         return body;
     }
 
-    private static String hmacSha256Hex(byte[] data, String secret) {
+    public static String hmacSha256Hex(byte[] data, String secret) {
         try {
             Mac mac = Mac.getInstance(HMAC_SHA256);
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_SHA256));

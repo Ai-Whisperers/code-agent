@@ -2,10 +2,10 @@ package com.eneve.agent.agent;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import com.anthropic.client.AnthropicClient;
-import com.anthropic.client.okhttp.AnthropicOkHttpClient;
 import com.anthropic.models.messages.ContentBlock;
 import com.anthropic.models.messages.Message;
 import com.anthropic.models.messages.MessageCreateParams;
@@ -32,14 +32,13 @@ public class LearningExtractor {
 
     private static final Logger LOG = Logger.getLogger(LearningExtractor.class);
 
-    @ConfigProperty(name = "anthropic.api.key")
-    String apiKey;
+    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
+    String fastModelName;
 
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
-
+    @Inject AnthropicClient client;
     @Inject AiCallStore aiCallStore;
     @Inject MemoryStore memoryStore;
+    @Inject PromptTemplateService promptTemplates;
 
     /**
      * Analyse the conversation thread and, if it contains a generalizable
@@ -90,41 +89,16 @@ public class LearningExtractor {
             conversationText.append(role).append(": ").append(tc.content()).append("\n\n");
         }
 
-        String prompt = """
-                Given a code review conversation between an AI reviewer and a developer, \
-                determine if the developer expressed a team preference, coding convention, \
-                or pattern that should be remembered for future reviews of this repository.
-
-                ## Original Finding
-                - File: %s (line %d)
-                - Category: %s
-                - Finding: %s
-
-                ## Conversation
-                %s
-
-                ## Instructions
-                If the developer expressed a generalizable preference (e.g., "we prefer constructor \
-                injection", "we use Testcontainers for integration tests", "don't flag unused imports \
-                in test files"), respond with ONLY the preference as a single concise statement.
-
-                If the conversation is just a normal Q&A, clarification, acknowledgment, or the \
-                developer is simply agreeing/disagreeing with a specific finding without expressing \
-                a broader team convention, respond with exactly: NONE
-                """.formatted(
-                ctx.filePath() != null ? ctx.filePath() : "(general)",
-                ctx.line(),
-                ctx.category() != null ? ctx.category() : "General",
-                ctx.findingText() != null ? ctx.findingText() : "(unknown)",
-                conversationText
-        );
-
-        AnthropicClient client = AnthropicOkHttpClient.builder()
-                .apiKey(apiKey)
-                .build();
+        String prompt = promptTemplates.resolve("learning-extractor", Map.of(
+                "FILE", ctx.filePath() != null ? ctx.filePath() : "(general)",
+                "LINE", String.valueOf(ctx.line()),
+                "CATEGORY", ctx.category() != null ? ctx.category() : "General",
+                "FINDING", ctx.findingText() != null ? ctx.findingText() : "(unknown)",
+                "CONVERSATION", conversationText.toString()
+        ));
 
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(modelName))
+                .model(Model.of(fastModelName))
                 .maxTokens(200)
                 .messages(List.of(
                         MessageParam.builder()
@@ -140,11 +114,12 @@ public class LearningExtractor {
             response = client.messages().create(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-            aiCallStore.save(new AiCallRecord(
-                    null, null, "LEARNING_EXTRACTION", modelName, null,
-                    0, 0, 0, 0,
-                    null, null, durationMs,
-                    true, e.getMessage(), Instant.now()));
+        aiCallStore.save(new AiCallRecord(
+                null, null, "LEARNING_EXTRACTION", fastModelName, null,
+                0, 0, 0, 0,
+                null, null, durationMs,
+                true, e.getMessage(), Instant.now(),
+                null, null));
             LOG.warnf("Learning extraction failed: %s", e.getMessage());
             return Optional.empty();
         }
@@ -153,12 +128,13 @@ public class LearningExtractor {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, null, "LEARNING_EXTRACTION", modelName, null,
+                null, null, "LEARNING_EXTRACTION", fastModelName, null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now()));
+                false, null, Instant.now(),
+                null, null));
 
         String responseText = "";
         for (ContentBlock block : response.content()) {

@@ -18,6 +18,11 @@ public class ReadFileTool implements ToolExecutor {
     }
 
     @Override
+    public boolean isReadOnly() {
+        return true;
+    }
+
+    @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String path = (String) input.get("path");
         if (path == null || path.isBlank()) {

@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.eneve.agent.util.ProcessHelper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -53,7 +54,7 @@ public class DotnetFormatLinter implements LinterRunner {
                     + reportDir.toAbsolutePath()
                     + " --no-restore -v diag 2>&1; true";
 
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", formatCommand)
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", formatCommand)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
@@ -87,7 +88,7 @@ public class DotnetFormatLinter implements LinterRunner {
 
     private boolean restore(Path workspaceRoot, long timeoutMinutes) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", "dotnet restore -q")
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", "dotnet restore -q")
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
@@ -171,7 +172,7 @@ public class DotnetFormatLinter implements LinterRunner {
     private List<LinterFinding> parseBuildDiagnostics(Path workspaceRoot, long timeoutMinutes) {
         List<LinterFinding> findings = new ArrayList<>();
         try {
-            ProcessBuilder pb = new ProcessBuilder("sh", "-c", "dotnet build --no-restore -v q 2>&1; true")
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", "dotnet build --no-restore -v q 2>&1; true")
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 

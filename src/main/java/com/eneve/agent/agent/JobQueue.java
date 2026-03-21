@@ -1,14 +1,17 @@
 package com.eneve.agent.agent;
 
-import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
+import java.util.Comparator;
+import java.util.List;
+
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.planner.JobCompletedEvent;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -16,6 +19,7 @@ import org.jboss.logging.Logger;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
@@ -30,6 +34,8 @@ public class JobQueue {
     private static final Logger LOG = Logger.getLogger(JobQueue.class);
 
     @Inject AgentRunner agentRunner;
+    @Inject JobStore jobStore;
+    @Inject Event<JobCompletedEvent> jobCompletedEvent;
 
     @ConfigProperty(name = "run-fix.max-concurrent-jobs", defaultValue = "3")
     int maxConcurrentJobs;
@@ -37,14 +43,18 @@ public class JobQueue {
     @ConfigProperty(name = "run-fix.max-queue-size", defaultValue = "20")
     int maxQueueSize;
 
-    private BlockingQueue<JobRecord> pendingQueue;
+    private PriorityBlockingQueue<JobRecord> pendingQueue;
     private ExecutorService executor;
     private Semaphore semaphore;
     private Thread dispatcherThread;
     private volatile boolean running = true;
 
     void onStart(@Observes StartupEvent event) {
-        pendingQueue = new LinkedBlockingQueue<>(maxQueueSize);
+        pendingQueue = new PriorityBlockingQueue<>(
+                maxQueueSize,
+                Comparator.comparingInt((JobRecord j) -> j.getJobType().priority())
+                          .thenComparing(JobRecord::getCreatedAt)
+        );
         semaphore = new Semaphore(maxConcurrentJobs);
         executor = Executors.newFixedThreadPool(maxConcurrentJobs);
 
@@ -52,7 +62,37 @@ public class JobQueue {
         dispatcherThread.setDaemon(true);
         dispatcherThread.start();
 
+        Thread recoveryThread = new Thread(this::recoverInterruptedJobs, "job-queue-recovery");
+        recoveryThread.setDaemon(true);
+        recoveryThread.start();
+
         LOG.infof("JobQueue started: maxConcurrent=%d, maxQueue=%d", maxConcurrentJobs, maxQueueSize);
+    }
+
+    /**
+     * On startup, recover jobs that were QUEUED or RUNNING when the process last shut down.
+     * RUNNING jobs are reset to QUEUED since their execution was interrupted.
+     */
+    private void recoverInterruptedJobs() {
+        List<JobRecord> interrupted = new java.util.ArrayList<>();
+        interrupted.addAll(jobStore.findByStatus(JobStatus.RUNNING));
+        interrupted.addAll(jobStore.findByStatus(JobStatus.QUEUED));
+
+        if (interrupted.isEmpty()) {
+            return;
+        }
+
+        interrupted.sort(Comparator.comparing(JobRecord::getCreatedAt));
+        int recovered = 0;
+        for (JobRecord job : interrupted) {
+            jobStore.resetToQueued(job);
+            if (pendingQueue.offer(job)) {
+                recovered++;
+            } else {
+                LOG.warnf("Recovery: queue full, could not re-queue job %s", job.getJobId());
+            }
+        }
+        LOG.infof("Startup recovery: re-queued %d interrupted job(s)", recovered);
     }
 
     void onStop(@Observes ShutdownEvent event) {
@@ -71,18 +111,26 @@ public class JobQueue {
 
     /**
      * Submit a job to the queue. Returns true if accepted, false if the queue is full.
+     * When the queue is full, the job status is set to FAILED and persisted.
      */
     public boolean submit(JobRecord job) {
         job.setStatus(JobStatus.QUEUED);
-        if (!pendingQueue.offer(job)) {
+        if (pendingQueue.size() >= maxQueueSize) {
+            job.setStatus(JobStatus.FAILED);
+            job.setErrorMessage("Job queue is full");
+            jobStore.archive(job);
             return false;
         }
+        pendingQueue.offer(job);
         String label = switch (job.getJobType()) {
             case REVIEW -> "PR-review";
             case FIX_PR -> "fix-PR-" + job.getFixPrRequest().prId();
             case REPLY -> "reply-comment-" + job.getReplyRequest().parentCommentId();
             case FIX_COMMENT -> "fix-comment-" + job.getReplyRequest().parentCommentId();
             case HOOK -> "hook-" + (job.getHookRequest() != null ? job.getHookRequest().hookName() : "unknown");
+            case GENERATE_TESTS -> "generate-tests-" + (job.getGenerateTestsRequest() != null ? job.getGenerateTestsRequest().branchName() : "unknown");
+            case GENERATE_DOCS -> "generate-docs-" + (job.getGenerateDocsRequest() != null ? job.getGenerateDocsRequest().repoUrl() : "unknown");
+            case METRICS -> "metrics-" + (job.getMetricsRequest() != null ? job.getMetricsRequest().branch() : "unknown");
             default -> job.getRequest() != null ? job.getRequest().jiraKey() : "unknown";
         };
         LOG.infof("Job %s (%s) queued for %s (queue depth: %d)", job.getJobId(),
@@ -129,19 +177,16 @@ public class JobQueue {
                 semaphore.acquire();
                 executor.submit(() -> {
                     try {
-                        switch (job.getJobType()) {
-                            case REVIEW -> agentRunner.executeReview(job);
-                            case FIX_PR -> agentRunner.executeFixPr(job);
-                            case REPLY -> agentRunner.executeReply(job);
-                            case FIX_COMMENT -> agentRunner.executeFixComment(job);
-                            case HOOK -> agentRunner.executeHook(job);
-                            default -> agentRunner.execute(job);
-                        }
+                        agentRunner.dispatch(job);
                     } catch (Exception e) {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());
                         job.setStatus(JobStatus.FAILED);
                         job.setErrorMessage("Unhandled error: " + e.getMessage());
+                        jobStore.archive(job);
                     } finally {
+                        jobCompletedEvent.fireAsync(new JobCompletedEvent(
+                                job.getJobId(), job.getStatus(), job.getSummary(), job.getPrUrl(),
+                                job.getErrorMessage()));
                         semaphore.release();
                     }
                 });
