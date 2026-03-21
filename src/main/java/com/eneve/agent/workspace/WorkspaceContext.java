@@ -27,9 +27,24 @@ public class WorkspaceContext implements AutoCloseable {
     private final Path root;
     private final Map<String, String> metadata = new HashMap<>();
     private boolean planManaged;
+    private String userId;
 
     private WorkspaceContext(Path root) {
         this.root = root;
+    }
+
+    /**
+     * Set the user ID for MCP tool credential resolution.
+     */
+    public void setUserId(String userId) {
+        this.userId = userId;
+    }
+
+    /**
+     * Get the user ID for MCP tool credential resolution.
+     */
+    public String getUserId() {
+        return userId;
     }
 
     public static WorkspaceContext create(String jobId) throws IOException {

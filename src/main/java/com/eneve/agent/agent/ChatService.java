@@ -87,6 +87,7 @@ public class ChatService {
 
                 // ── Create workspace context for tool access ───────────
                 workspace = createChatWorkspace(conversationId, request.productId());
+                workspace.setUserId(userId);
 
                 // ── Run the streaming loop ─────────────────────────────
                 String systemPrompt = buildSystemPrompt(request.productId());

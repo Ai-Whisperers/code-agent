@@ -57,6 +57,36 @@ public class ConfluenceService {
                 && apiToken != null && !apiToken.isBlank();
     }
 
+    // Getters for system credentials (used by LinkedAccountService for fallback)
+    public String getBaseUrl() { return baseUrl; }
+    public String getUser() { return user; }
+    public String getApiToken() { return apiToken; }
+
+    /**
+     * Test Confluence connection with the provided credentials.
+     * Returns true if the connection is valid, false otherwise.
+     */
+    public static boolean testConnection(String testBaseUrl, String testUser, String testApiToken) {
+        try {
+            String credentials = testUser + ":" + testApiToken;
+            String auth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(testBaseUrl + "/wiki/rest/api/space"))
+                    .header("Authorization", auth)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpClient client = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(15))
+                    .build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() >= 200 && response.statusCode() < 300;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     public record PageResult(String pageId, String pageUrl) {}
 
     /**
@@ -529,5 +559,234 @@ public class ConfluenceService {
     private String authHeader() {
         String credentials = user + ":" + apiToken;
         return "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
+    }
+
+    // ─── Credential-based methods for MCP tools ───────────────────────────────────
+
+    public record ConfluenceCredentials(String baseUrl, String username, String apiToken) {}
+
+    /**
+     * Search Confluence pages using CQL with provided credentials.
+     */
+    public List<ConfluencePage> searchPages(String cql, int maxResults, ConfluenceCredentials creds) {
+        int cap = Math.min(Math.max(1, maxResults), 50);
+        String encodedCql;
+        try {
+            encodedCql = URLEncoder.encode(cql, StandardCharsets.UTF_8);
+        } catch (Exception e) {
+            LOG.warnf("Failed to encode CQL: %s", e.getMessage());
+            return List.of();
+        }
+
+        String url = creds.baseUrl() + "/wiki/rest/api/content/search?cql=" + encodedCql + "&limit=" + cap;
+        try {
+            String auth = "Basic " + Base64.getEncoder()
+                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", auth)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                LOG.warnf("Confluence search returned %d: %s", response.statusCode(), response.body());
+                return List.of();
+            }
+
+            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode results = root.path("results");
+            List<ConfluencePage> pages = new java.util.ArrayList<>();
+            for (JsonNode r : results) {
+                String pageId = r.path("id").asText();
+                String title = r.path("title").asText("");
+                pages.add(new ConfluencePage(pageId, title, buildPageUrlWithBase(creds.baseUrl(), pageId)));
+            }
+            return pages;
+        } catch (Exception e) {
+            LOG.warnf("Failed to search Confluence with CQL '%s': %s", cql, e.getMessage());
+            return List.of();
+        }
+    }
+
+    /**
+     * Get a Confluence page by ID using provided credentials.
+     * Returns the page title and body content as plain text.
+     */
+    public record PageContent(String pageId, String title, String body, String url) {}
+
+    public PageContent getPage(String pageId, ConfluenceCredentials creds) {
+        String url = creds.baseUrl() + "/wiki/api/v2/pages/" + pageId + "?body-format=storage";
+        try {
+            String auth = "Basic " + Base64.getEncoder()
+                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", auth)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() != 200) {
+                LOG.warnf("Confluence getPage failed (%d) for page %s", response.statusCode(), pageId);
+                return null;
+            }
+
+            JsonNode root = MAPPER.readTree(response.body());
+            String title = root.path("title").asText("");
+            String storageBody = root.path("body").path("storage").path("value").asText("");
+            String body = stripXhtml(storageBody);
+            return new PageContent(pageId, title, body, buildPageUrlWithBase(creds.baseUrl(), pageId));
+        } catch (Exception e) {
+            LOG.warnf("Failed to fetch Confluence page %s: %s", pageId, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Create a Confluence page using provided credentials.
+     */
+    public String createPage(String spaceKey, String parentPageId, String title,
+                             String markdownBody, ConfluenceCredentials creds) {
+        try {
+            MarkdownToStorageConverter.ConversionResult conversion =
+                    MarkdownToStorageConverter.convert(markdownBody);
+
+            String spaceId = resolveSpaceIdWithCreds(spaceKey, creds);
+            if (spaceId == null) return null;
+
+            ObjectNode body = MAPPER.createObjectNode();
+            body.put("spaceId", spaceId);
+            body.put("status", "current");
+            body.put("title", title);
+
+            if (parentPageId != null && !parentPageId.isBlank()) {
+                body.put("parentId", parentPageId);
+            }
+
+            ObjectNode bodyNode = body.putObject("body");
+            ObjectNode storage = bodyNode.putObject("storage");
+            storage.put("representation", "storage");
+            storage.put("value", conversion.xhtml());
+
+            String url = creds.baseUrl() + "/wiki/api/v2/pages";
+            String auth = "Basic " + Base64.getEncoder()
+                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                LOG.errorf("Confluence create page failed (%d): %s", response.statusCode(), response.body());
+                return null;
+            }
+
+            JsonNode result = MAPPER.readTree(response.body());
+            String createdPageId = result.path("id").asText();
+            LOG.infof("Created Confluence page '%s' (id=%s) in space %s", title, createdPageId, spaceKey);
+            return createdPageId;
+        } catch (Exception e) {
+            LOG.errorf("Failed to create Confluence page '%s': %s", title, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Update a Confluence page using provided credentials.
+     */
+    public boolean updatePage(String pageId, String title, String markdownBody, ConfluenceCredentials creds) {
+        try {
+            int currentVersion = getCurrentVersionWithCreds(pageId, creds);
+            MarkdownToStorageConverter.ConversionResult conversion =
+                    MarkdownToStorageConverter.convert(markdownBody);
+
+            ObjectNode body = MAPPER.createObjectNode();
+            body.put("id", pageId);
+            body.put("status", "current");
+            body.put("title", title);
+
+            ObjectNode bodyNode = body.putObject("body");
+            ObjectNode storage = bodyNode.putObject("storage");
+            storage.put("representation", "storage");
+            storage.put("value", conversion.xhtml());
+
+            ObjectNode version = body.putObject("version");
+            version.put("number", currentVersion + 1);
+
+            String url = creds.baseUrl() + "/wiki/api/v2/pages/" + pageId;
+            String auth = "Basic " + Base64.getEncoder()
+                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", auth)
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                LOG.errorf("Confluence update page failed (%d): %s", response.statusCode(), response.body());
+                return false;
+            }
+
+            LOG.infof("Updated Confluence page '%s' (id=%s) to version %d", title, pageId, currentVersion + 1);
+            return true;
+        } catch (Exception e) {
+            LOG.errorf("Failed to update Confluence page %s: %s", pageId, e.getMessage());
+            return false;
+        }
+    }
+
+    // ─── Helper methods with credentials ──────────────────────────────────────────
+
+    private String resolveSpaceIdWithCreds(String spaceKey, ConfluenceCredentials creds) throws Exception {
+        String url = creds.baseUrl() + "/wiki/api/v2/spaces?keys=" + URLEncoder.encode(spaceKey, StandardCharsets.UTF_8) + "&limit=1";
+        String auth = "Basic " + Base64.getEncoder()
+                .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", auth)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        if (response.statusCode() != 200) {
+            throw new RuntimeException("Failed to resolve space key '" + spaceKey + "': HTTP " + response.statusCode());
+        }
+
+        JsonNode results = MAPPER.readTree(response.body()).path("results");
+        if (!results.isArray() || results.isEmpty()) {
+            throw new RuntimeException("Confluence space not found: " + spaceKey);
+        }
+        return results.get(0).path("id").asText();
+    }
+
+    private int getCurrentVersionWithCreds(String pageId, ConfluenceCredentials creds) throws Exception {
+        String url = creds.baseUrl() + "/wiki/api/v2/pages/" + pageId;
+        String auth = "Basic " + Base64.getEncoder()
+                .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+        HttpRequest request = HttpRequest.newBuilder()
+                .uri(URI.create(url))
+                .header("Authorization", auth)
+                .header("Accept", "application/json")
+                .GET()
+                .build();
+
+        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        JsonNode result = MAPPER.readTree(response.body());
+        return result.path("version").path("number").asInt(1);
+    }
+
+    private String buildPageUrlWithBase(String base, String pageId) {
+        return base + "/wiki/pages/" + pageId;
     }
 }

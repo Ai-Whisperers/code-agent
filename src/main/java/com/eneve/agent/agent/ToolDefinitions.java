@@ -62,7 +62,28 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(semanticSearch()),
                 ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(queryCodeGraph()),
-                ToolUnion.ofTool(fetchUrl())
+                ToolUnion.ofTool(fetchUrl()),
+                ToolUnion.ofTool(awsCloudWatchLogs()),
+                ToolUnion.ofTool(awsEcs()),
+                ToolUnion.ofTool(awsCloudWatchMetrics()),
+                // Jira MCP tools
+                ToolUnion.ofTool(jiraSearchIssues()),
+                ToolUnion.ofTool(jiraGetIssue()),
+                ToolUnion.ofTool(jiraGetComments()),
+                ToolUnion.ofTool(jiraCreateIssue()),
+                ToolUnion.ofTool(jiraUpdateIssue()),
+                ToolUnion.ofTool(jiraAddComment()),
+                ToolUnion.ofTool(jiraTransitionIssue()),
+                ToolUnion.ofTool(jiraGetWorklogs()),
+                ToolUnion.ofTool(jiraAddWorklog()),
+                // Confluence MCP tools
+                ToolUnion.ofTool(confluenceSearch()),
+                ToolUnion.ofTool(confluenceGetPage()),
+                ToolUnion.ofTool(confluenceCreatePage()),
+                ToolUnion.ofTool(confluenceUpdatePage()),
+                // Agent action tools
+                ToolUnion.ofTool(agentRunFix()),
+                ToolUnion.ofTool(agentGetJobStatus())
         );
     }
 
@@ -302,6 +323,549 @@ public final class ToolDefinitions {
                                         "description", "Jira project key — used to look up the owning product"
                                 )))
                                 .build())
+                        .build())
+                .build();
+    }
+
+    // ─── Jira MCP tool schemas ────────────────────────────────────────────────────
+
+    private static Tool jiraSearchIssues() {
+        return Tool.builder()
+                .name("jira_search_issues")
+                .description("Search Jira issues using JQL (Jira Query Language). "
+                        + "Requires a linked Jira account. Use this to find issues by project, assignee, status, etc. "
+                        + "Example JQL: 'project = PROJ AND status = Open AND assignee = currentUser()'")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("jql", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "JQL query string, e.g. 'project = PROJ AND status != Done'"
+                                )))
+                                .putAdditionalProperty("maxResults", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Maximum number of results (1-50, default 10)"
+                                )))
+                                .build())
+                        .addRequired("jql")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraGetIssue() {
+        return Tool.builder()
+                .name("jira_get_issue")
+                .description("Get full details of a single Jira issue by its key.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraGetComments() {
+        return Tool.builder()
+                .name("jira_get_comments")
+                .description("Get all comments for a Jira issue.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraCreateIssue() {
+        return Tool.builder()
+                .name("jira_create_issue")
+                .description("Create a new Jira issue in a project. Supports parent linking (for user stories under a feature/epic), "
+                        + "named billing field shortcuts (billingCategory, billingCode), and a generic customFields map for any other fields.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("project", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Project key, e.g. 'PROJ'"
+                                )))
+                                .putAdditionalProperty("summary", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Issue summary/title"
+                                )))
+                                .putAdditionalProperty("description", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Issue description (optional)"
+                                )))
+                                .putAdditionalProperty("issueType", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Issue type: 'Task', 'Bug', 'Story', etc. (default: Task)"
+                                )))
+                                .putAdditionalProperty("parent", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Parent issue key to link this issue as a child, e.g. 'PROJ-10' (optional). Use for creating Stories under a Feature or Epic."
+                                )))
+                                .putAdditionalProperty("billingCategory", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Value for the billing-category custom field (optional). Requires jira.billing-category-field to be configured."
+                                )))
+                                .putAdditionalProperty("billingCode", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Value for the billing-code custom field (optional). Requires jira.billing-code-field to be configured."
+                                )))
+                                .putAdditionalProperty("customFields", JsonValue.from(Map.of(
+                                        "type", "object",
+                                        "description", "Arbitrary map of Jira custom field IDs to values, e.g. {\"customfield_10001\": \"value\"}. Use this to copy any fields from a parent issue."
+                                )))
+                                .build())
+                        .addRequired("project")
+                        .addRequired("summary")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraUpdateIssue() {
+        return Tool.builder()
+                .name("jira_update_issue")
+                .description("Update an existing Jira issue. Supports summary, description, assignee (unassign by passing empty string), "
+                        + "and moving the issue to another project (best-effort).")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .putAdditionalProperty("summary", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "New summary (optional)"
+                                )))
+                                .putAdditionalProperty("description", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "New description (optional)"
+                                )))
+                                .putAdditionalProperty("assignee", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira accountId to assign the issue to. Pass empty string \"\" to unassign. Omit to leave unchanged."
+                                )))
+                                .putAdditionalProperty("project", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Project key to move the issue to, e.g. 'NEWPROJ'. Note: the issue key will change after the move."
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraAddComment() {
+        return Tool.builder()
+                .name("jira_add_comment")
+                .description("Add a comment to a Jira issue.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .putAdditionalProperty("body", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Comment text"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .addRequired("body")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraTransitionIssue() {
+        return Tool.builder()
+                .name("jira_transition_issue")
+                .description("Transition a Jira issue to a new status (e.g. 'In Progress', 'Done', 'In Review'). "
+                        + "The transition must be valid for the issue's current status.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .putAdditionalProperty("transitionName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Target status name, e.g. 'In Progress', 'Done', 'In Review'"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .addRequired("transitionName")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraGetWorklogs() {
+        return Tool.builder()
+                .name("jira_get_worklogs")
+                .description("Get all worklogs (time tracking entries) for a Jira issue.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .build())
+                .build();
+    }
+
+    private static Tool jiraAddWorklog() {
+        return Tool.builder()
+                .name("jira_add_worklog")
+                .description("Add a worklog (time tracking entry) to a Jira issue.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("key", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key, e.g. 'PROJ-123'"
+                                )))
+                                .putAdditionalProperty("timeSpent", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Time spent, e.g. '2h 30m', '1d', '45m'"
+                                )))
+                                .putAdditionalProperty("comment", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Worklog comment (optional)"
+                                )))
+                                .putAdditionalProperty("started", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Start datetime in ISO 8601 format, e.g. '2024-01-15T09:00:00.000+0000' (optional, defaults to now)"
+                                )))
+                                .build())
+                        .addRequired("key")
+                        .addRequired("timeSpent")
+                        .build())
+                .build();
+    }
+
+    // ─── Confluence MCP tool schemas ──────────────────────────────────────────────
+
+    private static Tool confluenceSearch() {
+        return Tool.builder()
+                .name("confluence_search")
+                .description("Search Confluence pages by text content. "
+                        + "Returns matching pages with their IDs and URLs.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("query", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Search query text"
+                                )))
+                                .putAdditionalProperty("spaceKey", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Restrict search to this space key (optional)"
+                                )))
+                                .putAdditionalProperty("maxResults", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Maximum number of results (1-50, default 10)"
+                                )))
+                                .build())
+                        .addRequired("query")
+                        .build())
+                .build();
+    }
+
+    private static Tool confluenceGetPage() {
+        return Tool.builder()
+                .name("confluence_get_page")
+                .description("Get the full content of a Confluence page by its ID.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("pageId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Confluence page ID (numeric)"
+                                )))
+                                .build())
+                        .addRequired("pageId")
+                        .build())
+                .build();
+    }
+
+    private static Tool confluenceCreatePage() {
+        return Tool.builder()
+                .name("confluence_create_page")
+                .description("Create a new Confluence page in a space. Body is Markdown.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("spaceKey", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Confluence space key, e.g. 'ENG'"
+                                )))
+                                .putAdditionalProperty("title", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Page title"
+                                )))
+                                .putAdditionalProperty("body", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Page content in Markdown format"
+                                )))
+                                .putAdditionalProperty("parentPageId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Parent page ID to nest the page under (optional)"
+                                )))
+                                .build())
+                        .addRequired("spaceKey")
+                        .addRequired("title")
+                        .addRequired("body")
+                        .build())
+                .build();
+    }
+
+    private static Tool confluenceUpdatePage() {
+        return Tool.builder()
+                .name("confluence_update_page")
+                .description("Update an existing Confluence page. Body is Markdown.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("pageId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Confluence page ID (numeric)"
+                                )))
+                                .putAdditionalProperty("title", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "New page title"
+                                )))
+                                .putAdditionalProperty("body", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "New page content in Markdown format"
+                                )))
+                                .build())
+                        .addRequired("pageId")
+                        .addRequired("title")
+                        .addRequired("body")
+                        .build())
+                .build();
+    }
+
+    // ─── Agent action tool schemas ────────────────────────────────────────────────
+
+    private static Tool agentRunFix() {
+        return Tool.builder()
+                .name("agent_run_fix")
+                .description("Submit a code-fix job to the agent. The agent will clone the repo, "
+                        + "implement the fix described in the prompt, push a branch, and create a PR. "
+                        + "Returns a job ID that can be polled with agent_get_job_status.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("repoUrl", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Repository HTTPS URL, e.g. 'https://bitbucket.org/workspace/repo.git'"
+                                )))
+                                .putAdditionalProperty("jiraKey", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key to associate with the job, e.g. 'PROJ-123'"
+                                )))
+                                .putAdditionalProperty("prompt", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Description of the fix to implement"
+                                )))
+                                .putAdditionalProperty("branchName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Branch name to push to (optional, auto-generated if omitted)"
+                                )))
+                                .build())
+                        .addRequired("repoUrl")
+                        .addRequired("jiraKey")
+                        .addRequired("prompt")
+                        .build())
+                .build();
+    }
+
+    private static Tool agentGetJobStatus() {
+        return Tool.builder()
+                .name("agent_get_job_status")
+                .description("Get the current status and result of a previously submitted agent job.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("jobId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Job ID returned by agent_run_fix"
+                                )))
+                                .build())
+                        .addRequired("jobId")
+                        .build())
+                .build();
+    }
+
+    // ─── AWS tool schemas ─────────────────────────────────────────────────────────
+
+    private static Tool awsCloudWatchLogs() {
+        return Tool.builder()
+                .name("aws_cloudwatch_logs")
+                .description("Query AWS CloudWatch Logs for a product environment. "
+                        + "Use this to fetch application logs, search for errors or exceptions, "
+                        + "or tail log streams from ECS Fargate containers. "
+                        + "Cross-account access is handled automatically via IAM role assumption. "
+                        + "Actions: list_groups (list log groups), list_streams (list streams in a group), "
+                        + "filter_events (filter log events by pattern and/or time range).")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                )))
+                                .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Environment name (e.g. 'production', 'acceptance')"
+                                )))
+                                .putAdditionalProperty("action", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("list_groups", "list_streams", "filter_events"),
+                                        "description", "Action to perform"
+                                )))
+                                .putAdditionalProperty("logGroupName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Log group name or prefix. Required for list_streams and filter_events."
+                                )))
+                                .putAdditionalProperty("logStreamName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Restrict filter_events to a specific log stream (optional)"
+                                )))
+                                .putAdditionalProperty("filterPattern", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "CloudWatch filter pattern, e.g. 'ERROR' or '?Exception ?Error'"
+                                )))
+                                .putAdditionalProperty("startTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Start of the time range, ISO-8601 (e.g. 2025-01-01T00:00:00Z)"
+                                )))
+                                .putAdditionalProperty("endTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "End of the time range, ISO-8601 (defaults to now)"
+                                )))
+                                .putAdditionalProperty("limit", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Maximum number of log events to return (default: 100, max: 500)"
+                                )))
+                                .build())
+                        .addRequired("productId")
+                        .addRequired("environmentName")
+                        .addRequired("action")
+                        .build())
+                .build();
+    }
+
+    private static Tool awsEcs() {
+        return Tool.builder()
+                .name("aws_ecs")
+                .description("Inspect AWS ECS / Fargate resources for a product environment. "
+                        + "Use this to check container health, service status, task definitions, "
+                        + "and diagnose deployment or configuration issues. "
+                        + "Cross-account access is handled automatically via IAM role assumption. "
+                        + "Actions: list_clusters, describe_cluster, list_services, describe_service "
+                        + "(shows desired/running/pending counts and deployment status), "
+                        + "list_tasks (use desiredStatus=STOPPED to find failed tasks), "
+                        + "describe_task (shows container exit codes and stop reasons), "
+                        + "describe_task_definition (shows image, CPU/memory, env var count).")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                )))
+                                .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Environment name (e.g. 'production', 'acceptance')"
+                                )))
+                                .putAdditionalProperty("action", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("list_clusters", "describe_cluster", "list_services",
+                                                "describe_service", "list_tasks", "describe_task",
+                                                "describe_task_definition"),
+                                        "description", "Action to perform"
+                                )))
+                                .putAdditionalProperty("clusterArn", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "ECS cluster ARN or name. Required for most actions."
+                                )))
+                                .putAdditionalProperty("serviceArn", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "ECS service ARN or name. Required for describe_service; optional filter for list_tasks."
+                                )))
+                                .putAdditionalProperty("taskArn", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "ECS task ARN. Required for describe_task."
+                                )))
+                                .putAdditionalProperty("taskDefinitionArn", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Task definition ARN or family:revision. Required for describe_task_definition."
+                                )))
+                                .putAdditionalProperty("desiredStatus", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("RUNNING", "STOPPED"),
+                                        "description", "Filter list_tasks by desired status. Use STOPPED to find failed tasks."
+                                )))
+                                .build())
+                        .addRequired("productId")
+                        .addRequired("environmentName")
+                        .addRequired("action")
+                        .build())
+                .build();
+    }
+
+    private static Tool awsCloudWatchMetrics() {
+        return Tool.builder()
+                .name("aws_cloudwatch_metrics")
+                .description("Query AWS CloudWatch Metrics for ECS service resource utilisation. "
+                        + "Use this to retrieve CPU or memory utilisation trends for an ECS service "
+                        + "over a time window — useful for spotting spikes, capacity issues, or "
+                        + "comparing acceptance vs production resource usage. "
+                        + "Cross-account access is handled automatically via IAM role assumption.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                )))
+                                .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Environment name (e.g. 'production', 'acceptance')"
+                                )))
+                                .putAdditionalProperty("metricName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "CloudWatch metric name, e.g. CPUUtilization or MemoryUtilization"
+                                )))
+                                .putAdditionalProperty("clusterName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "ECS cluster name (used as dimension filter)"
+                                )))
+                                .putAdditionalProperty("serviceName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "ECS service name (used as dimension filter)"
+                                )))
+                                .putAdditionalProperty("startTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Start of the time range, ISO-8601 (defaults to 1 hour ago)"
+                                )))
+                                .putAdditionalProperty("endTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "End of the time range, ISO-8601 (defaults to now)"
+                                )))
+                                .putAdditionalProperty("period", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Aggregation period in seconds (minimum 60, default 300)"
+                                )))
+                                .putAdditionalProperty("stat", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("Average", "Maximum", "Minimum", "Sum"),
+                                        "description", "Statistic to retrieve (default: Average)"
+                                )))
+                                .build())
+                        .addRequired("productId")
+                        .addRequired("environmentName")
+                        .addRequired("metricName")
                         .build())
                 .build();
     }
