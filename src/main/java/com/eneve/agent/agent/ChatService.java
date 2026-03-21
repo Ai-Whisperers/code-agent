@@ -147,9 +147,8 @@ public class ChatService {
                     var repos = product.git().repos();
                     if (repos != null && !repos.isEmpty()) {
                         workspace.putMetadata("productRepos", String.join(",", repos));
-                        if (repos.size() == 1) {
-                            workspace.putMetadata("repoSlug", repos.get(0));
-                        }
+                        // Always set first repo as default for consistent behavior
+                        workspace.putMetadata("repoSlug", repos.get(0));
                     }
                 }
             }

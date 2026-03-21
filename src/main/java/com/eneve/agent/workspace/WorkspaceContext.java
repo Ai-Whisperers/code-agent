@@ -6,6 +6,7 @@ import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -26,6 +27,7 @@ public class WorkspaceContext implements AutoCloseable {
 
     private final Path root;
     private final Map<String, String> metadata = new HashMap<>();
+    private final Map<String, Path> clonedRepos = new HashMap<>(); // repoSlug -> subdirectory path
     private boolean planManaged;
     private String userId;
 
@@ -70,7 +72,31 @@ public class WorkspaceContext implements AutoCloseable {
      * (i.e. {@code .git} directory exists at the root).
      */
     public boolean hasClonedRepo() {
-        return Files.exists(root.resolve(".git"));
+        return Files.exists(root.resolve(".git")) || !clonedRepos.isEmpty();
+    }
+
+    /**
+     * Returns {@code true} if the specified repository slug has been cloned into a subdirectory.
+     */
+    public boolean hasClonedRepo(String repoSlug) {
+        if (repoSlug == null || repoSlug.isBlank()) {
+            return hasClonedRepo();
+        }
+        return clonedRepos.containsKey(repoSlug);
+    }
+
+    /**
+     * Returns the path to the specified repository subdirectory, or null if not cloned.
+     */
+    public Path getRepoPath(String repoSlug) {
+        return clonedRepos.get(repoSlug);
+    }
+
+    /**
+     * Returns the set of cloned repository slugs.
+     */
+    public Set<String> listClonedRepos() {
+        return Set.copyOf(clonedRepos.keySet());
     }
 
     public Path getRoot() {
@@ -117,6 +143,93 @@ public class WorkspaceContext implements AutoCloseable {
         runGit(timeoutMinutes, "clone", "--depth", "50", "--branch", baseBranch, authenticatedUrl, ".");
         runGit(timeoutMinutes, "checkout", "-b", newBranch);
         LOG.infof("Cloned repo on %s and created branch %s", baseBranch, newBranch);
+    }
+
+    /**
+     * Clone a repository into a subdirectory for multi-repo workspace support.
+     * Creates the subdirectory if it doesn't exist.
+     */
+    public void cloneRepoToSubdir(String repoSlug, String authenticatedUrl, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+        
+        if (repoSlug == null || repoSlug.isBlank()) {
+            throw new IllegalArgumentException("repoSlug cannot be null or blank");
+        }
+        
+        Path repoDir = root.resolve(repoSlug);
+        if (Files.exists(repoDir)) {
+            if (clonedRepos.containsKey(repoSlug)) {
+                LOG.infof("Repository %s already cloned in %s", repoSlug, repoDir);
+                return;
+            }
+            throw new IOException("Directory " + repoDir + " already exists but is not tracked as a cloned repo");
+        }
+        
+        Files.createDirectories(repoDir);
+        
+        // Clone into the subdirectory
+        ProcessBuilder pb = new ProcessBuilder("git", "clone", "--depth", "50", "--branch", branchName, authenticatedUrl, ".")
+                .directory(repoDir.toFile())
+                .redirectErrorStream(true);
+        
+        Process proc = pb.start();
+        boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+        
+        if (!finished) {
+            proc.destroyForcibly();
+            throw new IOException("Git clone timed out after " + timeoutMinutes + " minutes");
+        }
+        
+        if (proc.exitValue() != 0) {
+            String output = new String(proc.getInputStream().readAllBytes());
+            throw new IOException("Git clone failed (exit " + proc.exitValue() + "): " + output);
+        }
+        
+        clonedRepos.put(repoSlug, repoDir);
+        LOG.infof("Cloned repository %s into %s on branch %s", repoSlug, repoDir, branchName);
+    }
+
+    /**
+     * Shallow clone a repository into a subdirectory for read-only operations.
+     */
+    public void cloneRepoToSubdirShallow(String repoSlug, String authenticatedUrl, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+        
+        if (repoSlug == null || repoSlug.isBlank()) {
+            throw new IllegalArgumentException("repoSlug cannot be null or blank");
+        }
+        
+        Path repoDir = root.resolve(repoSlug);
+        if (Files.exists(repoDir)) {
+            if (clonedRepos.containsKey(repoSlug)) {
+                LOG.infof("Repository %s already cloned in %s", repoSlug, repoDir);
+                return;
+            }
+            throw new IOException("Directory " + repoDir + " already exists but is not tracked as a cloned repo");
+        }
+        
+        Files.createDirectories(repoDir);
+        
+        // Shallow clone into the subdirectory
+        ProcessBuilder pb = new ProcessBuilder("git", "clone", "--depth", "1", "--branch", branchName, authenticatedUrl, ".")
+                .directory(repoDir.toFile())
+                .redirectErrorStream(true);
+        
+        Process proc = pb.start();
+        boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+        
+        if (!finished) {
+            proc.destroyForcibly();
+            throw new IOException("Git clone timed out after " + timeoutMinutes + " minutes");
+        }
+        
+        if (proc.exitValue() != 0) {
+            String output = new String(proc.getInputStream().readAllBytes());
+            throw new IOException("Git clone failed (exit " + proc.exitValue() + "): " + output);
+        }
+        
+        clonedRepos.put(repoSlug, repoDir);
+        LOG.infof("Shallow-cloned repository %s into %s on branch %s", repoSlug, repoDir, branchName);
     }
 
     /**

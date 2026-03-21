@@ -51,7 +51,8 @@ public class QueryCodeGraphTool implements ToolExecutor {
                 ? s : workspace.getMetadata("repoSlug");
         if (repo == null) {
             String available = workspace.getMetadata("productRepos");
-            return "ERROR: repoSlug is required. Call lookup_customer_context with no parameters to discover available repositories."
+            return "ERROR: repoSlug is required. Call set_product_context to establish active product context, " +
+                   "or use the 'repoSlug' parameter to specify which repository to query."
                     + (available != null ? " Known repos: " + available : "");
         }
 

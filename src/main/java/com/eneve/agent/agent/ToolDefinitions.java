@@ -36,7 +36,8 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(listFiles()),
                 ToolUnion.ofTool(fetchUrl()),
                 ToolUnion.ofTool(searchKnowledgeBase()),
-                ToolUnion.ofTool(lookupCustomerContext())
+                ToolUnion.ofTool(lookupCustomerContext()),
+                ToolUnion.ofTool(setProductContext())
         );
     }
 
@@ -51,7 +52,8 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(runCommand()),
                 ToolUnion.ofTool(fetchUrl()),
                 ToolUnion.ofTool(searchKnowledgeBase()),
-                ToolUnion.ofTool(lookupCustomerContext())
+                ToolUnion.ofTool(lookupCustomerContext()),
+                ToolUnion.ofTool(setProductContext())
         );
     }
 
@@ -59,6 +61,7 @@ public final class ToolDefinitions {
         return List.of(
                 ToolUnion.ofTool(searchKnowledgeBase()),
                 ToolUnion.ofTool(lookupCustomerContext()),
+                ToolUnion.ofTool(setProductContext()),
                 ToolUnion.ofTool(semanticSearch()),
                 ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(queryCodeGraph()),
@@ -145,6 +148,8 @@ public final class ToolDefinitions {
         return Tool.builder()
                 .name("search_code")
                 .description("Search for a pattern in the repository using grep. "
+                        + "Supports single repository search, specific repository targeting with repoSlug, "
+                        + "or searching across all cloned repositories in a multi-repo workspace. "
                         + "Use this to find callers, usages, or related code beyond what the diff shows.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
@@ -159,6 +164,14 @@ public final class ToolDefinitions {
                                 .putAdditionalProperty("include", JsonValue.from(Map.of(
                                         "type", "string",
                                         "description", "Glob pattern to restrict file types, e.g. '*.java' or '*.ts'"
+                                )))
+                                .putAdditionalProperty("repoSlug", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Repository slug to search in (optional). If not specified, uses active product context or searches all cloned repos."
+                                )))
+                                .putAdditionalProperty("repo", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Full repository URL to clone and search (optional). Use repoSlug instead for known repositories."
                                 )))
                                 .build())
                         .addRequired("pattern")
@@ -324,6 +337,27 @@ public final class ToolDefinitions {
                                         "description", "Jira project key — used to look up the owning product"
                                 )))
                                 .build())
+                        .build())
+                .build();
+    }
+
+    private static Tool setProductContext() {
+        return Tool.builder()
+                .name("set_product_context")
+                .description("Set the active product context for the conversation. "
+                        + "This configures workspace metadata for git repositories, Jira projects, "
+                        + "Confluence spaces, and other product-specific settings. "
+                        + "Use after lookup_customer_context to switch between different products. "
+                        + "Other tools like search_code, semantic_search, and query_code_graph will "
+                        + "automatically use the active product context.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID from the customer registry"
+                                )))
+                                .build())
+                        .addRequired("productId")
                         .build())
                 .build();
     }

@@ -83,20 +83,39 @@ public class SearchCodeTool implements ToolExecutor {
             return searchInRepository(repoUrl, pattern, searchPath, include);
         }
 
-        // Strategy 3: Auto-discover and clone known repository from workspace metadata
-        if (repoUrl == null && !workspace.hasClonedRepo()) {
-            String ws = workspace.getMetadata("workspace");
-            String repoSlug = workspace.getMetadata("repoSlug");
+        // Strategy 3: Multi-repo workspace search
+        String repoSlug = (String) input.get("repoSlug");
+        String ws = workspace.getMetadata("workspace");
+        String defaultRepoSlug = workspace.getMetadata("repoSlug");
+        String productRepos = workspace.getMetadata("productRepos");
+        
+        LOG.debugf("SearchCodeTool: repoSlug param=%s, ws=%s, defaultRepoSlug=%s, productRepos=%s", 
+                   repoSlug, ws, defaultRepoSlug, productRepos);
+        
+        // If repoSlug is specified, search that specific repo
+        if (repoSlug != null && !repoSlug.isBlank()) {
+            return searchInSpecificRepo(workspace, ws, repoSlug, pattern, searchPath, include);
+        }
+        
+        // If no repoSlug specified, try to use default from metadata
+        if (repoUrl == null) {
+            if (defaultRepoSlug != null && !defaultRepoSlug.isBlank()) {
+                LOG.debugf("SearchCodeTool: Using default repoSlug=%s", defaultRepoSlug);
+                return searchInSpecificRepo(workspace, ws, defaultRepoSlug, pattern, searchPath, include);
+            }
             
-            if (ws != null && repoSlug != null) {
-                String discoveredUrl = platformService.buildCloneUrl(ws, repoSlug);
-                if (discoveredUrl != null) {
-                    LOG.debugf("Auto-discovering repository %s/%s for pattern: %s", ws, repoSlug, pattern);
-                    return searchInRepository(discoveredUrl, pattern, searchPath, include);
-                } else {
-                    return "ERROR: Cannot build clone URL for repository " + ws + "/" + repoSlug + 
-                           ". Platform may not support auto-discovery.";
-                }
+            // If we have multiple cloned repos, search all of them
+            if (!workspace.listClonedRepos().isEmpty()) {
+                return searchInAllRepos(workspace, pattern, searchPath, include);
+            }
+            
+            // Error case: no repo context available
+            if (ws != null) {
+                String available = workspace.getMetadata("productRepos");
+                return "ERROR: No repoSlug specified. " + 
+                       (available != null ? "Available repos: " + available + 
+                        ". Use 'repoSlug' parameter to specify which repo to search." : 
+                        "Call set_product_context first to establish repository context.");
             }
         }
 
@@ -283,6 +302,95 @@ public class SearchCodeTool implements ToolExecutor {
         } catch (IOException e) {
             LOG.warnf("Failed to cleanup temporary directory %s: %s", dir, e.getMessage());
         }
+    }
+
+    /**
+     * Search in a specific repository slug within the workspace context
+     */
+    private String searchInSpecificRepo(WorkspaceContext workspace, String ws, String repoSlug, 
+                                      String pattern, String searchPath, String include) {
+        // Check if repo is already cloned in workspace
+        if (workspace.hasClonedRepo(repoSlug)) {
+            Path repoPath = workspace.getRepoPath(repoSlug);
+            LOG.debugf("Searching existing repo %s for pattern: %s", repoSlug, pattern);
+            return executeGrepSearch(repoPath, pattern, searchPath, include);
+        }
+        
+        // Auto-clone the repository if workspace context is available
+        if (ws != null && platformService != null) {
+            String cloneUrl = platformService.buildCloneUrl(ws, repoSlug);
+            if (cloneUrl != null) {
+                try {
+                    LOG.debugf("Auto-cloning repository %s/%s for search", ws, repoSlug);
+                    workspace.cloneRepoToSubdirShallow(repoSlug, cloneUrl, "main", CLONE_TIMEOUT_MINUTES);
+                    Path repoPath = workspace.getRepoPath(repoSlug);
+                    return executeGrepSearch(repoPath, pattern, searchPath, include);
+                } catch (Exception e) {
+                    LOG.errorf("Failed to auto-clone repository %s/%s: %s", ws, repoSlug, e.getMessage());
+                    return "ERROR: Failed to clone repository " + ws + "/" + repoSlug + ": " + e.getMessage();
+                }
+            } else {
+                return "ERROR: Cannot build clone URL for repository " + ws + "/" + repoSlug + 
+                       ". Platform may not support auto-discovery.";
+            }
+        }
+        
+        return "ERROR: Repository " + repoSlug + " is not available. No workspace context to auto-clone.";
+    }
+    
+    /**
+     * Search across all cloned repositories in the workspace
+     */
+    private String searchInAllRepos(WorkspaceContext workspace, String pattern, String searchPath, String include) {
+        var clonedRepos = workspace.listClonedRepos();
+        if (clonedRepos.isEmpty()) {
+            return "No repositories are currently cloned in the workspace.";
+        }
+        
+        StringBuilder result = new StringBuilder();
+        result.append("Searching across ").append(clonedRepos.size()).append(" repositories:\n\n");
+        
+        int totalMatches = 0;
+        for (String repoSlug : clonedRepos) {
+            Path repoPath = workspace.getRepoPath(repoSlug);
+            if (repoPath == null || !Files.exists(repoPath)) {
+                continue;
+            }
+            
+            LOG.debugf("Searching repository %s for pattern: %s", repoSlug, pattern);
+            String repoResult = executeGrepSearch(repoPath, pattern, searchPath, include);
+            
+            if (!repoResult.startsWith("No matches found") && !repoResult.startsWith("ERROR:")) {
+                result.append("## Repository: ").append(repoSlug).append("\n");
+                // Add repo prefix to file paths in results
+                String[] lines = repoResult.split("\n");
+                boolean foundMatches = false;
+                for (String line : lines) {
+                    if (line.contains("Found ") && line.contains(" matches")) {
+                        // Skip the summary line, we'll create our own
+                        String matchCount = line.substring(line.indexOf("Found ") + 6, line.indexOf(" matches"));
+                        try {
+                            totalMatches += Integer.parseInt(matchCount);
+                        } catch (NumberFormatException ignored) {}
+                        continue;
+                    }
+                    if (line.trim().isEmpty() && !foundMatches) continue;
+                    if (line.contains(":")) {
+                        foundMatches = true;
+                        result.append(repoSlug).append("/").append(line).append("\n");
+                    }
+                }
+                if (foundMatches) {
+                    result.append("\n");
+                }
+            }
+        }
+        
+        if (totalMatches == 0) {
+            return "No matches found for pattern: " + pattern + " across " + clonedRepos.size() + " repositories";
+        }
+        
+        return "Found " + totalMatches + " total matches for pattern: " + pattern + "\n\n" + result.toString();
     }
 
     private static String shellQuote(String s) {

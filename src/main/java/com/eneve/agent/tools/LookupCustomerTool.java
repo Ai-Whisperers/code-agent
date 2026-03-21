@@ -96,6 +96,16 @@ public class LookupCustomerTool implements ToolExecutor {
             return "No product found matching the provided identifiers.";
         }
 
+        // Set workspace metadata to enable auto-discovery for other tools
+        if (product.git() != null && product.git().workspace() != null) {
+            workspace.putMetadata("workspace", product.git().workspace());
+            if (product.git().repos() != null && !product.git().repos().isEmpty()) {
+                workspace.putMetadata("productRepos", String.join(",", product.git().repos()));
+                // Default to first repo for auto-discovery, can be overridden by tools
+                workspace.putMetadata("repoSlug", product.git().repos().get(0));
+            }
+        }
+
         return formatProduct(product);
     }
 

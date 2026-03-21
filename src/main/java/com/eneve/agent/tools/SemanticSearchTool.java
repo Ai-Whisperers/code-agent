@@ -47,6 +47,8 @@ public class SemanticSearchTool implements ToolExecutor {
         }
 
         String repo = (String) input.get("repo");
+        String repoSlug = (String) input.get("repoSlug");
+        
         int topK = DEFAULT_TOP_K;
         Object topKObj = input.get("top_k");
         if (topKObj instanceof Number n) {
@@ -54,6 +56,11 @@ public class SemanticSearchTool implements ToolExecutor {
         }
 
         String ws = workspace.getMetadata("workspace");
+        
+        // Use active product context if no explicit repo specified
+        if (repo == null && repoSlug == null) {
+            repoSlug = workspace.getMetadata("repoSlug");
+        }
 
         float[] queryVector = voyageService.embedSingle(query, "query");
         if (queryVector == null) {
@@ -61,18 +68,24 @@ public class SemanticSearchTool implements ToolExecutor {
         }
 
         List<EmbeddingStore.SearchResult> results;
+        // Prioritize explicit repo URL over repoSlug
         if (ws != null && repo != null && !repo.isBlank()) {
             results = embeddingStore.searchSimilar(queryVector, ws, repo, topK);
+        } else if (ws != null && repoSlug != null && !repoSlug.isBlank()) {
+            results = embeddingStore.searchSimilar(queryVector, ws, repoSlug, topK);
         } else if (ws != null) {
             results = embeddingStore.searchSimilar(queryVector, ws, topK);
         } else if (repo != null && !repo.isBlank()) {
             results = embeddingStore.searchSimilarByRepo(queryVector, repo, topK);
+        } else if (repoSlug != null && !repoSlug.isBlank()) {
+            results = embeddingStore.searchSimilarByRepo(queryVector, repoSlug, topK);
         } else {
             results = embeddingStore.searchSimilarGlobal(queryVector, topK);
         }
 
         if (results.isEmpty()) {
             String scope = repo != null ? " (in repo: " + repo + ")"
+                    : repoSlug != null ? " (in repo: " + repoSlug + ")"
                     : ws != null ? " (in workspace: " + ws + ")"
                     : " (across all indexed repos)";
             return "No semantic matches found for: " + query + scope;
@@ -83,6 +96,8 @@ public class SemanticSearchTool implements ToolExecutor {
         sb.append("Found ").append(results.size()).append(" matches");
         if (repo != null) {
             sb.append(" in ").append(repo);
+        } else if (repoSlug != null) {
+            sb.append(" in ").append(repoSlug);
         } else {
             sb.append(" across indexed repos");
         }
