@@ -83,7 +83,8 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(confluenceUpdatePage()),
                 // Agent action tools
                 ToolUnion.ofTool(agentRunFix()),
-                ToolUnion.ofTool(agentGetJobStatus())
+                ToolUnion.ofTool(agentGetJobStatus()),
+                ToolUnion.ofTool(agentSubmitReviewJob())
         );
     }
 
@@ -695,6 +696,41 @@ public final class ToolDefinitions {
                                 )))
                                 .build())
                         .addRequired("jobId")
+                        .build())
+                .build();
+    }
+
+    private static Tool agentSubmitReviewJob() {
+        return Tool.builder()
+                .name("agent_submit_review_job")
+                .description("Submit a PR review job to the agent queue. The agent will clone the repo, "
+                        + "review the pull request code changes, analyze code quality, and provide feedback. "
+                        + "Returns a job ID that can be polled with agent_get_job_status.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("repoUrl", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Repository HTTPS URL, e.g. 'https://bitbucket.org/workspace/repo.git'"
+                                )))
+                                .putAdditionalProperty("prId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Pull request ID or number"
+                                )))
+                                .putAdditionalProperty("targetBranch", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Target branch name (optional, defaults to main/master)"
+                                )))
+                                .putAdditionalProperty("jiraKey", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira issue key to associate with the review, e.g. 'PROJ-123' (optional)"
+                                )))
+                                .putAdditionalProperty("extraRules", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Additional review rules or guidelines to apply (optional)"
+                                )))
+                                .build())
+                        .addRequired("repoUrl")
+                        .addRequired("prId")
                         .build())
                 .build();
     }
