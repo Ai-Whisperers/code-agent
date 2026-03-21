@@ -109,6 +109,25 @@ public class AiStatsResource {
     }
 
     @GET
+    @Path("/summary-by-job-type")
+    @Operation(
+            operationId = "getAiCallSummaryByJobType",
+            summary = "AI call statistics grouped by job type",
+            description = "Returns job type breakdown, overall stats excluding CHAT, and CHAT-specific stats for dashboard display."
+    )
+    @APIResponse(responseCode = "200", description = "Job type breakdown and enhanced statistics")
+    public Response getSummaryByJobType(
+            @Parameter(description = "Start of time range (ISO-8601)") @QueryParam("from") String from,
+            @Parameter(description = "End of time range (ISO-8601)") @QueryParam("to") String to) {
+
+        Instant fromInstant = parseInstant(from);
+        Instant toInstant = parseInstant(to);
+
+        Map<String, Object> summaryByJobType = aiCallStore.getSummaryByJobType(fromInstant, toInstant);
+        return Response.ok(summaryByJobType).build();
+    }
+
+    @GET
     @Path("/daily")
     @Operation(
             operationId = "getDailyAiCallSummary",
