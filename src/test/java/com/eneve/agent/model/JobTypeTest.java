@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(11, values.length);
+        assertEquals(12, values.length);
         assertEquals(JobType.FIX, values[0]);
         assertEquals(JobType.REVIEW, values[1]);
         assertEquals(JobType.FIX_PR, values[2]);
