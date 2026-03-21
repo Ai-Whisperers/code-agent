@@ -369,7 +369,9 @@ public class ClaudeToolUseLoop {
                         if (event.isContentBlockStart()) {
                             var block = event.asContentBlockStart().contentBlock();
                             if (block.isToolUse()) {
-                                toolStartBuffer.add(new ChatEvent.ToolStart(block.asToolUse().name()));
+                                ToolUseBlock toolUse = block.asToolUse();
+                                Map<String, Object> inputMap = convertJsonValueToMap(toolUse._input());
+                                toolStartBuffer.add(new ChatEvent.ToolStart(toolUse.name(), inputMap));
                             }
                         }
                     });
@@ -428,7 +430,7 @@ public class ClaudeToolUseLoop {
                     LOG.infof("Streaming tool call: %s (id=%s)", toolUse.name(), toolUse.id());
                     String result = dispatchTool(toolUse, workspace);
 
-                    eventSink.accept(new ChatEvent.ToolEnd(toolUse.name()));
+                    eventSink.accept(new ChatEvent.ToolEnd(toolUse.name(), result));
 
                     boolean isError = result.startsWith("ERROR:");
                     toolResults.add(ContentBlockParam.ofToolResult(

@@ -35,6 +35,9 @@ public class CoverageReporter {
     @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
     long timeoutMinutes;
 
+    @ConfigProperty(name = "quality-report.jacoco.version", defaultValue = "0.8.12")
+    String jacocoVersion;
+
     // ─── Public API ──────────────────────────────────────────────────────
 
     /**
@@ -169,6 +172,76 @@ public class CoverageReporter {
     }
 
     // ─── Measurement ─────────────────────────────────────────────────────
+
+    /**
+     * Measures JaCoCo coverage for quality report purposes.
+     * If JaCoCo is already declared in {@code pom.xml}, the existing plugin configuration
+     * is used. If not, the plugin is invoked via its fully-qualified Maven coordinates
+     * so that no pom.xml modification is required.
+     *
+     * <p>Returns {@code null} if the project is not Maven-based or if measurement fails.
+     * Never throws — all errors are logged as warnings.
+     *
+     * @param workspace      the cloned workspace
+     * @param timeoutMinutes the maximum time to wait for the Maven process
+     */
+    public CoverageSnapshot measureCoverageWithFallback(WorkspaceContext workspace, long timeoutMinutes) {
+        Path pom = workspace.getRoot().resolve("pom.xml");
+        if (!Files.exists(pom)) {
+            LOG.debugf("CoverageReporter: no pom.xml found — skipping coverage measurement");
+            return null;
+        }
+
+        boolean jacocoPresent = isJacocoPresent(workspace);
+        String pluginPrefix = jacocoPresent
+                ? "jacoco"
+                : "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+
+        String command = ProcessHelper.mvn(workspace.getRoot())
+                + " " + pluginPrefix + ":prepare-agent test " + pluginPrefix + ":report -q";
+
+        LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
+                jacocoPresent ? "configured" : "auto-injected", command);
+        try {
+            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
+                    .directory(workspace.getRoot().toFile())
+                    .redirectErrorStream(true);
+            Process proc = pb.start();
+            String output = new String(proc.getInputStream().readAllBytes());
+            boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+
+            if (!finished) {
+                proc.destroyForcibly();
+                LOG.warnf("CoverageReporter: coverage run timed out after %d minutes", timeoutMinutes);
+                return null;
+            }
+            if (proc.exitValue() != 0) {
+                String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
+                LOG.warnf("CoverageReporter: coverage run failed (exit %d): %s", proc.exitValue(), tail);
+                return null;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            LOG.warnf("CoverageReporter: coverage measurement interrupted");
+            return null;
+        } catch (IOException e) {
+            LOG.warnf("CoverageReporter: failed to start coverage process: %s", e.getMessage());
+            return null;
+        }
+
+        Path report = workspace.getRoot().resolve(JACOCO_REPORT_PATH);
+        if (!Files.exists(report)) {
+            LOG.warnf("CoverageReporter: JaCoCo report not found at %s despite successful test run", report);
+            return null;
+        }
+
+        try {
+            return parseReport(report);
+        } catch (Exception e) {
+            LOG.warnf("CoverageReporter: failed to parse JaCoCo report: %s", e.getMessage());
+            return null;
+        }
+    }
 
     /**
      * Returns true if JaCoCo is declared in the project's {@code pom.xml}.

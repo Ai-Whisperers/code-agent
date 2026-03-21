@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import java.util.Map;
+
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
@@ -31,13 +33,13 @@ public sealed interface ChatEvent {
     }
 
     /** Claude is about to execute a tool call. Show a progress indicator in the UI. */
-    record ToolStart(String type, String tool) implements ChatEvent {
-        public ToolStart(String toolName) { this("tool_start", toolName); }
+    record ToolStart(String type, String tool, Map<String, Object> input, long timestamp) implements ChatEvent {
+        public ToolStart(String toolName, Map<String, Object> input) { this("tool_start", toolName, input, System.currentTimeMillis()); }
     }
 
     /** Tool execution finished. Hide the progress indicator. */
-    record ToolEnd(String type, String tool) implements ChatEvent {
-        public ToolEnd(String toolName) { this("tool_end", toolName); }
+    record ToolEnd(String type, String tool, String result, long timestamp) implements ChatEvent {
+        public ToolEnd(String toolName, String result) { this("tool_end", toolName, result, System.currentTimeMillis()); }
     }
 
     /** The full response has been streamed. Conversation ID is optional. */

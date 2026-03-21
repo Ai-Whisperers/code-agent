@@ -102,22 +102,27 @@ public record QualityReport(
      *   <li><b>Complexity   (50)</b> — 1 − methodsAboveThreshold / max(1, totalMethods)</li>
      *   <li><b>Aikido       (30)</b> — 1 − min(1, critical×0.5 + high×0.2 + medium×0.05 + low×0.01)</li>
      *   <li><b>Linter       (20)</b> — 1 − min(1, errors×0.1 + warnings×0.01)</li>
-     *   <li><b>Test presence (10)</b> — testFiles / max(1, sourceFiles) (absent = 0,
-     *       <em>penalised not redistributed</em>)</li>
+     *   <li><b>Coverage (10)</b> — JaCoCo line rate / 100 when available; otherwise
+     *       testFiles / max(1, sourceFiles); absent = 0 (<em>penalised, not redistributed</em>)</li>
      * </ul>
      *
-     * <p>Test-presence absence (no recognised source or test files found) is treated as 0
-     * so that repositories with no tests are penalised. Aikido and linter absence
-     * (service not configured / no applicable linter) have their weight redistributed to
-     * the remaining present sections. Review quality is collected but excluded from the score.
+     * <p>Coverage / test-presence absence is treated as 0 so that repositories with no
+     * measurable coverage are penalised. Aikido and linter absence (service not configured /
+     * no applicable linter) have their weight redistributed to the remaining present sections.
+     * Review quality is collected but excluded from the score.
      */
-    public static double computeScore(TestPresenceSection tests, LinterSection lint,
-                                      AikidoSection aik, ComplexitySection cplx,
-                                      ReviewSection rev) {
-        // Test presence: absent = score 0, weight always in denominator
-        double covScore = (tests != null)
-                ? Math.max(0.0, Math.min(1.0, tests.testRatio()))
-                : 0.0;
+    public static double computeScore(CoverageSection coverage, TestPresenceSection tests,
+                                      LinterSection lint, AikidoSection aik,
+                                      ComplexitySection cplx, ReviewSection rev) {
+        // Coverage: real JaCoCo line rate preferred; fall back to test presence ratio; absent = 0
+        double covScore;
+        if (coverage != null) {
+            covScore = Math.max(0.0, Math.min(1.0, coverage.lineRate() / 100.0));
+        } else if (tests != null) {
+            covScore = Math.max(0.0, Math.min(1.0, tests.testRatio()));
+        } else {
+            covScore = 0.0;
+        }
 
         // Complexity
         double cplxScore = 0.0;

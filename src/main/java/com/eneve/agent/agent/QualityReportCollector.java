@@ -7,8 +7,10 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
+import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.agent.QualityReport.AikidoSection;
 import com.eneve.agent.agent.QualityReport.ComplexitySection;
+import com.eneve.agent.agent.QualityReport.CoverageSection;
 import com.eneve.agent.agent.QualityReport.LinterSection;
 import com.eneve.agent.agent.QualityReport.ReviewSection;
 import com.eneve.agent.agent.QualityReport.TestPresenceSection;
@@ -43,9 +45,16 @@ public class QualityReportCollector {
     @Inject CodeMetricsCalculator metricsCalculator;
     @Inject CommentStore commentStore;
     @Inject CommentFeedbackStore feedbackStore;
+    @Inject CoverageReporter coverageReporter;
 
     @ConfigProperty(name = "quality-report.cc-threshold", defaultValue = "10")
     int defaultCcThreshold;
+
+    @ConfigProperty(name = "quality-report.job-timeout-minutes", defaultValue = "30")
+    long coverageTimeoutMinutes;
+
+    @ConfigProperty(name = "quality-report.coverage.enabled", defaultValue = "true")
+    boolean coverageEnabled;
 
     /**
      * Collects all available quality metrics for the given workspace and returns a complete
@@ -65,9 +74,10 @@ public class QualityReportCollector {
         AikidoSection aikidoSection = collectAikido(repoSlug);
         ComplexitySection complexitySection = collectComplexity(workspace, workspaceName, repoSlug, branch);
         ReviewSection reviewSection = collectReview(workspaceName, repoSlug);
+        CoverageSection coverageSection = collectCoverage(workspace, workspaceName, repoSlug);
 
-        double score = QualityReport.computeScore(testPresenceSection, linterSection, aikidoSection,
-                complexitySection, reviewSection);
+        double score = QualityReport.computeScore(coverageSection, testPresenceSection, linterSection,
+                aikidoSection, complexitySection, reviewSection);
 
         return new QualityReport(
                 UUID.randomUUID().toString(),
@@ -76,7 +86,7 @@ public class QualityReportCollector {
                 branch,
                 Instant.now(),
                 score,
-                null,
+                coverageSection,
                 linterSection,
                 aikidoSection,
                 complexitySection,
@@ -185,6 +195,28 @@ public class QualityReportCollector {
             );
         } catch (Exception e) {
             LOG.warnf("QualityReportCollector: complexity collection failed for %s/%s: %s",
+                    workspaceName, repoSlug, e.getMessage());
+            return null;
+        }
+    }
+
+    private CoverageSection collectCoverage(WorkspaceContext workspace, String workspaceName, String repoSlug) {
+        if (!coverageEnabled) {
+            LOG.debugf("QualityReportCollector: coverage collection disabled — skipping");
+            return null;
+        }
+        try {
+            CoverageSnapshot snap = coverageReporter.measureCoverageWithFallback(workspace, coverageTimeoutMinutes);
+            if (snap == null) return null;
+            return new CoverageSection(
+                    snap.lineRate(), snap.branchRate(), snap.methodRate(), snap.classRate(),
+                    snap.linesCovered(), snap.linesMissed(),
+                    snap.branchesCovered(), snap.branchesMissed(),
+                    snap.methodsCovered(), snap.methodsMissed(),
+                    snap.classesCovered(), snap.classesMissed()
+            );
+        } catch (Exception e) {
+            LOG.warnf("QualityReportCollector: coverage collection failed for %s/%s: %s",
                     workspaceName, repoSlug, e.getMessage());
             return null;
         }
