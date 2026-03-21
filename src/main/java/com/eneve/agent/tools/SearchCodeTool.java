@@ -12,10 +12,12 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Provides grep-based code search over repositories.
@@ -41,6 +43,9 @@ public class SearchCodeTool implements ToolExecutor {
 
     @ConfigProperty(name = "git.password")
     String gitPassword;
+
+    @Inject
+    GitPlatformService platformService;
 
     // Cache cloned repositories to avoid redundant clones in concurrent jobs
     private final Map<String, Path> repoCache = new ConcurrentHashMap<>();
@@ -78,7 +83,24 @@ public class SearchCodeTool implements ToolExecutor {
             return searchInRepository(repoUrl, pattern, searchPath, include);
         }
 
-        // Strategy 3: No workspace and no repo specified
+        // Strategy 3: Auto-discover and clone known repository from workspace metadata
+        if (repoUrl == null && !workspace.hasClonedRepo()) {
+            String ws = workspace.getMetadata("workspace");
+            String repoSlug = workspace.getMetadata("repoSlug");
+            
+            if (ws != null && repoSlug != null) {
+                String discoveredUrl = platformService.buildCloneUrl(ws, repoSlug);
+                if (discoveredUrl != null) {
+                    LOG.debugf("Auto-discovering repository %s/%s for pattern: %s", ws, repoSlug, pattern);
+                    return searchInRepository(discoveredUrl, pattern, searchPath, include);
+                } else {
+                    return "ERROR: Cannot build clone URL for repository " + ws + "/" + repoSlug + 
+                           ". Platform may not support auto-discovery.";
+                }
+            }
+        }
+
+        // Strategy 4: No workspace and no repo specified
         if (!workspace.hasClonedRepo()) {
             return "ERROR: No repository available for search. Either clone a repository first or specify a 'repo' parameter with the repository URL to search.";
         }
