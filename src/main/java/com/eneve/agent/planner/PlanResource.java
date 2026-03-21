@@ -109,6 +109,38 @@ public class PlanResource {
         return Response.status(201).entity(plan).build();
     }
 
+    @GET
+    @Path("/jira/search")
+    @Operation(
+            operationId = "searchJiraIssues",
+            summary = "Search Jira issues by text",
+            description = "Searches Jira issues whose summary matches the query and returns key, summary, and status."
+    )
+    @APIResponse(responseCode = "200", description = "List of matching Jira issues")
+    public Response searchJira(
+            @Parameter(description = "Text to search for in Jira issue summaries")
+            @QueryParam("q") String q,
+            @Parameter(description = "Maximum results to return (default 10, max 20)")
+            @QueryParam("maxResults") @jakarta.ws.rs.DefaultValue("10") int maxResults) {
+
+        String jql = (q != null && !q.isBlank())
+                ? "summary ~ \"" + q.replace("\"", "") + "\" ORDER BY updated DESC"
+                : "ORDER BY updated DESC";
+        int cap = Math.min(Math.max(1, maxResults), 20);
+
+        // Use system Jira credentials for the search
+        var creds = new JiraService.JiraCredentials(
+                jiraService.getBaseUrl(),
+                jiraService.getUser(),
+                jiraService.getApiToken()
+        );
+        
+        List<JiraSearchResult> results = jiraService.searchIssues(jql, cap, creds).stream()
+                .map(i -> new JiraSearchResult(i.key(), i.summary(), i.status()))
+                .toList();
+        return Response.ok(results).build();
+    }
+
     @POST
     @Path("/from-jira/{jiraKey}")
     @Operation(
@@ -132,10 +164,6 @@ public class PlanResource {
         if (!plannerEnabled) {
             return Response.status(503).entity(Map.of("error", "Planner is disabled")).build();
         }
-        if (request == null || request.repoUrl() == null || request.repoUrl().isBlank()) {
-            return Response.status(400).entity(Map.of("error", "repoUrl is required")).build();
-        }
-
         String ticketText = jiraService.fetchIssuePrompt(jiraKey);
         if (ticketText == null || ticketText.isBlank()) {
             return Response.status(404)
@@ -143,12 +171,13 @@ public class PlanResource {
                     .build();
         }
 
-        String targetBranch = request.targetBranch() != null ? request.targetBranch() : "main";
+        String repoUrl = (request != null && request.repoUrl() != null) ? request.repoUrl() : "";
+        String targetBranch = (request != null && request.targetBranch() != null) ? request.targetBranch() : "main";
 
-        LOG.infof("Creating plan from Jira %s, repoUrl=%s", jiraKey, UrlUtils.stripCredentials(request.repoUrl()));
+        LOG.infof("Creating plan from Jira %s, repoUrl=%s", jiraKey, UrlUtils.stripCredentials(repoUrl));
 
         ExecutionPlan plan = plannerService.generatePlan(
-                ticketText, request.repoUrl(), targetBranch, "JIRA", jiraKey);
+                ticketText, repoUrl, targetBranch, "JIRA", jiraKey);
 
         if (plan == null) {
             return Response.status(503).entity(Map.of("error", "Plan generation failed")).build();
@@ -737,6 +766,8 @@ public class PlanResource {
             String jobType,
             Map<String, String> params
     ) {}
+
+    public record JiraSearchResult(String key, String summary, String status) {}
 
     public record AddStepRequest(
             int phaseOrder,

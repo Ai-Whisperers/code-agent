@@ -100,21 +100,25 @@ public class UpgradeResource {
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
 
-        upgradeExecutor.submit(() -> {
-            try {
-                UpgradeService.UpgradeResult result = upgradeService.checkAndUpgradeOne(workspace, repoSlug);
-                LOG.infof("Upgrade check for %s/%s: checked=%d, outdated=%d, plans=%d",
-                        workspace, repoSlug, result.checked(), result.outdated(), result.plansCreated());
-            } catch (Exception e) {
-                LOG.errorf("Upgrade check failed for %s/%s: %s", workspace, repoSlug, e.getMessage());
-            }
-        });
+        try {
+            UpgradeService.UpgradeResult result = upgradeService.checkAndUpgradeOne(workspace, repoSlug);
+            LOG.infof("Upgrade check for %s/%s: checked=%d, outdated=%d, plans=%d",
+                    workspace, repoSlug, result.checked(), result.outdated(), result.plansCreated());
 
-        return Response.accepted(Map.of(
-                "action", "upgrade_check_started",
-                "workspace", workspace,
-                "repoSlug", repoSlug
-        )).build();
+            Map<String, Object> body = new java.util.LinkedHashMap<>();
+            body.put("action", "upgrade_check_started");
+            body.put("workspace", workspace);
+            body.put("repoSlug", repoSlug);
+            if (!result.planIds().isEmpty()) {
+                body.put("planId", result.planIds().get(0));
+            }
+            return Response.accepted(body).build();
+        } catch (Exception e) {
+            LOG.errorf("Upgrade check failed for %s/%s: %s", workspace, repoSlug, e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Upgrade check failed: " + e.getMessage()))
+                    .build();
+        }
     }
 
     @GET

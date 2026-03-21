@@ -77,6 +77,13 @@ public class UpgradeService {
     /** Tracks plans started by this service: planId → upgrade context needed on completion. */
     private final ConcurrentHashMap<String, UpgradeContext> activePlans = new ConcurrentHashMap<>();
 
+    /** Runs plan execution in the background after plan creation returns to the caller. */
+    private final ExecutorService executionExecutor = Executors.newCachedThreadPool(r -> {
+        Thread t = new Thread(r, "upgrade-exec");
+        t.setDaemon(true);
+        return t;
+    });
+
     private record UpgradeContext(String workspace, String repoSlug, String archetype, String targetVersion) {}
 
     public record UpgradeResult(int checked, int outdated, int plansCreated, List<String> planIds) {}
@@ -282,33 +289,35 @@ public class UpgradeService {
         activePlans.put(plan.planId(),
                 new UpgradeContext(repo.workspace(), repo.repoSlug(), archetype, latestVersion));
 
-        try {
-            orchestratorService.startExecution(plan.planId());
-            LOG.infof("UpgradeService: plan %s started for %s/%s (%s %s → %s)",
-                    plan.planId(), repo.workspace(), repo.repoSlug(),
-                    archetype, currentVersion, latestVersion);
+        final String planId = plan.planId();
+        executionExecutor.submit(() -> {
+            try {
+                orchestratorService.startExecution(planId);
+                LOG.infof("UpgradeService: plan %s started for %s/%s (%s %s → %s)",
+                        planId, repo.workspace(), repo.repoSlug(),
+                        archetype, currentVersion, latestVersion);
 
-            teamsNotifier.sendNotification(new RunResult(
-                    plan.planId(), "UPGRADE", "STARTED",
-                    null, cleanUrl, branchName, null,
-                    archetype + " upgrade from " + currentVersion + " to " + latestVersion
-                            + " started. Plan: " + plan.planId(),
-                    null, 0, 0));
+                teamsNotifier.sendNotification(new RunResult(
+                        planId, "UPGRADE", "STARTED",
+                        null, cleanUrl, branchName, null,
+                        archetype + " upgrade from " + currentVersion + " to " + latestVersion
+                                + " started. Plan: " + planId,
+                        null, 0, 0));
 
-            return plan.planId();
+            } catch (Exception e) {
+                LOG.errorf("UpgradeService: failed to start execution for plan %s (%s/%s): %s",
+                        planId, repo.workspace(), repo.repoSlug(), e.getMessage());
+                activePlans.remove(planId);
 
-        } catch (Exception e) {
-            LOG.errorf("UpgradeService: failed to start execution for plan %s (%s/%s): %s",
-                    plan.planId(), repo.workspace(), repo.repoSlug(), e.getMessage());
-            activePlans.remove(plan.planId());
+                teamsNotifier.sendNotification(new RunResult(
+                        planId, "UPGRADE", "FAILED",
+                        null, cleanUrl, branchName, null,
+                        null, "Failed to start " + archetype + " upgrade plan: " + e.getMessage(),
+                        0, 0));
+            }
+        });
 
-            teamsNotifier.sendNotification(new RunResult(
-                    plan.planId(), "UPGRADE", "FAILED",
-                    null, cleanUrl, branchName, null,
-                    null, "Failed to start " + archetype + " upgrade plan: " + e.getMessage(),
-                    0, 0));
-            return null;
-        }
+        return planId;
     }
 
     /**
