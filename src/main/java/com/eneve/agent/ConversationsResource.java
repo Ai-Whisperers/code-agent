@@ -4,7 +4,9 @@ import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.ConversationRepository;
+import com.eneve.agent.attachment.AttachmentService;
 import com.eneve.agent.model.ConversationSummary;
+import com.eneve.agent.planner.PlanStore;
 
 import io.quarkus.security.identity.SecurityIdentity;
 import org.eclipse.microprofile.jwt.JsonWebToken;
@@ -42,6 +44,12 @@ public class ConversationsResource {
 
     @Inject
     ConversationRepository conversationRepository;
+
+    @Inject
+    AttachmentService attachmentService;
+
+    @Inject
+    PlanStore planStore;
 
     @Inject
     SecurityIdentity securityIdentity;
@@ -92,6 +100,10 @@ public class ConversationsResource {
                     .entity(Map.of("error", "Conversation not found"))
                     .build();
         }
+        attachmentService.getAttachmentsByConversation(conversationId)
+                .forEach(att -> attachmentService.deleteAttachment(att.attachmentId()));
+        planStore.findByConversationId(conversationId)
+                .forEach(plan -> planStore.delete(plan.planId()));
         conversationRepository.deleteConversation(conversationId, userId);
         LOG.debugf("DELETE /conversations/%s — userId=%s", conversationId, userId);
         return Response.noContent().build();
