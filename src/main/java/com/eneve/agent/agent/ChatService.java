@@ -8,13 +8,15 @@ import java.util.UUID;
 
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.ToolUnion;
+import com.eneve.agent.attachment.AttachmentService;
+import com.eneve.agent.attachment.ChatAttachment;
 import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
-import com.eneve.agent.planner.PlannerService;
-import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.ExecutionPlan;
+import com.eneve.agent.planner.PlanStore;
+import com.eneve.agent.planner.PlannerService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import io.smallrye.mutiny.Multi;
@@ -51,6 +53,7 @@ public class ChatService {
     @Inject PromptTemplateService promptTemplateService;
     @Inject PlannerService plannerService;
     @Inject PlanStore planStore;
+    @Inject PlanFileManager planFileManager;
 
     /**
      * Start or resume a streaming chat conversation.
@@ -309,9 +312,9 @@ public class ChatService {
     private void checkAndGeneratePlan(ChatRequest request, String conversationId, WorkspaceContext workspace, 
                                     io.smallrye.mutiny.subscription.MultiEmitter<? super ChatEvent> emitter, ChatEvent currentEvent) {
         try {
-            // Simple heuristic: look for plan-generating keywords in user message
+            // Check if user explicitly requested plan mode or message contains plan triggers
             String userMessage = request.message().toLowerCase();
-            boolean shouldGeneratePlan = containsPlanTriggers(userMessage);
+            boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
             
             if (shouldGeneratePlan && currentEvent instanceof ChatEvent.Done) {
                 // Generate execution plan based on the conversation
@@ -328,10 +331,19 @@ public class ChatService {
                     conversationId // sourceRef
                 );
                 
-                // Update plan with conversation metadata
+                // Update plan with conversation metadata and create workspace file
                 if (plan != null) {
                     planStore.updateConversationId(plan.planId(), conversationId);
-                    planStore.updateMarkdownContent(plan.planId(), request.message());
+                    
+                    // Create the markdown content and physical file using PlanFileManager
+                    String markdownContent = planFileManager.generatePlanMarkdown(plan, request.message());
+                    planStore.updateMarkdownContent(plan.planId(), markdownContent);
+                    
+                    // Create physical .md file in plan workspace
+                    String workspacePath = planFileManager.createPlanMarkdownFile(plan.planId(), markdownContent);
+                    if (workspacePath != null) {
+                        planStore.updateWorkspacePath(plan.planId(), workspacePath);
+                    }
                     
                     // Emit plan created event
                     emitter.emit(new ChatEvent.PlanCreated(
@@ -345,6 +357,7 @@ public class ChatService {
             LOG.warnf("Failed to generate plan for conversation %s: %s", conversationId, e.getMessage());
         }
     }
+
     
     /**
      * Checks if the user message contains keywords that suggest plan generation is appropriate.
@@ -352,12 +365,16 @@ public class ChatService {
     private boolean containsPlanTriggers(String message) {
         String[] triggers = {
             "implement", "create", "build", "develop", "add feature", "fix bug", 
-            "refactor", "update", "modify", "change", "improve", "optimize",
-            "can you", "please", "help me", "i need", "how to"
+            "refactor", "update", "change", "modify", "enhance", "improve"
         };
         
-        return java.util.Arrays.stream(triggers)
-                .anyMatch(message::contains);
+        for (String trigger : triggers) {
+            if (message.contains(trigger)) {
+                return true;
+            }
+        }
+        
+        return false;
     }
-    
+
 }
