@@ -294,16 +294,23 @@ public class PlanResource {
     @Operation(
             operationId = "listPlans",
             summary = "List execution plans",
-            description = "Returns all plans, optionally filtered by status (DRAFT, APPROVED, EXECUTING, COMPLETED, FAILED)."
+            description = "Returns all plans, optionally filtered by status or conversationId."
     )
     @APIResponse(responseCode = "200", description = "List of plans")
     public Response list(
             @Parameter(description = "Filter by status (optional)")
-            @QueryParam("status") String status) {
+            @QueryParam("status") String status,
+            @Parameter(description = "Filter by conversation ID (optional)")
+            @QueryParam("conversationId") String conversationId) {
 
-        List<ExecutionPlan> plans = status != null && !status.isBlank()
-                ? planStore.listByStatus(status.toUpperCase())
-                : planStore.listAll();
+        List<ExecutionPlan> plans;
+        if (conversationId != null && !conversationId.isBlank()) {
+            plans = planStore.findByConversationId(conversationId);
+        } else if (status != null && !status.isBlank()) {
+            plans = planStore.listByStatus(status.toUpperCase());
+        } else {
+            plans = planStore.listAll();
+        }
         return Response.ok(plans).build();
     }
 
@@ -385,6 +392,39 @@ public class PlanResource {
         }
 
         planStore.updatePlanData(planId, planData);
+        return planStore.find(planId)
+                .map(p -> Response.ok(p).build())
+                .orElse(Response.status(404).entity(Map.of("error", "Plan not found after update")).build());
+    }
+
+    @PATCH
+    @Path("/{planId}/markdown")
+    @Operation(
+            operationId = "updateMarkdown",
+            summary = "Update plan markdown content",
+            description = "Updates the markdown content of the plan."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Markdown updated"),
+            @APIResponse(responseCode = "404", description = "Plan not found")
+    })
+    public Response updateMarkdown(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId,
+            @RequestBody(description = "Markdown content", required = true)
+            Map<String, String> body) {
+
+        Optional<ExecutionPlan> existing = planStore.find(planId);
+        if (existing.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
+        }
+
+        String markdownContent = body.get("markdownContent");
+        if (markdownContent == null) {
+            return Response.status(400).entity(Map.of("error", "markdownContent is required")).build();
+        }
+
+        planStore.updateMarkdownContent(planId, markdownContent);
         return planStore.find(planId)
                 .map(p -> Response.ok(p).build())
                 .orElse(Response.status(404).entity(Map.of("error", "Plan not found after update")).build());
