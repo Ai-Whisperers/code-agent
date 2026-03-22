@@ -57,6 +57,39 @@ public final class ToolDefinitions {
         );
     }
 
+    public static List<ToolUnion> planExecution() {
+        return List.of(
+                ToolUnion.ofTool(planRead()),
+                ToolUnion.ofTool(planUpdate()),
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(lookupCustomerContext()),
+                ToolUnion.ofTool(setProductContext()),
+                ToolUnion.ofTool(semanticSearch()),
+                ToolUnion.ofTool(searchCode()),
+                ToolUnion.ofTool(queryCodeGraph()),
+                ToolUnion.ofTool(fetchUrl()),
+                // Jira MCP tools
+                ToolUnion.ofTool(jiraSearchIssues()),
+                ToolUnion.ofTool(jiraGetIssue()),
+                ToolUnion.ofTool(jiraGetComments()),
+                ToolUnion.ofTool(jiraCreateIssue()),
+                ToolUnion.ofTool(jiraUpdateIssue()),
+                ToolUnion.ofTool(jiraAddComment()),
+                ToolUnion.ofTool(jiraTransitionIssue()),
+                ToolUnion.ofTool(jiraGetWorklogs()),
+                ToolUnion.ofTool(jiraAddWorklog()),
+                // Confluence MCP tools
+                ToolUnion.ofTool(confluenceSearch()),
+                ToolUnion.ofTool(confluenceGetPage()),
+                ToolUnion.ofTool(confluenceCreatePage()),
+                ToolUnion.ofTool(confluenceUpdatePage()),
+                // Agent action tools
+                ToolUnion.ofTool(agentRunFix()),
+                ToolUnion.ofTool(agentGetJobStatus()),
+                ToolUnion.ofTool(agentSubmitReviewJob())
+        );
+    }
+
     public static List<ToolUnion> chat() {
         return List.of(
                 ToolUnion.ofTool(searchKnowledgeBase()),
@@ -89,6 +122,37 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(agentGetJobStatus()),
                 ToolUnion.ofTool(agentSubmitReviewJob())
         );
+    }
+
+    // ─── Plan MCP tool schemas ────────────────────────────────────────────────────
+
+    private static Tool planRead() {
+        return Tool.builder()
+                .name("plan_read")
+                .description("Read the current markdown content of the active execution plan. "
+                        + "Use this to check which tasks are pending, in-progress, or completed before starting work.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder().build())
+                        .build())
+                .build();
+    }
+
+    private static Tool planUpdate() {
+        return Tool.builder()
+                .name("plan_update")
+                .description("Update the markdown content of the active execution plan. "
+                        + "Use this after completing each task to tick it off (change '- [ ]' to '- [x]') "
+                        + "and add a brief result note. Always read the plan first with plan_read before updating.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("markdownContent", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The full updated markdown content of the plan"
+                                )))
+                                .build())
+                        .addRequired("markdownContent")
+                        .build())
+                .build();
     }
 
     private static Tool readFile() {

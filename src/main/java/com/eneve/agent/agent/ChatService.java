@@ -403,9 +403,11 @@ public class ChatService {
                         // Then update the metadata
                         planStore.updateConversationId(plan.planId(), conversationId);
                         
-                        // Create the markdown content and physical file using PlanFileManager
-                        String markdownContent = planFileManager.generatePlanMarkdown(plan, request.message());
-                        planStore.updateMarkdownContent(plan.planId(), markdownContent);
+                        // Markdown comes directly from PlannerService; persist and create physical file
+                        String markdownContent = plan.markdownContent();
+                        if (markdownContent != null) {
+                            planStore.updateMarkdownContent(plan.planId(), markdownContent);
+                        }
                         
                         // Create physical .md file in plan workspace
                         String workspacePath = planFileManager.createPlanMarkdownFile(plan.planId(), markdownContent);

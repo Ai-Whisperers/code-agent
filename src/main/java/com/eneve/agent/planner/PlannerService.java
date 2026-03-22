@@ -16,8 +16,6 @@ import com.eneve.agent.agent.AiCallRecord;
 import com.eneve.agent.agent.AiCallStore;
 import com.eneve.agent.agent.PromptTemplateService;
 import com.eneve.agent.util.UrlUtils;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
@@ -27,16 +25,13 @@ import jakarta.inject.Inject;
 
 /**
  * Generates an AI-powered execution plan from a specification.
- * Uses a single Claude call (no tool-use loop) to decompose a spec into
- * ordered phases and steps that can be submitted to the job queue.
+ * Uses a single Claude call (no tool-use loop) to produce a markdown plan document.
  * Follows the same single-call pattern as PrSummaryGenerator.
  */
 @ApplicationScoped
 public class PlannerService {
 
     private static final Logger LOG = Logger.getLogger(PlannerService.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
-
     @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
     String modelName;
 
@@ -56,11 +51,11 @@ public class PlannerService {
      * Generate an execution plan from a specification text.
      *
      * @param specText     the full specification (Jira ticket text, free text, etc.)
-     * @param repoUrl      the target repository URL
+     * @param repoUrl      the target repository URL (optional)
      * @param targetBranch the base branch (e.g. "main")
-     * @param sourceType   JIRA, FREE_TEXT, or URL
-     * @param sourceRef    JIRA key, URL, or null
-     * @return a DRAFT ExecutionPlan with phases and steps, or null on failure
+     * @param sourceType   JIRA, FREE_TEXT, CHAT, or URL
+     * @param sourceRef    JIRA key, conversation ID, or null
+     * @return a DRAFT ExecutionPlan with markdown content, or null on failure
      */
     public ExecutionPlan generatePlan(String specText, String repoUrl,
                                       String targetBranch, String sourceType, String sourceRef) {
@@ -69,20 +64,13 @@ public class PlannerService {
             return null;
         }
 
-        // Strip credentials once here so neither the AI prompt nor the persisted plan
-        // ever contain an auth token embedded in the repository URL.
         String safeRepoUrl = UrlUtils.stripCredentials(repoUrl);
 
         String prompt = buildPrompt(specText, safeRepoUrl, targetBranch);
         String planId = "plan-" + UUID.randomUUID();
 
-        String responseText = callClaude(prompt, planId);
-        if (responseText == null) {
-            return null;
-        }
-
-        PlanData planData = parsePlanData(responseText, planId);
-        if (planData == null) {
+        String markdownContent = callClaude(prompt, planId);
+        if (markdownContent == null) {
             return null;
         }
 
@@ -97,7 +85,7 @@ public class PlannerService {
                 safeRepoUrl,
                 targetBranch != null ? targetBranch : "main",
                 title,
-                planData,
+                new PlanData(List.of()),
                 now,
                 now,
                 null,
@@ -105,7 +93,7 @@ public class PlannerService {
                 null,
                 null,
                 null, // conversationId
-                null, // markdownContent  
+                markdownContent,
                 null  // workspacePath
         );
     }
@@ -170,64 +158,6 @@ public class PlannerService {
                 usage.inputTokens(), usage.outputTokens(), durationMs);
 
         return responseText;
-    }
-
-    private PlanData parsePlanData(String responseText, String planId) {
-        String cleaned = responseText.strip();
-        if (cleaned.startsWith("```")) {
-            int firstNewline = cleaned.indexOf('\n');
-            int lastFence = cleaned.lastIndexOf("```");
-            if (firstNewline > 0 && lastFence > firstNewline) {
-                cleaned = cleaned.substring(firstNewline + 1, lastFence).strip();
-            }
-        }
-
-        try {
-            JsonNode root = MAPPER.readTree(cleaned);
-            JsonNode phasesNode = root.path("phases");
-            if (!phasesNode.isArray()) {
-                LOG.warnf("PlannerService: response missing 'phases' array for plan %s", planId);
-                return null;
-            }
-
-            var phases = new java.util.ArrayList<PlanPhase>();
-            for (JsonNode phaseNode : phasesNode) {
-                int order = phaseNode.path("order").asInt(phases.size() + 1);
-                String name = phaseNode.path("name").asText("Phase " + order);
-                boolean gate = phaseNode.path("gateOnSuccess").asBoolean(true);
-
-                var steps = new java.util.ArrayList<PlanStep>();
-                for (JsonNode stepNode : phaseNode.path("steps")) {
-                    Map<String, String> stepParams = new java.util.LinkedHashMap<>();
-                    JsonNode paramsNode = stepNode.path("params");
-                    if (paramsNode.isObject()) {
-                        paramsNode.fields().forEachRemaining(entry ->
-                                stepParams.put(entry.getKey(), entry.getValue().asText("")));
-                    }
-
-                    String jobIdValue = stepNode.path("jobId").isNull() ? null : stepNode.path("jobId").asText(null);
-
-                    steps.add(new PlanStep(
-                            stepNode.path("stepId").asText("step-" + (steps.size() + 1)),
-                            stepNode.path("jobType").asText("FIX"),
-                            stepNode.path("title").asText(""),
-                            stepNode.path("prompt").asText(""),
-                            stepNode.path("status").asText("PENDING"),
-                            jobIdValue,
-                            stepParams,
-                            null
-                    ));
-                }
-                phases.add(new PlanPhase(order, name, gate, steps));
-            }
-
-            LOG.infof("PlannerService: parsed plan with %d phases for %s", phases.size(), planId);
-            return new PlanData(phases);
-
-        } catch (Exception e) {
-            LOG.errorf("PlannerService: failed to parse plan JSON for %s: %s", planId, e.getMessage());
-            return null;
-        }
     }
 
     private String deriveTitle(String specText, String sourceRef) {

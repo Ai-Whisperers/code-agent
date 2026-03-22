@@ -498,6 +498,9 @@ public class PlanStore {
     }
 
     private static String toJson(PlanData planData) {
+        if (planData == null) {
+            return "{\"phases\":[]}";
+        }
         try {
             return MAPPER.writeValueAsString(planData);
         } catch (JsonProcessingException e) {

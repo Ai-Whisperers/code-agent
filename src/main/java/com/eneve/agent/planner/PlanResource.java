@@ -8,8 +8,19 @@ import java.util.Optional;
 import java.util.UUID;
 
 import com.eneve.agent.agent.AiCallStore;
+import com.eneve.agent.agent.ChatEvent;
+import com.eneve.agent.agent.ClaudeToolUseLoop;
+import com.eneve.agent.agent.ToolDefinitions;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.util.UrlUtils;
+import com.eneve.agent.workspace.WorkspaceContext;
+
+import io.quarkus.security.identity.SecurityIdentity;
+import io.smallrye.common.annotation.Blocking;
+import io.smallrye.mutiny.Multi;
+import io.smallrye.mutiny.infrastructure.Infrastructure;
+import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.resteasy.reactive.RestStreamElementType;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
@@ -34,6 +45,7 @@ import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
+import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 
 /**
@@ -54,6 +66,9 @@ public class PlanResource {
     @Inject JiraService jiraService;
     @Inject PlanOrchestratorService orchestratorService;
     @Inject AiCallStore aiCallStore;
+    @Inject ClaudeToolUseLoop toolLoop;
+    @Inject SecurityIdentity securityIdentity;
+    @Inject JsonWebToken jwt;
 
     @ConfigProperty(name = "planner.enabled", defaultValue = "true")
     boolean plannerEnabled;
@@ -764,6 +779,122 @@ public class PlanResource {
         return planStore.find(planId)
                 .map(p -> Response.ok(p).build())
                 .orElse(Response.status(404).entity(Map.of("error", "Plan not found after execution start")).build());
+    }
+
+    @POST
+    @Path("/{planId}/implement")
+    @Blocking
+    @Produces(MediaType.SERVER_SENT_EVENTS)
+    @RestStreamElementType(MediaType.APPLICATION_JSON)
+    @Operation(
+            operationId = "implementPlan",
+            summary = "Implement a markdown plan via AI agent",
+            description = "Parses the plan's markdown checklist into tasks, then runs the AI tool-use loop "
+                    + "on each task. Accepts DRAFT or APPROVED plans. Streams SSE ChatEvent objects."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "SSE stream of ChatEvent JSON objects"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "409", description = "Plan is already executing or completed")
+    })
+    public Multi<ChatEvent> implement(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId) {
+
+        Optional<ExecutionPlan> existing = planStore.find(planId);
+        if (existing.isEmpty()) {
+            throw new WebApplicationException(
+                    Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build());
+        }
+
+        ExecutionPlan plan = existing.get();
+        String currentStatus = plan.status();
+        if (PlanStatus.EXECUTING.name().equals(currentStatus) || PlanStatus.COMPLETED.name().equals(currentStatus)) {
+            throw new WebApplicationException(
+                    Response.status(409).entity(Map.of("error", "Plan is already " + currentStatus)).build());
+        }
+
+        String userId = resolveUserId();
+
+        return Multi.createFrom().<ChatEvent>emitter(emitter -> {
+            planStore.updateStatus(planId, PlanStatus.EXECUTING.name());
+            emitter.emit(new ChatEvent.PlanStart(planId, plan.title()));
+
+            WorkspaceContext workspace = null;
+            try {
+                String markdownContent = plan.markdownContent();
+                if (markdownContent == null || markdownContent.isBlank()) {
+                    emitter.emit(new ChatEvent.Error("Plan has no markdown content to implement"));
+                    planStore.updateStatus(planId, PlanStatus.FAILED.name());
+                    emitter.complete();
+                    return;
+                }
+
+                List<String> tasks = extractTasks(markdownContent);
+                if (tasks.isEmpty()) {
+                    tasks = List.of(markdownContent);
+                }
+
+                workspace = WorkspaceContext.create(planId);
+                workspace.putMetadata("planId", planId);
+                workspace.setUserId(userId);
+
+                String systemPrompt = "You are an implementation agent executing a specific task from a plan. "
+                        + "Use the available tools to complete the task. "
+                        + "When done, call plan_read to see the current plan, "
+                        + "then call plan_update to mark this task as completed (change '- [ ]' to '- [x]') "
+                        + "and add a brief result note.";
+
+                for (int i = 0; i < tasks.size(); i++) {
+                    String task = tasks.get(i);
+                    LOG.infof("Plan %s: executing task %d/%d: %s", planId, i + 1, tasks.size(),
+                            task.length() > 80 ? task.substring(0, 77) + "..." : task);
+                    emitter.emit(new ChatEvent.TextDelta(
+                            "\n---\n**Task " + (i + 1) + "/" + tasks.size() + ":** " + task + "\n\n"));
+                    toolLoop.runStreaming(systemPrompt, workspace, ToolDefinitions.planExecution(),
+                            task, planId, "PLAN_IMPL", 50, emitter::emit);
+                }
+
+                planStore.updateStatus(planId, PlanStatus.COMPLETED.name());
+                emitter.emit(new ChatEvent.Done(planId));
+
+            } catch (Exception e) {
+                LOG.errorf("Plan implementation failed for %s: %s", planId, e.getMessage());
+                planStore.updateStatus(planId, PlanStatus.FAILED.name());
+                emitter.emit(new ChatEvent.Error("Implementation failed: " + e.getMessage()));
+            } finally {
+                if (workspace != null) {
+                    workspace.forceClose();
+                }
+                emitter.complete();
+            }
+        }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
+    }
+
+    private List<String> extractTasks(String markdownContent) {
+        List<String> tasks = new ArrayList<>();
+        for (String line : markdownContent.lines().toList()) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ")) {
+                tasks.add(trimmed.substring(6).trim());
+            }
+        }
+        return tasks;
+    }
+
+    private String resolveUserId() {
+        if (securityIdentity.isAnonymous()) {
+            return "anonymous";
+        }
+        try {
+            String sub = jwt.getClaim("sub");
+            if (sub != null && !sub.isBlank()) {
+                return sub;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return securityIdentity.getPrincipal().getName();
     }
 
     @POST
