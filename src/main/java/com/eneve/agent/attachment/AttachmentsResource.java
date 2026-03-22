@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import com.eneve.agent.agent.ConversationRepository;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
@@ -35,6 +36,9 @@ public class AttachmentsResource {
 
     @Inject
     AttachmentService attachmentService;
+    
+    @Inject
+    ConversationRepository conversationRepository;
 
     @POST
     @Path("/upload")
@@ -82,6 +86,25 @@ public class AttachmentsResource {
                 return Response.status(400)
                     .entity(Map.of("error", "contentType is required"))
                     .build();
+            }
+
+            // Ensure conversation exists in database before saving attachment metadata
+            // This handles the case where frontend auto-created a conversation ID that doesn't exist in DB yet
+            LOG.infof("Ensuring conversation exists in database: %s", form.conversationId);
+            try {
+                // Create conversation with placeholder title if it doesn't exist
+                // ConversationRepository.createConversation is a no-op if conversation already exists
+                String placeholderTitle = "Conversation with attachment: " + form.filename;
+                conversationRepository.createConversation(
+                    "anonymous", // TODO: Get actual user ID from security context
+                    form.conversationId,
+                    placeholderTitle,
+                    null // productId can be null
+                );
+                LOG.infof("Conversation ensured in database: %s", form.conversationId);
+            } catch (Exception e) {
+                LOG.errorf("Failed to ensure conversation exists: %s", e.getMessage());
+                // Continue anyway - might be a duplicate key exception which is fine
             }
 
             // Upload the attachment
