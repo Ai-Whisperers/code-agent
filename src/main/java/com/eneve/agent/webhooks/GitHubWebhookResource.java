@@ -1,5 +1,7 @@
 package com.eneve.agent.webhooks;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -125,11 +127,29 @@ public class GitHubWebhookResource {
             if (isMerge) {
                 LOG.infof("GitHub webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
                         prNumber, sourceBranch, targetBranch, fullName);
-                var jobIds = hookEvaluator.evaluate(org, repo, repoUrl, "merge", targetBranch);
+                        
+                // Legacy hook evaluation for backward compatibility
+                var legacyJobIds = hookEvaluator.evaluate(org, repo, repoUrl, "merge", targetBranch);
+                
+                // New generic hook evaluation with context
+                var context = Map.of(
+                        "prId", prNumber,
+                        "sourceBranch", sourceBranch,
+                        "targetBranch", targetBranch,
+                        "prTitle", prTitle,
+                        "author", prAuthor,
+                        "platform", "github"
+                );
+                var newJobIds = hookEvaluator.evaluateByTrigger(
+                        "scm.pr_merged", org, repo, repoUrl, context);
+                
+                var totalJobIds = new ArrayList<>(legacyJobIds);
+                totalJobIds.addAll(newJobIds);
+                
                 return Response.ok(Map.of(
                         "action", "hooks_evaluated",
-                        "hooksTriggered", jobIds.size(),
-                        "jobIds", jobIds
+                        "hooksTriggered", totalJobIds.size(),
+                        "jobIds", totalJobIds
                 )).build();
             }
 
@@ -155,6 +175,23 @@ public class GitHubWebhookResource {
             LOG.infof("GitHub webhook: triggering review for PR #%s (%s -> %s) on %s (head: %s)",
                     prNumber, sourceBranch, targetBranch, fullName,
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
+
+            // Evaluate hooks for PR created/updated events
+            String triggerType = action.equals("opened") ? "scm.pr_created" : "scm.pr_updated";
+            var context = Map.of(
+                    "prId", prNumber,
+                    "sourceBranch", sourceBranch,
+                    "targetBranch", targetBranch,
+                    "prTitle", prTitle,
+                    "author", prAuthor,
+                    "platform", "github"
+            );
+            var hookJobIds = hookEvaluator.evaluateByTrigger(
+                    triggerType, org, repo, repoUrl, context);
+            
+            if (!hookJobIds.isEmpty()) {
+                LOG.infof("GitHub webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            }
 
             return submitReviewJob(repoUrl, prNumber, targetBranch, jiraKey, headCommitSha);
 

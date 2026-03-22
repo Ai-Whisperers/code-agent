@@ -3,12 +3,14 @@ package com.eneve.agent.webhooks;
 import java.util.Map;
 import java.util.UUID;
 
+import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.RunFixRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -47,6 +49,7 @@ public class JiraWebhookResource {
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
+    @Inject HookEvaluator hookEvaluator;
 
     @ConfigProperty(name = "jira.agent.assignee", defaultValue = "")
     String agentAssignee;
@@ -109,7 +112,12 @@ public class JiraWebhookResource {
             LOG.infof("JIRA webhook: %s assigned to agent — triggering fix", issueKey);
 
             // Try Aikido-enriched flow first, fall back to quick-fix
-            return triggerFixJob(issueKey, fields);
+            Response response = triggerFixJob(issueKey, fields);
+
+            // Additionally evaluate hooks for Jira events
+            evaluateJiraHooks(event, issueKey, fields);
+
+            return response;
 
         } catch (Exception e) {
             LOG.errorf("JIRA webhook processing error: %s", e.getMessage());
@@ -225,6 +233,61 @@ public class JiraWebhookResource {
 
     private static Response ok(String action, String reason) {
         return Response.ok(Map.of("action", action, "reason", reason)).build();
+    }
+
+    private void evaluateJiraHooks(String event, String issueKey, JsonNode fields) {
+        try {
+            // Extract fields for context
+            String summary = fields.path("summary").asText("");
+            String projectKey = fields.path("project").path("key").asText("");
+            String issueType = fields.path("issuetype").path("name").asText("");
+            String assigneeDisplay = fields.path("assignee").path("displayName").asText("");
+            String priority = fields.path("priority").path("name").asText("");
+            
+            // Determine trigger type
+            String triggerType;
+            if (event.equals("jira:issue_created")) {
+                triggerType = "jira.issue_created";
+            } else if (event.equals("jira:issue_updated")) {
+                triggerType = "jira.issue_updated";
+            } else {
+                triggerType = "jira.issue_assigned"; // fallback for assignee changes
+            }
+            
+            // Build context map
+            var context = Map.of(
+                    "issueKey", issueKey,
+                    "summary", summary,
+                    "projectKey", projectKey,
+                    "issueType", issueType,
+                    "assignee", assigneeDisplay,
+                    "priority", priority
+            );
+            
+            // Parse workspace/repo from default repo URL if available
+            String workspace = "unknown";
+            String repoSlug = "unknown";
+            if (defaultRepoUrl != null && !defaultRepoUrl.isBlank()) {
+                try {
+                    RepoCoordinates coords = RepoCoordinates.parse(defaultRepoUrl);
+                    workspace = coords.organization();
+                    repoSlug = coords.repository();
+                } catch (IllegalArgumentException e) {
+                    LOG.debugf("Could not parse default repo URL for hook evaluation: %s", e.getMessage());
+                }
+            }
+            
+            // Evaluate hooks
+            var hookJobIds = hookEvaluator.evaluateByTrigger(
+                    triggerType, workspace, repoSlug, defaultRepoUrl, context);
+            
+            if (!hookJobIds.isEmpty()) {
+                LOG.infof("JIRA webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            }
+            
+        } catch (Exception e) {
+            LOG.warnf("Failed to evaluate Jira hooks for %s: %s", issueKey, e.getMessage());
+        }
     }
 
     private static String slugify(String text) {

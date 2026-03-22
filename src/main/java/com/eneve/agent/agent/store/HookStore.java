@@ -10,8 +10,10 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.sql.*;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -26,7 +28,7 @@ public class HookStore {
     private static final String SELECT_COLS = """
             id, name, description, enabled, trigger_type, pr_event, branch_pattern,
             cron_expr, action_type, prompt, rule_names, extra_rules, target_branch,
-            commit_direct, created_at, updated_at
+            commit_direct, repo_url, trigger_filter, created_at, updated_at
             """;
 
     @Inject
@@ -85,13 +87,34 @@ public class HookStore {
         return results;
     }
 
+    /**
+     * Returns all enabled hooks matching the given trigger type.
+     */
+    public List<AutomationHook> findByTriggerType(String triggerType) {
+        String sql = "SELECT " + SELECT_COLS
+                + " FROM automation_hooks WHERE enabled = TRUE AND trigger_type = ?";
+        List<AutomationHook> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, triggerType);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to find hooks for trigger type %s: %s", triggerType, e.getMessage());
+        }
+        return results;
+    }
+
     public void upsert(AutomationHook hook) {
         String sql = """
                 INSERT INTO automation_hooks
                     (name, description, enabled, trigger_type, pr_event, branch_pattern,
                      cron_expr, action_type, prompt, rule_names, extra_rules, target_branch,
-                     commit_direct, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                     commit_direct, repo_url, trigger_filter, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (name)
                 DO UPDATE SET description    = EXCLUDED.description,
                               enabled        = EXCLUDED.enabled,
@@ -105,6 +128,8 @@ public class HookStore {
                               extra_rules    = EXCLUDED.extra_rules,
                               target_branch  = EXCLUDED.target_branch,
                               commit_direct  = EXCLUDED.commit_direct,
+                              repo_url       = EXCLUDED.repo_url,
+                              trigger_filter = EXCLUDED.trigger_filter,
                               updated_at     = now()
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -122,6 +147,8 @@ public class HookStore {
             setNullableString(ps, 11, hook.extraRules());
             setNullableString(ps, 12, hook.targetBranch());
             ps.setBoolean(13, hook.commitDirect());
+            setNullableString(ps, 14, hook.repoUrl());
+            setNullableString(ps, 15, toJsonMap(hook.triggerFilter()));
             ps.executeUpdate();
             LOG.debugf("Upserted automation hook '%s'", hook.name());
         } catch (SQLException e) {
@@ -177,6 +204,8 @@ public class HookStore {
                 rs.getString("extra_rules"),
                 rs.getString("target_branch"),
                 rs.getBoolean("commit_direct"),
+                rs.getString("repo_url"),
+                fromJsonMap(rs.getString("trigger_filter")),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );
@@ -197,6 +226,24 @@ public class HookStore {
             return MAPPER.readValue(json, new TypeReference<>() {});
         } catch (JsonProcessingException e) {
             return List.of();
+        }
+    }
+
+    private static String toJsonMap(Map<String, String> map) {
+        if (map == null || map.isEmpty()) return null;
+        try {
+            return MAPPER.writeValueAsString(map);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
+    }
+
+    private static Map<String, String> fromJsonMap(String json) {
+        if (json == null || json.isBlank()) return Map.of();
+        try {
+            return MAPPER.readValue(json, new TypeReference<>() {});
+        } catch (JsonProcessingException e) {
+            return Map.of();
         }
     }
 

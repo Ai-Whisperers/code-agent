@@ -1,5 +1,7 @@
 package com.eneve.agent.webhooks;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -125,11 +127,29 @@ public class GitLabWebhookResource {
             if (isMerge) {
                 LOG.infof("GitLab webhook: MR !%s merged (%s -> %s) on %s — evaluating hooks",
                         mrIid, sourceBranch, targetBranch, projectPath);
-                var jobIds = hookEvaluator.evaluate(namespace, repoSlug, repoUrl, "merge", targetBranch);
+                        
+                // Legacy hook evaluation for backward compatibility
+                var legacyJobIds = hookEvaluator.evaluate(namespace, repoSlug, repoUrl, "merge", targetBranch);
+                
+                // New generic hook evaluation with context
+                var context = Map.of(
+                        "prId", mrIid,
+                        "sourceBranch", sourceBranch,
+                        "targetBranch", targetBranch,
+                        "prTitle", mrTitle,
+                        "author", mrAuthor,
+                        "platform", "gitlab"
+                );
+                var newJobIds = hookEvaluator.evaluateByTrigger(
+                        "scm.pr_merged", namespace, repoSlug, repoUrl, context);
+                
+                var totalJobIds = new ArrayList<>(legacyJobIds);
+                totalJobIds.addAll(newJobIds);
+                
                 return Response.ok(Map.of(
                         "action", "hooks_evaluated",
-                        "hooksTriggered", jobIds.size(),
-                        "jobIds", jobIds
+                        "hooksTriggered", totalJobIds.size(),
+                        "jobIds", totalJobIds
                 )).build();
             }
 
@@ -157,6 +177,23 @@ public class GitLabWebhookResource {
             LOG.infof("GitLab webhook: triggering review for MR !%s (%s -> %s) on %s (head: %s)",
                     mrIid, sourceBranch, targetBranch, projectPath,
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
+
+            // Evaluate hooks for MR opened/updated events
+            String triggerType = action.equals("open") ? "scm.pr_created" : "scm.pr_updated";
+            var context = Map.of(
+                    "prId", mrIid,
+                    "sourceBranch", sourceBranch,
+                    "targetBranch", targetBranch,
+                    "prTitle", mrTitle,
+                    "author", mrAuthor,
+                    "platform", "gitlab"
+            );
+            var hookJobIds = hookEvaluator.evaluateByTrigger(
+                    triggerType, namespace, repoSlug, repoUrl, context);
+            
+            if (!hookJobIds.isEmpty()) {
+                LOG.infof("GitLab webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            }
 
             return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey, headCommitSha);
 

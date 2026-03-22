@@ -5,6 +5,9 @@ import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.eneve.agent.agent.HookEvaluator;
+import com.eneve.agent.scm.GitPlatformService;
+
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobRecord;
@@ -40,7 +43,9 @@ public class AzureDevOpsWebhookResource {
     private static final Logger LOG = Logger.getLogger(AzureDevOpsWebhookResource.class);
     private static final Pattern JIRA_KEY_PATTERN = Pattern.compile("([A-Z][A-Z0-9]+-\\d+)");
 
+    @Inject GitPlatformService platformService;
     @Inject JobQueue jobQueue;
+    @Inject HookEvaluator hookEvaluator;
     @Inject JobStore jobStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
@@ -125,6 +130,30 @@ public class AzureDevOpsWebhookResource {
             LOG.infof("Azure DevOps webhook: triggering review for PR #%s (%s -> %s) on %s/%s (head: %s)",
                     prId, sourceBranch, destBranch, projectName, repoName,
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
+
+            // Evaluate hooks for PR created/updated/completed events
+            String triggerType;
+            switch (eventType) {
+                case "git.pullrequest.created" -> triggerType = "scm.pr_created";
+                case "git.pullrequest.updated" -> triggerType = "scm.pr_updated";
+                case "git.pullrequest.merged" -> triggerType = "scm.pr_merged";
+                default -> triggerType = "scm.pr_updated"; // fallback
+            }
+            
+            var context = Map.of(
+                    "prId", prId,
+                    "sourceBranch", sourceBranch,
+                    "targetBranch", destBranch,
+                    "prTitle", prTitle,
+                    "author", prAuthor,
+                    "platform", "azuredevops"
+            );
+            var hookJobIds = hookEvaluator.evaluateByTrigger(
+                    triggerType, projectName, repoName, repoUrl, context);
+            
+            if (!hookJobIds.isEmpty()) {
+                LOG.infof("Azure DevOps webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            }
 
             return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 

@@ -156,7 +156,9 @@ public class HooksResource {
             List<String> ruleNames,
             String extraRules,
             String targetBranch,
-            Boolean commitDirect
+            Boolean commitDirect,
+            String repoUrl,
+            Map<String, String> triggerFilter
     ) {}
 
     private AutomationHook toHook(UpsertHookRequest r) {
@@ -168,14 +170,19 @@ public class HooksResource {
                 null, name,
                 r.description(),
                 r.enabled() != null ? r.enabled() : true,
-                r.triggerType() != null ? r.triggerType() : "pr_event",
-                r.prEvent(), r.branchPattern(), r.cronExpr(),
-                r.actionType() != null ? r.actionType() : "FIX",
-                r.prompt() != null ? r.prompt() : "",
-                r.ruleNames() != null ? r.ruleNames() : List.of(),
-                r.extraRules(), r.targetBranch(),
+                r.triggerType(),
+                r.prEvent(),
+                r.branchPattern(),
+                r.cronExpr(),
+                r.actionType(),
+                r.prompt(),
+                r.ruleNames(),
+                r.extraRules(),
+                r.targetBranch(),
                 r.commitDirect() != null ? r.commitDirect() : false,
-                Instant.now(), Instant.now()
+                r.repoUrl(),
+                r.triggerFilter() != null ? r.triggerFilter() : Map.of(),
+                null, null
         );
     }
 }

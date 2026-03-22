@@ -7,6 +7,7 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoService;
@@ -46,6 +47,7 @@ public class AikidoWebhookResource {
     @Inject UpgradeService upgradeService;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject AikidoService aikidoService;
+    @Inject HookEvaluator hookEvaluator;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -103,6 +105,9 @@ public class AikidoWebhookResource {
                             repo.workspace(), repo.repoSlug(), e.getMessage());
                 }
             });
+
+            // Additionally evaluate hooks for Aikido events
+            evaluateAikidoHooks(eventType, repo, payloadNode);
 
             Map<String, Object> body = new LinkedHashMap<>();
             body.put("action", "upgrade_check_started");
@@ -250,6 +255,59 @@ public class AikidoWebhookResource {
             if (!img.isBlank()) return img;
         }
         return null;
+    }
+
+    private void evaluateAikidoHooks(String eventType, RepoSettings repo, JsonNode payload) {
+        try {
+            // Determine trigger type based on event
+            String triggerType;
+            if (eventType.toLowerCase().contains("vulnerability")) {
+                if (eventType.toLowerCase().contains("fixed") || eventType.toLowerCase().contains("resolved")) {
+                    triggerType = "aikido.vulnerability_fixed";
+                } else {
+                    triggerType = "aikido.vulnerability_new";
+                }
+            } else {
+                triggerType = "aikido.vulnerability_new"; // fallback
+            }
+
+            // Extract context from payload
+            String severity = payload.path("severity").asText(
+                    payload.path("risk_level").asText("unknown"));
+            String packageName = payload.path("package").path("name").asText(
+                    payload.path("dependency").path("name").asText("unknown"));
+            String cveId = payload.path("cve").path("id").asText(
+                    payload.path("vulnerability").path("cve_id").asText("unknown"));
+
+            var context = Map.of(
+                    "eventType", eventType,
+                    "repoSlug", repo.repoSlug(),
+                    "severity", severity,
+                    "packageName", packageName,
+                    "cveId", cveId
+            );
+
+            // Build repo URL for this repo
+            String repoUrl = null;
+            if (repo.gitPlatformUrl() != null && !repo.gitPlatformUrl().isBlank()) {
+                repoUrl = repo.gitPlatformUrl();
+            } else {
+                // Try to construct a reasonable repo URL
+                repoUrl = "https://bitbucket.org/" + repo.workspace() + "/" + repo.repoSlug() + ".git";
+            }
+
+            // Evaluate hooks
+            var hookJobIds = hookEvaluator.evaluateByTrigger(
+                    triggerType, repo.workspace(), repo.repoSlug(), repoUrl, context);
+
+            if (!hookJobIds.isEmpty()) {
+                LOG.infof("Aikido webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            }
+
+        } catch (Exception e) {
+            LOG.warnf("Failed to evaluate Aikido hooks for %s/%s: %s", 
+                    repo.workspace(), repo.repoSlug(), e.getMessage());
+        }
     }
 
     private static Response ok(String action, String reason) {

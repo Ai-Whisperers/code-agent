@@ -2,6 +2,7 @@ package com.eneve.agent.agent.model;
 
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 
 /**
  * A configurable automation hook stored in the {@code automation_hooks} table.
@@ -22,6 +23,8 @@ public record AutomationHook(
         String extraRules,
         String targetBranch,
         boolean commitDirect,
+        String repoUrl,
+        Map<String, String> triggerFilter,
         Instant createdAt,
         Instant updatedAt
 ) {}

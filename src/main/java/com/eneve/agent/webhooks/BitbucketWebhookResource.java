@@ -1,5 +1,6 @@
 package com.eneve.agent.webhooks;
 
+import java.util.ArrayList;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -110,12 +111,29 @@ public class BitbucketWebhookResource {
                 LOG.infof("Bitbucket webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
                         prId, sourceBranch, destBranch, repoFullName);
                 if (repoParts.length == 2) {
-                    var jobIds = hookEvaluator.evaluate(
+                    // Legacy hook evaluation for backward compatibility
+                    var legacyJobIds = hookEvaluator.evaluate(
                             repoParts[0], repoParts[1], repoUrl, event, destBranch);
+                    
+                    // New generic hook evaluation with context
+                    var context = Map.of(
+                            "prId", prId,
+                            "sourceBranch", sourceBranch,
+                            "targetBranch", destBranch,
+                            "prTitle", prTitle,
+                            "author", prAuthor,
+                            "platform", "bitbucket"
+                    );
+                    var newJobIds = hookEvaluator.evaluateByTrigger(
+                            "scm.pr_merged", repoParts[0], repoParts[1], repoUrl, context);
+                    
+                    var totalJobIds = new ArrayList<>(legacyJobIds);
+                    totalJobIds.addAll(newJobIds);
+                    
                     return Response.ok(Map.of(
                             "action", "hooks_evaluated",
-                            "hooksTriggered", jobIds.size(),
-                            "jobIds", jobIds
+                            "hooksTriggered", totalJobIds.size(),
+                            "jobIds", totalJobIds
                     )).build();
                 }
                 return ok("ignored", "Could not parse workspace/repo from " + repoFullName);
@@ -146,6 +164,25 @@ public class BitbucketWebhookResource {
             LOG.infof("Bitbucket webhook: triggering review for PR #%s (%s -> %s) on %s (head: %s)",
                     prId, sourceBranch, destBranch, repoFullName,
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
+
+            // Evaluate hooks for PR created/updated events
+            if (repoParts.length == 2) {
+                String triggerType = event.equals("pullrequest:created") ? "scm.pr_created" : "scm.pr_updated";
+                var context = Map.of(
+                        "prId", prId,
+                        "sourceBranch", sourceBranch,
+                        "targetBranch", destBranch,
+                        "prTitle", prTitle,
+                        "author", prAuthor,
+                        "platform", "bitbucket"
+                );
+                var hookJobIds = hookEvaluator.evaluateByTrigger(
+                        triggerType, repoParts[0], repoParts[1], repoUrl, context);
+                
+                if (!hookJobIds.isEmpty()) {
+                    LOG.infof("Bitbucket webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+                }
+            }
 
             return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 
