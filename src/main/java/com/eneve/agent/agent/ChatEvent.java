@@ -17,6 +17,7 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
         @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class, name = "thinking"),
         @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,     name = "tool_start"),
         @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,       name = "tool_end"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanStart.class,     name = "plan_start"),
         @JsonSubTypes.Type(value = ChatEvent.PlanCreated.class,   name = "plan_created"),
         @JsonSubTypes.Type(value = ChatEvent.PlanUpdated.class,   name = "plan_updated"),
         @JsonSubTypes.Type(value = ChatEvent.Done.class,          name = "done"),
@@ -42,6 +43,11 @@ public sealed interface ChatEvent {
     /** Tool execution finished. Hide the progress indicator. */
     record ToolEnd(String type, String tool, String result, long timestamp) implements ChatEvent {
         public ToolEnd(String toolName, String result) { this("tool_end", toolName, result, System.currentTimeMillis()); }
+    }
+
+    /** Plan generation has started. Show a loading indicator while waiting for the plan. */
+    record PlanStart(String type, String conversationId, String title) implements ChatEvent {
+        public PlanStart(String conversationId, String title) { this("plan_start", conversationId, title); }
     }
 
     /** A new ExecutionPlan was created during the chat conversation. */

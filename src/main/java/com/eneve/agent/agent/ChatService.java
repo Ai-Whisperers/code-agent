@@ -8,8 +8,6 @@ import java.util.UUID;
 
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.ToolUnion;
-import com.eneve.agent.attachment.AttachmentService;
-import com.eneve.agent.attachment.ChatAttachment;
 import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
@@ -87,8 +85,16 @@ public class ChatService {
                     String title = request.message().length() > AUTO_TITLE_MAX_LENGTH
                             ? request.message().substring(0, AUTO_TITLE_MAX_LENGTH)
                             : request.message();
+                    
+                    LOG.infof("Creating new conversation: %s", conversationId);
                     conversationRepository.createConversation(
                             userId, conversationId, title, request.productId());
+                    LOG.infof("Conversation created successfully: %s", conversationId);
+                    
+                    // Verify the conversation was created before proceeding
+                    if (!conversationRepository.exists(conversationId, userId)) {
+                        throw new RuntimeException("Failed to create conversation: " + conversationId);
+                    }
                 }
 
                 int priorCount = history.size();
@@ -114,22 +120,51 @@ public class ChatService {
                         "CHAT",
                         CHAT_MAX_ITERATIONS,
                         event -> {
-                            emitter.emit(event);
-                            
-                            // Check for plan generation opportunity after assistant responses
-                            if (event instanceof ChatEvent.TextDelta || event instanceof ChatEvent.Done) {
-                                checkAndGeneratePlan(request, conversationId, finalWorkspace, emitter, event);
-                            }
-                            
-                            if (event instanceof ChatEvent.Done || event instanceof ChatEvent.Error) {
-                                emitter.complete();
+                            // Handle Done events specially for plan generation
+                            if (event instanceof ChatEvent.Done) {
+                                String userMessage = request.message().toLowerCase();
+                                boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
+                                
+                                if (shouldGeneratePlan) {
+                                    // Generate plan first, then emit Done event
+                                    checkAndGeneratePlan(request, conversationId, finalWorkspace, emitter, event);
+                                    // checkAndGeneratePlan will emit the plan event, then Done, then complete
+                                } else {
+                                    // No plan needed, emit Done and complete normally
+                                    emitter.emit(event);
+                                    emitter.complete();
+                                }
+                            } else {
+                                // For all other events, emit normally
+                                emitter.emit(event);
+                                
+                                // Check for plan generation opportunity during text streaming (for early detection)
+                                if (event instanceof ChatEvent.TextDelta) {
+                                    // Log plan generation check but don't actually generate until Done
+                                    String userMessage = request.message().toLowerCase();
+                                    boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
+                                    LOG.infof("Plan generation check - mode: %s, shouldGenerate: %s, eventType: %s", 
+                                        request.mode(), shouldGeneratePlan, event.getClass().getSimpleName());
+                                }
+                                
+                                // Complete stream on error
+                                if (event instanceof ChatEvent.Error) {
+                                    emitter.complete();
+                                }
                             }
                         }
                 );
 
                 // ── Persist new messages and update timestamp ──────────
-                conversationRepository.appendMessages(conversationId, updatedHistory, priorCount);
-                conversationRepository.touch(conversationId);
+                try {
+                    LOG.infof("Persisting messages for conversation: %s", conversationId);
+                    conversationRepository.appendMessages(conversationId, updatedHistory, priorCount);
+                    conversationRepository.touch(conversationId);
+                    LOG.infof("Messages persisted successfully for conversation: %s", conversationId);
+                } catch (Exception e) {
+                    LOG.errorf("Failed to persist messages for conversation %s: %s", conversationId, e.getMessage());
+                    // Don't fail the whole chat if message persistence fails
+                }
 
                 // If the loop returned without emitting Done (shouldn't happen), complete anyway
                 emitter.complete();
@@ -316,42 +351,99 @@ public class ChatService {
             String userMessage = request.message().toLowerCase();
             boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
             
+            LOG.infof("Plan generation check - mode: %s, shouldGenerate: %s, eventType: %s", 
+                request.mode(), shouldGeneratePlan, currentEvent.getClass().getSimpleName());
+            
             if (shouldGeneratePlan && currentEvent instanceof ChatEvent.Done) {
-                // Generate execution plan based on the conversation
-                String planSummary = "Generated from chat: " + 
-                    (request.message().length() > 100 
-                        ? request.message().substring(0, 97) + "..." 
-                        : request.message());
-                        
-                ExecutionPlan plan = plannerService.generatePlan(
-                    planSummary,
-                    workspace.getMetadata("repoSlug"),
-                    "main", // default target branch
-                    "CHAT", // sourceType
-                    conversationId // sourceRef
-                );
+                LOG.infof("Checking for existing plan for conversation: %s", conversationId);
                 
-                // Update plan with conversation metadata and create workspace file
+                // First check if a plan already exists for this conversation
+                var existingPlans = planStore.findByConversationId(conversationId);
+                ExecutionPlan plan = null;
+                boolean isNewPlan = false;
+                
+                if (!existingPlans.isEmpty()) {
+                    // Use the existing plan
+                    plan = existingPlans.get(0);
+                    LOG.infof("Found existing plan for conversation: %s", plan.planId());
+                } else {
+                    // Generate plan summary first for the PlanStart event
+                    String planSummary = "Generated from chat: " + 
+                        (request.message().length() > 100 
+                            ? request.message().substring(0, 97) + "..." 
+                            : request.message());
+                    
+                    // Emit plan_start event immediately to show loading indicator with plan name
+                    LOG.infof("Emitting PlanStart event for conversation: %s with title: %s", conversationId, planSummary);
+                    emitter.emit(new ChatEvent.PlanStart(conversationId, planSummary));
+                    LOG.infof("PlanStart event emitted, beginning plan generation");
+                            
+                    LOG.infof("No existing plan found, creating new plan with summary: %s", planSummary);
+                    plan = plannerService.generatePlan(
+                        planSummary,
+                        workspace.getMetadata("repoSlug"),
+                        "main", // default target branch
+                        "CHAT", // sourceType
+                        conversationId // sourceRef
+                    );
+                    isNewPlan = true;
+                    LOG.infof("Plan generation result: %s", plan != null ? plan.planId() : "null");
+                }
+                
+                // Handle plan metadata and file creation
                 if (plan != null) {
-                    planStore.updateConversationId(plan.planId(), conversationId);
-                    
-                    // Create the markdown content and physical file using PlanFileManager
-                    String markdownContent = planFileManager.generatePlanMarkdown(plan, request.message());
-                    planStore.updateMarkdownContent(plan.planId(), markdownContent);
-                    
-                    // Create physical .md file in plan workspace
-                    String workspacePath = planFileManager.createPlanMarkdownFile(plan.planId(), markdownContent);
-                    if (workspacePath != null) {
-                        planStore.updateWorkspacePath(plan.planId(), workspacePath);
+                    if (isNewPlan) {
+                        LOG.infof("Processing new plan: %s", plan.planId());
+                        
+                        // First, save the plan to the database
+                        LOG.infof("Saving new plan to database: %s", plan.planId());
+                        planStore.create(plan);
+                        LOG.infof("Plan saved to database successfully: %s", plan.planId());
+                        
+                        // Then update the metadata
+                        planStore.updateConversationId(plan.planId(), conversationId);
+                        
+                        // Create the markdown content and physical file using PlanFileManager
+                        String markdownContent = planFileManager.generatePlanMarkdown(plan, request.message());
+                        planStore.updateMarkdownContent(plan.planId(), markdownContent);
+                        
+                        // Create physical .md file in plan workspace
+                        String workspacePath = planFileManager.createPlanMarkdownFile(plan.planId(), markdownContent);
+                        if (workspacePath != null) {
+                            planStore.updateWorkspacePath(plan.planId(), workspacePath);
+                        }
+                        
+                        LOG.infof("Emitting PlanCreated event for new plan: %s", plan.planId());
+                        // Emit plan created event
+                        emitter.emit(new ChatEvent.PlanCreated(
+                            plan.planId(),
+                            plan.title(),
+                            plan.status()
+                        ));
+                        LOG.infof("PlanCreated event emitted successfully");
+                    } else {
+                        LOG.infof("Emitting PlanUpdated event for existing plan: %s", plan.planId());
+                        // Emit plan updated event for existing plan
+                        emitter.emit(new ChatEvent.PlanUpdated(
+                            plan.planId(),
+                            plan.title(),
+                            plan.status()
+                        ));
+                        LOG.infof("PlanUpdated event emitted successfully");
                     }
                     
-                    // Emit plan created event
-                    emitter.emit(new ChatEvent.PlanCreated(
-                        plan.planId(),
-                        plan.title(),
-                        plan.status()
-                    ));
+                    // Now emit the Done event and complete the stream
+                    LOG.infof("Emitting Done event after plan event");
+                    emitter.emit(currentEvent); // This is the Done event
+                    emitter.complete();
+                } else {
+                    LOG.warnf("Plan generation returned null - no plan created");
+                    // Complete the stream even if plan creation failed
+                    emitter.complete();
                 }
+            } else if (currentEvent instanceof ChatEvent.Done && shouldGeneratePlan) {
+                LOG.infof("Plan generation skipped - not a Done event");
+                emitter.complete();
             }
         } catch (Exception e) {
             LOG.warnf("Failed to generate plan for conversation %s: %s", conversationId, e.getMessage());
