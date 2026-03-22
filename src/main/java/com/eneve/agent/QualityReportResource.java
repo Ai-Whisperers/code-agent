@@ -6,9 +6,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.QualityReport;
-import com.eneve.agent.agent.QualityReportStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.model.QualityReport;
+import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.QualityReportJobRequest;
 

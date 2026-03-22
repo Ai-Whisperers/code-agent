@@ -4,13 +4,11 @@ import com.eneve.agent.scm.azuredevops.AzureDevOpsPlatformService;
 import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
 import com.eneve.agent.scm.github.GitHubPlatformService;
 import com.eneve.agent.scm.gitlab.GitLabPlatformService;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 /**
  * CDI producer that selects the {@link GitPlatformService} implementation

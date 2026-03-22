@@ -1,29 +1,16 @@
 package com.eneve.agent.agent.handlers;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-import com.eneve.agent.agent.AgentPromptBuilder;
-import com.eneve.agent.agent.BuildAndLintHelper;
-import com.eneve.agent.agent.ClaudeToolUseLoop;
-import com.eneve.agent.agent.CoverageReporter;
-import com.eneve.agent.agent.GitWorkspaceHelper;
-import com.eneve.agent.agent.JobHandler;
-import com.eneve.agent.agent.JobLifecycleHelper;
-import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.*;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.jira.JiraService;
-import com.eneve.agent.model.GenerateTestsRequest;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.RepoCoordinates;
-import com.eneve.agent.model.RunResult;
+import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 @ApplicationScoped
 public class GenerateTestsHandler implements JobHandler {

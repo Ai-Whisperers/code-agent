@@ -4,7 +4,7 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;

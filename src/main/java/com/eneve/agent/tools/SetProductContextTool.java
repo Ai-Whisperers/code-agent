@@ -2,7 +2,7 @@ package com.eneve.agent.tools;
 
 import java.util.Map;
 
-import com.eneve.agent.agent.CustomerRegistryStore;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 

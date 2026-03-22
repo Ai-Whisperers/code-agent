@@ -3,6 +3,8 @@ package com.eneve.agent.agent;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
+import com.eneve.agent.agent.store.JobStore;
+
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 

@@ -3,8 +3,8 @@ package com.eneve.agent.tools;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.KnowledgeEmbeddingStore;
-import com.eneve.agent.agent.KnowledgeSearchService;
+import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.service.KnowledgeSearchService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;

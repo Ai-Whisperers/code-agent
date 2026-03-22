@@ -3,7 +3,7 @@ package com.eneve.agent;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.ConversationRepository;
+import com.eneve.agent.agent.store.ConversationRepository;
 import com.eneve.agent.attachment.AttachmentService;
 import com.eneve.agent.model.ConversationSummary;
 import com.eneve.agent.planner.PlanStore;

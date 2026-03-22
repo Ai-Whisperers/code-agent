@@ -1,6 +1,10 @@
 package com.eneve.agent.agent;
 
 import java.time.Instant;
+import com.eneve.agent.agent.store.AiCallStore;
+import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.model.ChatEvent;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -288,6 +292,31 @@ public class ClaudeToolUseLoop {
      * @param iterationCap      maximum tool-use iterations before giving up
      * @param eventSink         callback that receives each {@link ChatEvent}
      */
+    /**
+     * Run the streaming loop with prior conversation history and content blocks.
+     *
+     * <p>The new user message content blocks are appended to {@code priorHistory} and the resulting
+     * full conversation is passed to Claude. Returns the updated message list so the
+     * caller can persist it for subsequent turns.
+     *
+     * @param priorHistory messages from earlier turns in this conversation (may be empty)
+     * @param userContentBlocks content blocks for the new user message (text, images, etc.)
+     * @return the full message list including the newly completed turn
+     */
+    public List<MessageParam> runStreaming(String systemPrompt, WorkspaceContext workspace,
+                                           List<ToolUnion> tools, List<ContentBlockParam> userContentBlocks,
+                                           List<MessageParam> priorHistory,
+                                           String jobId, String jobType, int iterationCap,
+                                           Consumer<ChatEvent> eventSink) {
+        List<MessageParam> messages = new ArrayList<>(priorHistory);
+        messages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .contentOfBlockParams(userContentBlocks)
+                .build());
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink);
+        return messages;
+    }
+
     /**
      * Run the streaming loop with prior conversation history.
      *

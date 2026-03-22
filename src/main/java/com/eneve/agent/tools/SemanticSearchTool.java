@@ -3,8 +3,8 @@ package com.eneve.agent.tools;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.EmbeddingStore;
-import com.eneve.agent.agent.VoyageEmbeddingService;
+import com.eneve.agent.agent.store.EmbeddingStore;
+import com.eneve.agent.agent.service.VoyageEmbeddingService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;

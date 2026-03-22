@@ -8,6 +8,8 @@ import java.util.TreeSet;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.eneve.agent.agent.model.CommentContext;
+import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.diff.DiffFormatter;

@@ -1,17 +1,16 @@
 package com.eneve.agent.mcp;
 
+import com.eneve.agent.agent.store.AiCallStore;
+import com.eneve.agent.tools.ToolExecutor;
+import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
+
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
-
-import com.eneve.agent.agent.AiCallStore;
-import com.eneve.agent.tools.ToolExecutor;
-import com.eneve.agent.workspace.WorkspaceContext;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-import org.jboss.logging.Logger;
 
 /**
  * MCP tool: Get daily aggregated AI call statistics.

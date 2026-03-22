@@ -3,7 +3,7 @@ package com.eneve.agent.tools;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.CodeGraphStore;
+import com.eneve.agent.agent.store.CodeGraphStore;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;

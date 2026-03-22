@@ -1,6 +1,6 @@
 package com.eneve.agent.agent;
 
-import com.eneve.agent.agent.QualityReport.TestPresenceSection;
+import com.eneve.agent.agent.model.QualityReport.TestPresenceSection;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

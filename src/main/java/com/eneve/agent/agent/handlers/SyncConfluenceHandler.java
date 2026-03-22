@@ -1,30 +1,24 @@
 package com.eneve.agent.agent.handlers;
 
+import com.eneve.agent.agent.JobHandler;
+import com.eneve.agent.agent.JobLifecycleHelper;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.confluence.ConfluenceService;
+import com.eneve.agent.model.*;
+import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-import com.eneve.agent.agent.JobHandler;
-import com.eneve.agent.agent.JobLifecycleHelper;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.RepoSettings;
-import com.eneve.agent.agent.RepoSettingsStore;
-import com.eneve.agent.confluence.ConfluenceService;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.RepoCoordinates;
-import com.eneve.agent.model.SyncConfluenceRequest;
-import com.eneve.agent.workspace.WorkspaceContext;
 
 @ApplicationScoped
 public class SyncConfluenceHandler implements JobHandler {

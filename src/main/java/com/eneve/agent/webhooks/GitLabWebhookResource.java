@@ -7,8 +7,8 @@ import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;

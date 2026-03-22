@@ -12,9 +12,9 @@ import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.Usage;
-import com.eneve.agent.agent.AiCallRecord;
-import com.eneve.agent.agent.AiCallStore;
-import com.eneve.agent.agent.PromptTemplateService;
+import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.store.AiCallStore;
+import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.util.UrlUtils;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;

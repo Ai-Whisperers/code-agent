@@ -3,10 +3,10 @@ package com.eneve.agent;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.CustomerRegistryStore;
-import com.eneve.agent.agent.KnowledgeEmbeddingStore;
-import com.eneve.agent.agent.KnowledgeIndexerService;
-import com.eneve.agent.agent.KnowledgeSearchService;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.service.KnowledgeIndexerService;
+import com.eneve.agent.agent.service.KnowledgeSearchService;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;

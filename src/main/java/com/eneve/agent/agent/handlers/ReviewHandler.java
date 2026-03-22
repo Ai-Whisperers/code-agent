@@ -1,51 +1,29 @@
 package com.eneve.agent.agent.handlers;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Base64;
-import java.util.Collections;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-import com.eneve.agent.agent.AgentPools;
-import com.eneve.agent.agent.AgentPromptBuilder;
-import com.eneve.agent.agent.ClaudeToolUseLoop;
-import com.eneve.agent.agent.CodeGraphIndexer;
-import com.eneve.agent.agent.CodeGraphQueryService;
-import com.eneve.agent.agent.CodeGraphStore;
-import com.eneve.agent.agent.CommentStore;
-import com.eneve.agent.agent.EmbeddingIndexer;
-import com.eneve.agent.agent.FindingResolver;
-import com.eneve.agent.agent.JobHandler;
-import com.eneve.agent.agent.JobLifecycleHelper;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.MermaidPngRenderer;
-import com.eneve.agent.agent.OpenFinding;
-import com.eneve.agent.agent.PrSummaryGenerator;
-import com.eneve.agent.agent.RepoSettingsStore;
-import com.eneve.agent.agent.ReviewCommentProcessor;
-import com.eneve.agent.agent.ToolDefinitions;
+import com.eneve.agent.agent.*;
+import com.eneve.agent.agent.model.OpenFinding;
+import com.eneve.agent.agent.service.CodeGraphQueryService;
+import com.eneve.agent.agent.store.CodeGraphStore;
+import com.eneve.agent.agent.store.CommentStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
 import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.jira.JiraService;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.RepoCoordinates;
-import com.eneve.agent.model.ReviewPrRequest;
-import com.eneve.agent.model.RunResult;
+import com.eneve.agent.model.*;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import java.nio.charset.StandardCharsets;
+import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 @ApplicationScoped
 public class ReviewHandler implements JobHandler {

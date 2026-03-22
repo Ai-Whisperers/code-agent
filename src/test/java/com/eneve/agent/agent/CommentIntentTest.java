@@ -1,5 +1,6 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.model.CommentIntent;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;

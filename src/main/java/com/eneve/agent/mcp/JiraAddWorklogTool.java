@@ -1,15 +1,14 @@
 package com.eneve.agent.mcp;
 
-import java.util.Map;
-import java.util.Optional;
-
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * MCP tool: Add a worklog to a Jira issue.

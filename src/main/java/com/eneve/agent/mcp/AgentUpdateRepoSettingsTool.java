@@ -1,16 +1,15 @@
 package com.eneve.agent.mcp;
 
-import java.util.List;
-import java.util.Map;
-
-import com.eneve.agent.agent.RepoSettingsStore;
-import com.eneve.agent.agent.WebhookSyncService;
+import com.eneve.agent.agent.service.WebhookSyncService;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.List;
+import java.util.Map;
 
 /**
  * MCP tool: Update repository settings (create or replace).

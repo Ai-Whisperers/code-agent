@@ -1,16 +1,15 @@
 package com.eneve.agent.mcp;
 
-import java.util.Map;
-
-import com.eneve.agent.agent.CommentFeedbackStore;
-import com.eneve.agent.agent.CommentStore;
+import com.eneve.agent.agent.store.CommentFeedbackStore;
+import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
 
 /**
  * MCP tool: Get review quality metrics for a repository.

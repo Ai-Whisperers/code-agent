@@ -1,6 +1,10 @@
 package com.eneve.agent.agent;
 
 import java.time.Instant;
+import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.model.MemoryEntry;
+import com.eneve.agent.agent.model.CommentContext;
+
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -12,6 +16,9 @@ import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.Usage;
+import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.agent.store.AiCallStore;
+import com.eneve.agent.agent.store.MemoryStore;
 import com.eneve.agent.scm.ThreadComment;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -36,9 +43,12 @@ public class LearningExtractor {
     String fastModelName;
 
     @Inject AnthropicClient client;
-    @Inject AiCallStore aiCallStore;
-    @Inject MemoryStore memoryStore;
-    @Inject PromptTemplateService promptTemplates;
+    @Inject
+    AiCallStore aiCallStore;
+    @Inject
+    MemoryStore memoryStore;
+    @Inject
+    PromptTemplateService promptTemplates;
 
     /**
      * Analyse the conversation thread and, if it contains a generalizable

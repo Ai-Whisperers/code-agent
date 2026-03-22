@@ -250,6 +250,46 @@ public class AttachmentService {
         }
     }
 
+    /**
+     * Get attachment content bytes from S3
+     */
+    public byte[] getAttachmentContent(ChatAttachment attachment) {
+        try {
+            GetObjectRequest getRequest = GetObjectRequest.builder()
+                    .bucket(attachment.s3Bucket())
+                    .key(attachment.s3Key())
+                    .build();
+            
+            return s3Client.getObjectAsBytes(getRequest).asByteArray();
+        } catch (Exception e) {
+            LOG.errorf("Failed to get attachment content for %s: %s", attachment.attachmentId(), e.getMessage());
+            throw new RuntimeException("Failed to fetch attachment content from S3", e);
+        }
+    }
+
+    /**
+     * Update message_id for attachments after they've been sent in a message
+     */
+    public void linkAttachmentsToMessage(List<String> attachmentIds, Long messageId) {
+        if (attachmentIds == null || attachmentIds.isEmpty() || messageId == null) {
+            return;
+        }
+        
+        String sql = "UPDATE chat_attachments SET message_id = ? WHERE attachment_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (String attachmentId : attachmentIds) {
+                ps.setLong(1, messageId);
+                ps.setString(2, attachmentId);
+                ps.addBatch();
+            }
+            ps.executeBatch();
+            LOG.infof("Linked %d attachments to message %s", attachmentIds.size(), messageId);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to link attachments to message %s: %s", messageId, e.getMessage());
+        }
+    }
+
     private ChatAttachment saveAttachmentMetadata(ChatAttachment attachment) {
         String sql = """
                 INSERT INTO chat_attachments 

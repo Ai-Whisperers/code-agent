@@ -6,14 +6,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import com.eneve.agent.agent.model.QualityReport;
+import com.eneve.agent.agent.model.QualityReport.*;
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
-import com.eneve.agent.agent.QualityReport.AikidoSection;
-import com.eneve.agent.agent.QualityReport.ComplexitySection;
-import com.eneve.agent.agent.QualityReport.CoverageSection;
-import com.eneve.agent.agent.QualityReport.LinterSection;
-import com.eneve.agent.agent.QualityReport.ReviewSection;
-import com.eneve.agent.agent.QualityReport.TestPresenceSection;
+import com.eneve.agent.agent.store.CommentFeedbackStore;
+import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.linter.LinterFinding;

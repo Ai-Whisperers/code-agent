@@ -10,7 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
-import com.eneve.agent.agent.CodeMetricsStore;
+import com.eneve.agent.agent.store.CodeMetricsStore;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;

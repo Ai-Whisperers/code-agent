@@ -7,8 +7,8 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import com.eneve.agent.agent.RepoSettings;
-import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

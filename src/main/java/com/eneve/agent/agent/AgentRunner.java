@@ -1,20 +1,19 @@
 package com.eneve.agent.agent;
 
-import java.util.Map;
-import java.util.stream.Collectors;
-
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Instance;
-import jakarta.inject.Inject;
-
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.scm.GitPlatformService;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Instance;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
+
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Thin dispatcher: resolves the correct {@link JobHandler} for a job type and delegates to it.

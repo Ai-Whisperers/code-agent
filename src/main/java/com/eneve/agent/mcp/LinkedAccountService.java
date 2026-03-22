@@ -1,17 +1,16 @@
 package com.eneve.agent.mcp;
 
-import java.util.List;
-import java.util.Optional;
-
-import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.confluence.ConfluenceService;
-import com.eneve.agent.settings.SettingsEncryption;
+import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.mcp.LinkedAccountStore.AccountRow;
-
+import com.eneve.agent.settings.SettingsEncryption;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.jboss.logging.Logger;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import java.util.List;
+import java.util.Optional;
 
 /**
  * Service for managing user-linked Jira and Confluence accounts.

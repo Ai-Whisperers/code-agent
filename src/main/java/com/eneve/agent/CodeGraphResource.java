@@ -4,8 +4,8 @@ import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import com.eneve.agent.agent.CodeGraphBuildService;
-import com.eneve.agent.agent.CodeGraphStore;
+import com.eneve.agent.agent.service.CodeGraphBuildService;
+import com.eneve.agent.agent.store.CodeGraphStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

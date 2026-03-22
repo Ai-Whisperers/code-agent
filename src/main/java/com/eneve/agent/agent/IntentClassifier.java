@@ -1,6 +1,9 @@
 package com.eneve.agent.agent;
 
 import java.time.Instant;
+import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.model.CommentIntent;
+
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -13,6 +16,8 @@ import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
 import com.anthropic.models.messages.Usage;
 
+import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.agent.store.AiCallStore;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 

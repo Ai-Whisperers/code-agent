@@ -1,14 +1,13 @@
 package com.eneve.agent.mcp;
 
-import java.util.Map;
-
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
 
 /**
  * MCP tool: Update the markdown content of the active plan.

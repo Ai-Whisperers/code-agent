@@ -1,5 +1,14 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.store.MemoryStore;
+import com.eneve.agent.agent.store.CommentFeedbackStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.model.MemoryEntry;
+import com.eneve.agent.agent.model.CommentFeedbackEntry;
+import com.eneve.agent.agent.model.CommentContext;
+
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;

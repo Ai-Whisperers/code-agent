@@ -7,8 +7,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
-import com.eneve.agent.agent.AiCallStore;
-import com.eneve.agent.agent.ChatEvent;
+import com.eneve.agent.agent.store.AiCallStore;
+import com.eneve.agent.agent.model.ChatEvent;
 import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.ToolDefinitions;
 import com.eneve.agent.jira.JiraService;

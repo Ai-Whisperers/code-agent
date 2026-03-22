@@ -1,5 +1,15 @@
 package com.eneve.agent.scm.github;
 
+import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scm.ThreadComment;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.inject.Typed;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -11,18 +21,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ForkJoinPool;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import com.eneve.agent.scm.AgentComment;
-import com.eneve.agent.scm.GitPlatformService;
-import com.eneve.agent.scm.ThreadComment;
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.enterprise.inject.Typed;
 
 /**
  * GitHub REST API v3 implementation of {@link GitPlatformService}.

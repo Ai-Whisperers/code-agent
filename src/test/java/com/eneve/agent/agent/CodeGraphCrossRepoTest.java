@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.service.CodeGraphQueryService;
+import com.eneve.agent.agent.store.CodeGraphStore;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

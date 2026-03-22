@@ -4,8 +4,8 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.AutomationHook;
-import com.eneve.agent.agent.HookStore;
+import com.eneve.agent.agent.model.AutomationHook;
+import com.eneve.agent.agent.store.HookStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

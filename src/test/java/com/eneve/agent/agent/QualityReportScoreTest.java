@@ -1,13 +1,15 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.model.QualityReport;
+
 import java.util.Map;
 
-import com.eneve.agent.agent.QualityReport.AikidoSection;
-import com.eneve.agent.agent.QualityReport.ComplexitySection;
-import com.eneve.agent.agent.QualityReport.CoverageSection;
-import com.eneve.agent.agent.QualityReport.LinterSection;
-import com.eneve.agent.agent.QualityReport.ReviewSection;
-import com.eneve.agent.agent.QualityReport.TestPresenceSection;
+import com.eneve.agent.agent.model.QualityReport.AikidoSection;
+import com.eneve.agent.agent.model.QualityReport.ComplexitySection;
+import com.eneve.agent.agent.model.QualityReport.CoverageSection;
+import com.eneve.agent.agent.model.QualityReport.LinterSection;
+import com.eneve.agent.agent.model.QualityReport.ReviewSection;
+import com.eneve.agent.agent.model.QualityReport.TestPresenceSection;
 
 import org.junit.jupiter.api.Test;
 

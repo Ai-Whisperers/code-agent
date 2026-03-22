@@ -3,8 +3,8 @@ package com.eneve.agent;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.MemoryEntry;
-import com.eneve.agent.agent.MemoryStore;
+import com.eneve.agent.agent.model.MemoryEntry;
+import com.eneve.agent.agent.store.MemoryStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

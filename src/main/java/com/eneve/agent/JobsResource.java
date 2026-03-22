@@ -2,7 +2,7 @@ package com.eneve.agent;
 
 import java.util.List;
 
-import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
 import com.eneve.agent.model.JobType;

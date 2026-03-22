@@ -3,9 +3,9 @@ package com.eneve.agent;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.RepoSettings;
-import com.eneve.agent.agent.RepoSettingsStore;
-import com.eneve.agent.agent.WebhookSyncService;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.service.WebhookSyncService;
 
 import org.jboss.logging.Logger;
 

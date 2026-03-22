@@ -1,18 +1,16 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.util.ProcessHelper;
+import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
-
-import com.eneve.agent.util.ProcessHelper;
-import com.eneve.agent.workspace.WorkspaceContext;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
 
 @ApplicationScoped
 public class BuildValidator {

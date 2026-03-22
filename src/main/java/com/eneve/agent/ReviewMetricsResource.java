@@ -3,8 +3,8 @@ package com.eneve.agent;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
-import com.eneve.agent.agent.CommentFeedbackStore;
-import com.eneve.agent.agent.CommentStore;
+import com.eneve.agent.agent.store.CommentFeedbackStore;
+import com.eneve.agent.agent.store.CommentStore;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;

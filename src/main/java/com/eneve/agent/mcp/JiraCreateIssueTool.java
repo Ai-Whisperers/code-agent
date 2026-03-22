@@ -1,16 +1,15 @@
 package com.eneve.agent.mcp;
 
-import java.util.Map;
-import java.util.Optional;
-
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
+import java.util.Optional;
 
 /**
  * MCP tool: Create a new Jira issue.

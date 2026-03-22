@@ -3,7 +3,7 @@ package com.eneve.agent;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.CustomerRegistryStore;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.model.ConfluenceProductConfig;
 import com.eneve.agent.model.CustomerConfig;
 import com.eneve.agent.model.EnvironmentConfig;

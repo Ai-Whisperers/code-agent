@@ -5,8 +5,8 @@ import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.AiCallRecord;
-import com.eneve.agent.agent.AiCallStore;
+import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.store.AiCallStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

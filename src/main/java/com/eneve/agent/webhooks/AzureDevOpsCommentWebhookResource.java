@@ -3,12 +3,12 @@ package com.eneve.agent.webhooks;
 import java.util.Map;
 import java.util.UUID;
 
-import com.eneve.agent.agent.CommentContext;
-import com.eneve.agent.agent.CommentIntent;
-import com.eneve.agent.agent.CommentStore;
+import com.eneve.agent.agent.model.CommentContext;
+import com.eneve.agent.agent.model.CommentIntent;
+import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.IntentClassifier;
 import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;

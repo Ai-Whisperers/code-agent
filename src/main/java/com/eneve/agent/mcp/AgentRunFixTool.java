@@ -1,18 +1,17 @@
 package com.eneve.agent.mcp;
 
-import java.util.Map;
-import java.util.UUID;
-
 import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.JobStore;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.Map;
+import java.util.UUID;
 
 /**
  * MCP tool: Submit a code-fix job to the agent queue.

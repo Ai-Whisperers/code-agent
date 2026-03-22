@@ -2,8 +2,8 @@ package com.eneve.agent;
 
 import java.util.Map;
 
-import com.eneve.agent.agent.ChatEvent;
-import com.eneve.agent.agent.ChatService;
+import com.eneve.agent.agent.model.ChatEvent;
+import com.eneve.agent.agent.service.ChatService;
 import com.eneve.agent.model.ChatRequest;
 
 import io.quarkus.security.identity.SecurityIdentity;

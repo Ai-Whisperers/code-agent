@@ -13,8 +13,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
-import com.eneve.agent.agent.RepoSettings;
-import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.security.WebhookSignatureFilter;
 import com.eneve.agent.upgrade.UpgradeService;

@@ -1,23 +1,17 @@
 package com.eneve.agent.agent.handlers;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
 import com.eneve.agent.agent.JobHandler;
 import com.eneve.agent.agent.JobLifecycleHelper;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.QualityReport;
 import com.eneve.agent.agent.QualityReportCollector;
-import com.eneve.agent.agent.QualityReportStore;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.QualityReportJobRequest;
-import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.agent.model.QualityReport;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.QualityReportStore;
+import com.eneve.agent.model.*;
 import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
 
 /**
  * Handles {@link JobType#QUALITY_REPORT} jobs.

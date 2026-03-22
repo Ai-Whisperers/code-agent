@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
 
-import com.eneve.agent.agent.QualityReport.TestPresenceSection;
+import com.eneve.agent.agent.model.QualityReport.TestPresenceSection;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import org.jboss.logging.Logger;

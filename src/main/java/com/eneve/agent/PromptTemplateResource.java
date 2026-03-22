@@ -2,8 +2,8 @@ package com.eneve.agent;
 
 import java.util.Map;
 
-import com.eneve.agent.agent.PromptTemplateService;
-import com.eneve.agent.agent.PromptTemplateStore;
+import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.agent.store.PromptTemplateStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;

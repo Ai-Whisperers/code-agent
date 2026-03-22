@@ -1,6 +1,6 @@
 package com.eneve.agent.tools;
 
-import com.eneve.agent.agent.CustomerRegistryStore;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.workspace.WorkspaceContext;

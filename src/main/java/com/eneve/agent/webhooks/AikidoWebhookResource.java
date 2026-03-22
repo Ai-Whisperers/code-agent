@@ -7,8 +7,8 @@ import java.util.Optional;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import com.eneve.agent.agent.RepoSettings;
-import com.eneve.agent.agent.RepoSettingsStore;
+import com.eneve.agent.agent.model.RepoSettings;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.upgrade.UpgradeService;
 import com.fasterxml.jackson.databind.JsonNode;

@@ -1,18 +1,21 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.model.AutomationHook;
+import com.eneve.agent.agent.store.HookStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.model.HookJobRequest;
+import com.eneve.agent.model.JobRecord;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
+
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
-
-import com.eneve.agent.model.HookJobRequest;
-import com.eneve.agent.model.JobRecord;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-import org.jboss.logging.Logger;
 
 /**
  * Evaluates automation hooks against incoming events and submits matching
@@ -23,10 +26,13 @@ public class HookEvaluator {
 
     private static final Logger LOG = Logger.getLogger(HookEvaluator.class);
 
-    @Inject HookStore hookStore;
-    @Inject RepoSettingsStore repoSettingsStore;
+    @Inject
+    HookStore hookStore;
+    @Inject
+    RepoSettingsStore repoSettingsStore;
     @Inject JobQueue jobQueue;
-    @Inject JobStore jobStore;
+    @Inject
+    JobStore jobStore;
 
     /**
      * Evaluates all hooks matching the given PR event and destination branch.

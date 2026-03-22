@@ -1,34 +1,21 @@
 package com.eneve.agent.agent.handlers;
 
-import java.util.Collections;
-import java.util.Map;
-import java.util.Optional;
-
-import org.eclipse.microprofile.config.inject.ConfigProperty;
-import org.jboss.logging.Logger;
-
-import jakarta.enterprise.context.ApplicationScoped;
-import jakarta.inject.Inject;
-
-import com.eneve.agent.agent.AgentPromptBuilder;
-import com.eneve.agent.agent.BuildAndLintHelper;
-import com.eneve.agent.agent.ClaudeToolUseLoop;
-import com.eneve.agent.agent.CommentContext;
-import com.eneve.agent.agent.CommentStore;
-import com.eneve.agent.agent.GitWorkspaceHelper;
-import com.eneve.agent.agent.JobHandler;
-import com.eneve.agent.agent.JobLifecycleHelper;
-import com.eneve.agent.agent.JobStore;
-import com.eneve.agent.agent.LearningExtractor;
-import com.eneve.agent.agent.ToolDefinitions;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.JobStatus;
-import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.ReplyCommentRequest;
-import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.agent.*;
+import com.eneve.agent.agent.model.CommentContext;
+import com.eneve.agent.agent.store.CommentStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
 import com.eneve.agent.workspace.WorkspaceContext;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.jboss.logging.Logger;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.Optional;
 
 @ApplicationScoped
 public class FixCommentHandler implements JobHandler {
