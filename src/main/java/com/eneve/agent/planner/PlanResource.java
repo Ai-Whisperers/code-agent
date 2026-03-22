@@ -13,6 +13,8 @@ import com.eneve.agent.util.UrlUtils;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.eclipse.microprofile.openapi.annotations.media.Content;
+import org.eclipse.microprofile.openapi.annotations.media.Schema;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
 import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
@@ -720,6 +722,107 @@ public class PlanResource {
                 .orElse(Response.status(404).entity(Map.of("error", "Plan not found after execution start")).build());
     }
 
+    @POST
+    @Path("/{planId}/approve-pr")
+    @Operation(
+            operationId = "approvePlanPr",
+            summary = "Approve and merge the plan's pull request",
+            description = "Merges the pull request created by the completed plan. "
+                    + "Only available for COMPLETED plans that have a PR URL."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "PR merged successfully"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "409", description = "Plan has no PR or is not in COMPLETED status"),
+            @APIResponse(responseCode = "500", description = "Merge failed")
+    })
+    public Response approvePlanPr(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId) {
+
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
+        }
+
+        ExecutionPlan plan = planOpt.get();
+        if (!PlanStatus.COMPLETED.name().equals(plan.status())) {
+            return Response.status(409)
+                    .entity(Map.of("error", "Only COMPLETED plans can have their PRs approved (current: " + plan.status() + ")"))
+                    .build();
+        }
+
+        if (plan.prUrl() == null || plan.prUrl().isBlank()) {
+            return Response.status(409)
+                    .entity(Map.of("error", "Plan has no pull request to approve"))
+                    .build();
+        }
+
+        try {
+            planStore.approvePlanPr(planId, plan.prUrl());
+            LOG.infof("Plan %s PR approved and merged: %s", planId, plan.prUrl());
+            return Response.ok(Map.of("status", "merged", "planId", planId, "prUrl", plan.prUrl())).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to approve PR for plan %s: %s", planId, e.getMessage());
+            return Response.status(500)
+                    .entity(Map.of("error", "Failed to merge PR: " + e.getMessage()))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/{planId}/reject-pr")
+    @Operation(
+            operationId = "rejectPlanPr",
+            summary = "Reject and decline the plan's pull request",
+            description = "Declines the pull request created by the completed plan with an optional reason. "
+                    + "Only available for COMPLETED plans that have a PR URL."
+    )
+    @RequestBody(
+            description = "Optional rejection reason",
+            content = @Content(schema = @Schema(implementation = RejectPrRequest.class))
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "PR declined"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "409", description = "Plan has no PR or is not in COMPLETED status")
+    })
+    public Response rejectPlanPr(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId,
+            RejectPrRequest request) {
+
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
+        }
+
+        ExecutionPlan plan = planOpt.get();
+        if (!PlanStatus.COMPLETED.name().equals(plan.status())) {
+            return Response.status(409)
+                    .entity(Map.of("error", "Only COMPLETED plans can have their PRs rejected (current: " + plan.status() + ")"))
+                    .build();
+        }
+
+        if (plan.prUrl() == null || plan.prUrl().isBlank()) {
+            return Response.status(409)
+                    .entity(Map.of("error", "Plan has no pull request to reject"))
+                    .build();
+        }
+
+        String reason = request != null ? request.reason() : null;
+        try {
+            planStore.rejectPlanPr(planId, plan.prUrl(), reason);
+            LOG.infof("Plan %s PR rejected: %s (reason: %s)", planId, plan.prUrl(), reason);
+            return Response.ok(Map.of("status", "rejected", "planId", planId, "prUrl", plan.prUrl())).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to reject PR for plan %s: %s", planId, e.getMessage());
+            return Response.status(500)
+                    .entity(Map.of("error", "Failed to decline PR: " + e.getMessage()))
+                    .build();
+        }
+    }
+
     @DELETE
     @Path("/{planId}")
     @Operation(
@@ -812,4 +915,6 @@ public class PlanResource {
                     example = "false")
             boolean autoExecute
     ) {}
+
+    public record RejectPrRequest(String reason) {}
 }

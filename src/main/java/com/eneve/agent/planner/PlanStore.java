@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
+import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.util.UrlUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,6 +34,9 @@ public class PlanStore {
 
     @Inject
     AgroalDataSource dataSource;
+
+    @Inject
+    GitPlatformService platformService;
 
     public void create(ExecutionPlan plan) {
         String sql = """
@@ -297,6 +302,59 @@ public class PlanStore {
             LOG.errorf("Failed to delete execution plan %s: %s", planId, e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Approves and merges the pull request for a completed plan.
+     */
+    public void approvePlanPr(String planId, String prUrl) {
+        Optional<ExecutionPlan> planOpt = find(planId);
+        if (planOpt.isEmpty()) {
+            throw new RuntimeException("Plan not found: " + planId);
+        }
+        
+        ExecutionPlan plan = planOpt.get();
+        try {
+            RepoCoordinates coords = RepoCoordinates.parse(plan.repoUrl());
+            String prId = extractPrIdFromUrl(prUrl);
+            platformService.mergePullRequest(coords.organization(), coords.project(), coords.repository(), prId);
+            LOG.infof("Plan %s PR approved and merged: %s", planId, prUrl);
+        } catch (Exception e) {
+            LOG.errorf("Failed to approve PR for plan %s: %s", planId, e.getMessage());
+            throw new RuntimeException("Failed to merge PR: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Rejects and declines the pull request for a completed plan.
+     */
+    public void rejectPlanPr(String planId, String prUrl, String reason) {
+        Optional<ExecutionPlan> planOpt = find(planId);
+        if (planOpt.isEmpty()) {
+            throw new RuntimeException("Plan not found: " + planId);
+        }
+        
+        ExecutionPlan plan = planOpt.get();
+        try {
+            RepoCoordinates coords = RepoCoordinates.parse(plan.repoUrl());
+            String prId = extractPrIdFromUrl(prUrl);
+            platformService.declinePullRequest(coords.organization(), coords.project(), coords.repository(), prId);
+            LOG.infof("Plan %s PR rejected: %s (reason: %s)", planId, prUrl, reason);
+        } catch (Exception e) {
+            LOG.errorf("Failed to reject PR for plan %s: %s", planId, e.getMessage());
+            throw new RuntimeException("Failed to decline PR: " + e.getMessage(), e);
+        }
+    }
+
+    private String extractPrIdFromUrl(String prUrl) {
+        // Extract PR ID from Bitbucket URL format: https://bitbucket.org/workspace/repo/pull-requests/123
+        if (prUrl != null && prUrl.contains("/pull-requests/")) {
+            String[] parts = prUrl.split("/pull-requests/");
+            if (parts.length > 1) {
+                return parts[1].split("/")[0]; // Get just the PR number
+            }
+        }
+        throw new IllegalArgumentException("Cannot extract PR ID from URL: " + prUrl);
     }
 
     // ─── Private helpers ────────────────────────────────────────────────
