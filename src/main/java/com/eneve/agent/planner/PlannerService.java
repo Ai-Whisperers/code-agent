@@ -103,7 +103,10 @@ public class PlannerService {
                 null,
                 null,
                 null,
-                null
+                null,
+                null, // conversationId
+                null, // markdownContent  
+                null  // workspacePath
         );
     }
 

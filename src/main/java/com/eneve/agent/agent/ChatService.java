@@ -12,6 +12,9 @@ import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
+import com.eneve.agent.planner.PlannerService;
+import com.eneve.agent.planner.PlanStore;
+import com.eneve.agent.planner.ExecutionPlan;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import io.smallrye.mutiny.Multi;
@@ -46,6 +49,8 @@ public class ChatService {
     @Inject ConversationRepository conversationRepository;
     @Inject CustomerRegistryStore registryStore;
     @Inject PromptTemplateService promptTemplateService;
+    @Inject PlannerService plannerService;
+    @Inject PlanStore planStore;
 
     /**
      * Start or resume a streaming chat conversation.
@@ -92,6 +97,9 @@ public class ChatService {
                 // ── Run the streaming loop ─────────────────────────────
                 String systemPrompt = buildSystemPrompt(request.productId());
                 List<ToolUnion> tools = ToolDefinitions.chat();
+                
+                // Create final reference for lambda
+                final WorkspaceContext finalWorkspace = workspace;
 
                 List<MessageParam> updatedHistory = toolLoop.runStreaming(
                         systemPrompt,
@@ -104,6 +112,12 @@ public class ChatService {
                         CHAT_MAX_ITERATIONS,
                         event -> {
                             emitter.emit(event);
+                            
+                            // Check for plan generation opportunity after assistant responses
+                            if (event instanceof ChatEvent.TextDelta || event instanceof ChatEvent.Done) {
+                                checkAndGeneratePlan(request, conversationId, finalWorkspace, emitter, event);
+                            }
+                            
                             if (event instanceof ChatEvent.Done || event instanceof ChatEvent.Error) {
                                 emitter.complete();
                             }
@@ -287,4 +301,63 @@ public class ChatService {
 
         return sb.toString();
     }
+
+    /**
+     * Checks if the conversation context indicates a need for plan generation and creates ExecutionPlan if appropriate.
+     * This method analyzes chat content for plan-worthy requests like feature development, bug fixes, or code changes.
+     */
+    private void checkAndGeneratePlan(ChatRequest request, String conversationId, WorkspaceContext workspace, 
+                                    io.smallrye.mutiny.subscription.MultiEmitter<? super ChatEvent> emitter, ChatEvent currentEvent) {
+        try {
+            // Simple heuristic: look for plan-generating keywords in user message
+            String userMessage = request.message().toLowerCase();
+            boolean shouldGeneratePlan = containsPlanTriggers(userMessage);
+            
+            if (shouldGeneratePlan && currentEvent instanceof ChatEvent.Done) {
+                // Generate execution plan based on the conversation
+                String planSummary = "Generated from chat: " + 
+                    (request.message().length() > 100 
+                        ? request.message().substring(0, 97) + "..." 
+                        : request.message());
+                        
+                ExecutionPlan plan = plannerService.generatePlan(
+                    planSummary,
+                    workspace.getMetadata("repoSlug"),
+                    "main", // default target branch
+                    "CHAT", // sourceType
+                    conversationId // sourceRef
+                );
+                
+                // Update plan with conversation metadata
+                if (plan != null) {
+                    planStore.updateConversationId(plan.planId(), conversationId);
+                    planStore.updateMarkdownContent(plan.planId(), request.message());
+                    
+                    // Emit plan created event
+                    emitter.emit(new ChatEvent.PlanCreated(
+                        plan.planId(),
+                        plan.title(),
+                        plan.status()
+                    ));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to generate plan for conversation %s: %s", conversationId, e.getMessage());
+        }
+    }
+    
+    /**
+     * Checks if the user message contains keywords that suggest plan generation is appropriate.
+     */
+    private boolean containsPlanTriggers(String message) {
+        String[] triggers = {
+            "implement", "create", "build", "develop", "add feature", "fix bug", 
+            "refactor", "update", "modify", "change", "improve", "optimize",
+            "can you", "please", "help me", "i need", "how to"
+        };
+        
+        return java.util.Arrays.stream(triggers)
+                .anyMatch(message::contains);
+    }
+    
 }

@@ -260,7 +260,11 @@ public class PlanResource {
                 null,
                 null,
                 null,
-                null);
+                null,
+                null, // conversationId
+                null, // markdownContent  
+                null  // workspacePath
+        );
 
         planStore.create(plan);
         LOG.infof("Quality improvement plan %s created for %s (CC threshold=%d, maxIter=%d)",

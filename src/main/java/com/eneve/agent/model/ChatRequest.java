@@ -13,5 +13,8 @@ public record ChatRequest(
         String productId,
 
         @Schema(description = "Optional conversation ID for future multi-turn support")
-        String conversationId
+        String conversationId,
+
+        @Schema(description = "Optional attachment IDs to include in the request")
+        java.util.List<String> attachmentIds
 ) {}

@@ -21,5 +21,8 @@ public record ExecutionPlan(
         Instant approvedAt,
         String summary,
         String errorMessage,
-        String prUrl
+        String prUrl,
+        String conversationId, // Link to chat conversation that generated this plan
+        String markdownContent, // Human-readable markdown representation of the plan
+        String workspacePath // Path to the .md file in the workspace
 ) {}
