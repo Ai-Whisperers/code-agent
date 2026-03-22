@@ -47,6 +47,9 @@ import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
+import jakarta.ws.rs.core.Context;
+import jakarta.ws.rs.sse.SseEventSink;
+import jakarta.ws.rs.sse.Sse;
 
 /**
  * REST endpoints for creating, reviewing, editing, and approving execution plans.
@@ -65,6 +68,7 @@ public class PlanResource {
     @Inject PlanStore planStore;
     @Inject JiraService jiraService;
     @Inject PlanOrchestratorService orchestratorService;
+    @Inject PlanEventService planEventService;
     @Inject AiCallStore aiCallStore;
     @Inject ClaudeToolUseLoop toolLoop;
     @Inject SecurityIdentity securityIdentity;
@@ -1092,4 +1096,160 @@ public class PlanResource {
     ) {}
 
     public record RejectPrRequest(String reason) {}
+
+    // ─── Real-Time Events & Execution Control ──────────────────────────────
+
+    @GET
+    @Path("/{planId}/events")
+    @Produces(MediaType.SERVER_SENT_EVENTS)
+    @Operation(
+            operationId = "streamPlanEvents",
+            summary = "Stream real-time plan execution events",
+            description = "Subscribe to Server-Sent Events for plan execution progress updates"
+    )
+    @APIResponse(responseCode = "200", description = "Event stream started")
+    public void streamEvents(
+            @PathParam("planId") String planId,
+            @Context SseEventSink sink,
+            @Context Sse sse) {
+        
+        LOG.infof("Client subscribing to events for plan: %s", planId);
+        
+        // Verify plan exists and user has access
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            sink.close();
+            return;
+        }
+        
+        // Subscribe to plan events
+        planEventService.subscribeToPlan(planId, sink);
+        
+        // Send initial connection confirmation
+        try {
+            sink.send(sse.newEventBuilder()
+                    .name("connected")
+                    .data("Connected to plan events for " + planId)
+                    .build());
+        } catch (Exception e) {
+            LOG.warnf("Failed to send initial event for plan %s: %s", planId, e.getMessage());
+        }
+    }
+
+    @POST
+    @Path("/{planId}/pause")
+    @Operation(
+            operationId = "pausePlanExecution", 
+            summary = "Pause plan execution",
+            description = "Pause the execution of a running plan"
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Plan paused successfully"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "400", description = "Plan is not in a pausable state")
+    })
+    public Response pauseExecution(@PathParam("planId") String planId) {
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Plan not found"))
+                    .build();
+        }
+        
+        ExecutionPlan plan = planOpt.get();
+
+        if (!"RUNNING".equals(plan.status())) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "Plan is not currently running"))
+                    .build();
+        }
+
+        try {
+            orchestratorService.pausePlan(planId);
+            return Response.ok(Map.of("message", "Plan execution paused")).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to pause plan %s: %s", planId, e.getMessage());
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity(Map.of("error", "Failed to pause plan"))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/{planId}/resume")
+    @Operation(
+            operationId = "resumePlanExecution",
+            summary = "Resume plan execution", 
+            description = "Resume execution of a paused plan"
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Plan resumed successfully"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "400", description = "Plan is not in a resumable state")
+    })
+    public Response resumeExecution(@PathParam("planId") String planId) {
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Plan not found"))
+                    .build();
+        }
+        
+        ExecutionPlan plan = planOpt.get();
+
+        if (!"PAUSED".equals(plan.status())) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "Plan is not currently paused"))
+                    .build();
+        }
+
+        try {
+            orchestratorService.resumePlan(planId);
+            return Response.ok(Map.of("message", "Plan execution resumed")).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to resume plan %s: %s", planId, e.getMessage());
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity(Map.of("error", "Failed to resume plan"))
+                    .build();
+        }
+    }
+
+    @POST
+    @Path("/{planId}/cancel")
+    @Operation(
+            operationId = "cancelPlanExecution",
+            summary = "Cancel plan execution",
+            description = "Cancel the execution of a running or paused plan"
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Plan cancelled successfully"),
+            @APIResponse(responseCode = "404", description = "Plan not found"),
+            @APIResponse(responseCode = "400", description = "Plan is not in a cancellable state")
+    })
+    public Response cancelExecution(@PathParam("planId") String planId) {
+        Optional<ExecutionPlan> planOpt = planStore.find(planId);
+        if (planOpt.isEmpty()) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Plan not found"))
+                    .build();
+        }
+        
+        ExecutionPlan plan = planOpt.get();
+
+        if (!"RUNNING".equals(plan.status()) && !"PAUSED".equals(plan.status())) {
+            return Response.status(Response.Status.BAD_REQUEST)
+                    .entity(Map.of("error", "Plan is not currently running or paused"))
+                    .build();
+        }
+
+        try {
+            orchestratorService.cancelPlan(planId);
+            return Response.ok(Map.of("message", "Plan execution cancelled")).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to cancel plan %s: %s", planId, e.getMessage());
+            return Response.status(Response.Status.INTERNAL_SERVER_ERROR)
+                    .entity(Map.of("error", "Failed to cancel plan"))
+                    .build();
+        }
+    }
 }

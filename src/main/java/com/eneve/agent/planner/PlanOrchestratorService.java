@@ -91,6 +91,7 @@ public class PlanOrchestratorService {
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject GitPlatformService platformService;
     @Inject Event<PlanCompletedEvent> planCompletedEvent;
+    @Inject Event<PlanOrchestratorEvent> orchestratorEvent;
 
     @ConfigProperty(name = "git.username")
     String gitUser;
@@ -182,6 +183,13 @@ public class PlanOrchestratorService {
         String stepError = "FAILED".equals(stepStatus) ? event.errorMessage() : null;
         planStore.updateStepInPlan(tracked.planId(), tracked.stepId(), stepStatus, event.jobId(), stepError);
 
+        // Fire step completion event
+        String eventType = "SUCCESS".equals(stepStatus) ? "STEP_COMPLETED" : "STEP_FAILED";
+        orchestratorEvent.fireAsync(new PlanOrchestratorEvent(
+            eventType, tracked.planId(), tracked.phaseOrder(), tracked.stepId(), 
+            null, null, stepError
+        ));
+
         // When a METRICS step succeeds, evaluate whether the quality loop should continue
         // or terminate. This must happen before checkPhaseCompletion advances the plan.
         if (isSuccess(event.status()) && tracked.isMetricsStep()) {
@@ -257,6 +265,20 @@ public class PlanOrchestratorService {
         List<PlanPhase> sorted = phases.stream()
                 .sorted(Comparator.comparingInt(PlanPhase::order))
                 .toList();
+
+        // Fire phase completed event for the phase that just finished
+        if (completedPhaseOrder >= 0) {
+            PlanPhase completedPhase = sorted.stream()
+                    .filter(p -> p.order() == completedPhaseOrder)
+                    .findFirst()
+                    .orElse(null);
+            if (completedPhase != null) {
+                orchestratorEvent.fireAsync(new PlanOrchestratorEvent(
+                    "PHASE_COMPLETED", plan.planId(), completedPhaseOrder, 
+                    null, null, completedPhase.name(), null
+                ));
+            }
+        }
 
         PlanPhase next = null;
         for (PlanPhase p : sorted) {
@@ -753,6 +775,12 @@ public class PlanOrchestratorService {
 
         planStore.updateStatus(planId, PlanStatus.COMPLETED.name());
         planCompletedEvent.fireAsync(new PlanCompletedEvent(planId, PlanStatus.COMPLETED.name()));
+        
+        // Fire plan completion event for SSE clients
+        orchestratorEvent.fireAsync(new PlanOrchestratorEvent(
+            "PLAN_COMPLETED", planId, null, null, null, null, null
+        ));
+        
         cleanup(planId);
     }
 
@@ -814,6 +842,179 @@ public class PlanOrchestratorService {
         String trimmed = prUrl.stripTrailing().replaceAll("/$", "");
         int slash = trimmed.lastIndexOf('/');
         return slash >= 0 ? trimmed.substring(slash + 1) : trimmed;
+    }
+
+    // ─── Execution Control Methods ──────────────────────────────────────────────
+
+    /**
+     * Pause execution of a running plan
+     */
+    public void pausePlan(String planId) {
+        synchronized (lockFor(planId)) {
+            ExecutionPlan plan = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
+            
+            if (!"RUNNING".equals(plan.status())) {
+                throw new IllegalStateException("Plan is not currently running: " + planId);
+            }
+
+            // Update plan status to PAUSED
+            planStore.updateStatus(planId, "PAUSED");
+            LOG.infof("Plan execution paused: %s", planId);
+        }
+    }
+
+    /**
+     * Resume execution of a paused plan
+     */
+    public void resumePlan(String planId) {
+        synchronized (lockFor(planId)) {
+            ExecutionPlan plan = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
+            
+            if (!"PAUSED".equals(plan.status())) {
+                throw new IllegalStateException("Plan is not currently paused: " + planId);
+            }
+
+            // Update plan status back to RUNNING and continue execution
+            planStore.updateStatus(planId, "RUNNING");
+            LOG.infof("Plan execution resumed: %s", planId);
+            
+            // Find the next step to execute and continue from where we left off
+            continueExecution(planId);
+        }
+    }
+
+    /**
+     * Cancel execution of a running or paused plan
+     */
+    public void cancelPlan(String planId) {
+        synchronized (lockFor(planId)) {
+            ExecutionPlan plan = planStore.find(planId)
+                    .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
+            
+            if (!"RUNNING".equals(plan.status()) && !"PAUSED".equals(plan.status())) {
+                throw new IllegalStateException("Plan is not currently running or paused: " + planId);
+            }
+
+            // Update plan status to CANCELLED
+            planStore.updateStatus(planId, "CANCELLED");
+            
+            // Remove from tracking and clean up resources
+            cleanup(planId);
+            
+            LOG.infof("Plan execution cancelled: %s", planId);
+        }
+    }
+
+    /**
+     * Execute a single step within a plan
+     */
+    private void executeStep(String planId, int phaseOrder, PlanStep step) {
+        try {
+            ExecutionPlan plan = planStore.find(planId).orElse(null);
+            if (plan == null) {
+                LOG.errorf("Plan not found when trying to execute step: %s", planId);
+                return;
+            }
+
+            // Map step to job
+            JobRecord job = mapStepToJob(step, plan);
+            if (job == null) {
+                LOG.warnf("Could not map step %s (jobType=%s) in plan %s — marking as skipped",
+                        step.stepId(), step.jobType(), planId);
+                planStore.updateStepInPlan(planId, step.stepId(), "SKIPPED", null, null);
+                return;
+            }
+
+            // Tag job with plan ID
+            job.setPlanId(planId);
+
+            // Submit job to queue
+            boolean accepted = jobQueue.submit(job);
+            if (!accepted) {
+                LOG.errorf("Job queue rejected job for step %s in plan %s", step.stepId(), planId);
+                planStore.updateStepInPlan(planId, step.stepId(), "FAILED", job.getJobId(), "Job queue full");
+                planStore.updateStatusAndError(planId, "FAILED", "Job queue full when submitting step \"" + step.stepId() + "\"");
+                cleanup(planId);
+                return;
+            }
+
+            // Track the job
+            boolean isMetrics = "METRICS".equalsIgnoreCase(step.jobType());
+            trackedJobs.put(job.getJobId(), new TrackedStep(planId, step.stepId(), phaseOrder, isMetrics));
+            
+            // Update step status to RUNNING
+            planStore.updateStepInPlan(planId, step.stepId(), "RUNNING", job.getJobId(), null);
+            
+            // Fire step started event
+            orchestratorEvent.fireAsync(new PlanOrchestratorEvent(
+                "STEP_STARTED", planId, phaseOrder, step.stepId(), step.title(), null, null
+            ));
+            
+            LOG.infof("Executed step %s (%s) in plan %s with job %s", 
+                    step.stepId(), step.jobType(), planId, job.getJobId());
+
+        } catch (Exception e) {
+            LOG.errorf("Failed to execute step %s in plan %s: %s", step.stepId(), planId, e.getMessage());
+            planStore.updateStepInPlan(planId, step.stepId(), "FAILED", null, "Execution error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Continue execution from the current state of a plan
+     */
+    private void continueExecution(String planId) {
+        try {
+            ExecutionPlan plan = planStore.find(planId).orElse(null);
+            if (plan == null) return;
+
+            PlanData planData = plan.planData();
+            if (planData == null || planData.phases() == null) return;
+
+            // Find the next pending step to execute
+            for (PlanPhase phase : planData.phases()) {
+                boolean hasRunningStep = false;
+                boolean hasFailedStep = false;
+                
+                for (PlanStep step : phase.steps()) {
+                    if ("RUNNING".equals(step.status())) {
+                        hasRunningStep = true;
+                        break;
+                    }
+                    if ("FAILED".equals(step.status())) {
+                        hasFailedStep = true;
+                        break;
+                    }
+                    if ("PENDING".equals(step.status())) {
+                        // Found the next step to execute
+                        executeStep(planId, phase.order(), step);
+                        return;
+                    }
+                }
+
+                // If we have a running step, wait for it to complete
+                if (hasRunningStep) {
+                    return;
+                }
+
+                // If we have a failed step and gateOnSuccess is true, stop execution
+                if (hasFailedStep && phase.gateOnSuccess()) {
+                    planStore.updateStatusAndError(planId, "FAILED", "Phase " + phase.order() + " failed");
+                    cleanup(planId);
+                    return;
+                }
+            }
+
+            // If we get here, all steps are completed
+            planStore.updateStatus(planId, "COMPLETED");
+            cleanup(planId);
+            
+        } catch (Exception e) {
+            LOG.errorf("Failed to continue execution for plan %s: %s", planId, e.getMessage());
+            planStore.updateStatusAndError(planId, "FAILED", "Execution error: " + e.getMessage());
+            cleanup(planId);
+        }
     }
 
     // ─── Inner record ─────────────────────────────────────────────────────────────
