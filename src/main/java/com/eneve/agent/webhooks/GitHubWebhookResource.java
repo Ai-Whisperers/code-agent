@@ -138,7 +138,8 @@ public class GitHubWebhookResource {
                         "targetBranch", targetBranch,
                         "prTitle", prTitle,
                         "author", prAuthor,
-                        "platform", "github"
+                        "platform", "github",
+                        "repoSlug", repo
                 );
                 var newJobIds = hookEvaluator.evaluateByTrigger(
                         "scm.pr_merged", org, repo, repoUrl, context);
@@ -184,7 +185,8 @@ public class GitHubWebhookResource {
                     "targetBranch", targetBranch,
                     "prTitle", prTitle,
                     "author", prAuthor,
-                    "platform", "github"
+                    "platform", "github",
+                    "repoSlug", repo
             );
             var hookJobIds = hookEvaluator.evaluateByTrigger(
                     triggerType, org, repo, repoUrl, context);

@@ -279,12 +279,24 @@ public class AikidoWebhookResource {
             String cveId = payload.path("cve").path("id").asText(
                     payload.path("vulnerability").path("cve_id").asText("unknown"));
 
+            // Extract issue type using same field strategy as AikidoService
+            String issueType = "unknown";
+            for (String field : new String[]{"type", "issue_type", "category", "scanner",
+                    "rule_type", "detection_type", "scan_type", "finding_type"}) {
+                JsonNode n = payload.path(field);
+                if (!n.isMissingNode() && !n.isNull() && !n.asText("").isBlank()) {
+                    issueType = n.asText("").toLowerCase();
+                    break;
+                }
+            }
+
             var context = Map.of(
                     "eventType", eventType,
                     "repoSlug", repo.repoSlug(),
                     "severity", severity,
                     "packageName", packageName,
-                    "cveId", cveId
+                    "cveId", cveId,
+                    "issueType", issueType
             );
 
             // Build repo URL for this repo

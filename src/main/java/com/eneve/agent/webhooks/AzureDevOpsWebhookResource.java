@@ -146,7 +146,8 @@ public class AzureDevOpsWebhookResource {
                     "targetBranch", destBranch,
                     "prTitle", prTitle,
                     "author", prAuthor,
-                    "platform", "azuredevops"
+                    "platform", "azuredevops",
+                    "repoSlug", repoName
             );
             var hookJobIds = hookEvaluator.evaluateByTrigger(
                     triggerType, projectName, repoName, repoUrl, context);

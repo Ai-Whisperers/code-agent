@@ -122,7 +122,8 @@ public class BitbucketWebhookResource {
                             "targetBranch", destBranch,
                             "prTitle", prTitle,
                             "author", prAuthor,
-                            "platform", "bitbucket"
+                            "platform", "bitbucket",
+                            "repoSlug", repoParts[1]
                     );
                     var newJobIds = hookEvaluator.evaluateByTrigger(
                             "scm.pr_merged", repoParts[0], repoParts[1], repoUrl, context);
@@ -174,7 +175,8 @@ public class BitbucketWebhookResource {
                         "targetBranch", destBranch,
                         "prTitle", prTitle,
                         "author", prAuthor,
-                        "platform", "bitbucket"
+                        "platform", "bitbucket",
+                        "repoSlug", repoParts[1]
                 );
                 var hookJobIds = hookEvaluator.evaluateByTrigger(
                         triggerType, repoParts[0], repoParts[1], repoUrl, context);

@@ -119,12 +119,28 @@ public class HookEvaluator {
         if (context == null) {
             return false; // Filter exists but no context provided
         }
-        
+
         // All filter entries must match context values
         for (Map.Entry<String, String> entry : filter.entrySet()) {
             String contextValue = context.get(entry.getKey());
-            if (contextValue == null || !contextValue.equals(entry.getValue())) {
+            if (contextValue == null) {
                 return false;
+            }
+            String filterValue = entry.getValue();
+            // Support comma-separated values: any match is sufficient (OR semantics)
+            if (filterValue.contains(",")) {
+                boolean anyMatch = false;
+                for (String candidate : filterValue.split(",")) {
+                    if (contextValue.equalsIgnoreCase(candidate.trim())) {
+                        anyMatch = true;
+                        break;
+                    }
+                }
+                if (!anyMatch) return false;
+            } else {
+                if (!contextValue.equalsIgnoreCase(filterValue.trim())) {
+                    return false;
+                }
             }
         }
         return true;

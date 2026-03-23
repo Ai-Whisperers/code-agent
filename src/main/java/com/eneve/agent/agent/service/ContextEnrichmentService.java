@@ -282,12 +282,10 @@ public class ContextEnrichmentService {
             List<AikidoIssueInfo> issues = new ArrayList<>();
             for (Integer issueId : aikidoIssueIds) {
                 try {
-                    // Note: We would need an individual fetch method in AikidoService
-                    // For now, this is a placeholder that could be implemented
-                    // AikidoIssueInfo issue = aikidoService.getIssueById(issueId);
-                    // if (issue != null) {
-                    //     issues.add(issue);
-                    // }
+                    AikidoIssueInfo issue = aikidoService.getIssueGroupDetail(issueId);
+                    if (issue != null) {
+                        issues.add(issue);
+                    }
                 } catch (Exception e) {
                     LOG.warnf("Failed to fetch Aikido issue %d: %s", issueId, e.getMessage());
                 }
@@ -343,15 +341,13 @@ public class ContextEnrichmentService {
                 return "";
             }
 
-            List<ConfluenceService.ConfluencePage> pages = new ArrayList<>();
+            List<ConfluenceService.PageContent> pages = new ArrayList<>();
             for (String pageId : confluenceDocIds) {
                 try {
-                    // Note: We would need an individual fetch method in ConfluenceService
-                    // For now, this is a placeholder that could be implemented
-                    // ConfluenceService.ConfluencePage page = confluenceService.getPageById(pageId, confluenceCreds.get());
-                    // if (page != null) {
-                    //     pages.add(page);
-                    // }
+                    ConfluenceService.PageContent page = confluenceService.getPage(pageId, confluenceCreds.get());
+                    if (page != null) {
+                        pages.add(page);
+                    }
                 } catch (Exception e) {
                     LOG.warnf("Failed to fetch Confluence page %s: %s", pageId, e.getMessage());
                 }
@@ -364,14 +360,22 @@ public class ContextEnrichmentService {
             StringBuilder section = new StringBuilder();
             section.append("## Confluence Documents in Context\n\n");
 
-            for (ConfluenceService.ConfluencePage page : pages) {
+            for (ConfluenceService.PageContent page : pages) {
                 section.append("### ").append(page.title()).append("\n");
                 section.append("**Page ID**: ").append(page.pageId()).append("\n");
-                
+
                 if (page.url() != null) {
                     section.append("**URL**: ").append(page.url()).append("\n");
                 }
-                
+
+                if (page.body() != null && !page.body().isBlank()) {
+                    String body = page.body().trim();
+                    if (body.length() > 1000) {
+                        body = body.substring(0, 1000) + "...";
+                    }
+                    section.append("**Content**:\n").append(body).append("\n");
+                }
+
                 section.append("\n");
             }
 

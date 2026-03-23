@@ -138,7 +138,8 @@ public class GitLabWebhookResource {
                         "targetBranch", targetBranch,
                         "prTitle", mrTitle,
                         "author", mrAuthor,
-                        "platform", "gitlab"
+                        "platform", "gitlab",
+                        "repoSlug", repoSlug
                 );
                 var newJobIds = hookEvaluator.evaluateByTrigger(
                         "scm.pr_merged", namespace, repoSlug, repoUrl, context);
@@ -186,7 +187,8 @@ public class GitLabWebhookResource {
                     "targetBranch", targetBranch,
                     "prTitle", mrTitle,
                     "author", mrAuthor,
-                    "platform", "gitlab"
+                    "platform", "gitlab",
+                    "repoSlug", repoSlug
             );
             var hookJobIds = hookEvaluator.evaluateByTrigger(
                     triggerType, namespace, repoSlug, repoUrl, context);
