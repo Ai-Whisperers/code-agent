@@ -144,12 +144,8 @@ public class LookupCustomerTool implements ToolExecutor {
                                 sb.append("  - IAM Role: ").append(env.aws().iamRole()).append("\n");
                             }
                         }
-                        if (env.deployedRepos() != null && !env.deployedRepos().isEmpty()) {
-                            sb.append("  - Repos: ").append(String.join(", ", env.deployedRepos())).append("\n");
-                        }
                     }
                     sb.append("\n");
-                }
             });
         }
 
