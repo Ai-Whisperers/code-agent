@@ -11,6 +11,7 @@ import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.attachment.AttachmentService;
 import com.eneve.agent.attachment.ChatAttachment;
 import com.eneve.agent.model.ChatRequest;
+import com.eneve.agent.model.ConversationContext;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
@@ -57,6 +58,7 @@ public class ChatService {
     @Inject PlanStore planStore;
     @Inject PlanFileManager planFileManager;
     @Inject AttachmentService attachmentService;
+    @Inject ContextEnrichmentService contextEnrichmentService;
 
     /**
      * Start or resume a streaming chat conversation.
@@ -113,7 +115,7 @@ public class ChatService {
                         request.message(), request.attachmentIds());
 
                 // ── Run the streaming loop ─────────────────────────────
-                String systemPrompt = buildSystemPrompt(request.productId());
+                String systemPrompt = buildSystemPrompt(request.productId(), request.conversationContext(), userId);
                 List<ToolUnion> tools = ToolDefinitions.chat();
                 
                 // Create final reference for lambda
@@ -236,7 +238,7 @@ public class ChatService {
     // System prompt construction
     // ──────────────────────────────────────────────────────────────────────
 
-    private String buildSystemPrompt(String productId) {
+    private String buildSystemPrompt(String productId, ConversationContext conversationContext, String userId) {
         String customerName = "Engineering";
         String productContext = "";
 
@@ -254,10 +256,27 @@ public class ChatService {
                     + "to list all available products and identify which one the user is asking about.\n\n";
         }
 
-        return promptTemplateService.resolve("chat-system", Map.of(
+        // Enrich conversation context if present
+        String enrichedContext = "";
+        if (conversationContext != null) {
+            try {
+                enrichedContext = contextEnrichmentService.enrichContext(conversationContext, userId);
+                if (!enrichedContext.isEmpty()) {
+                    LOG.infof("Enriched conversation context with %d characters of detail", enrichedContext.length());
+                }
+            } catch (Exception e) {
+                LOG.warnf("Failed to enrich conversation context: %s", e.getMessage());
+                // Continue without enriched context - graceful degradation
+            }
+        }
+
+        Map<String, String> templateVars = Map.of(
                 "CUSTOMER_NAME", customerName,
-                "PRODUCT_CONTEXT", productContext
-        ));
+                "PRODUCT_CONTEXT", productContext,
+                "CONVERSATION_CONTEXT", enrichedContext
+        );
+
+        return promptTemplateService.resolve("chat-system", templateVars);
     }
 
     // ──────────────────────────────────────────────────────────────────────
