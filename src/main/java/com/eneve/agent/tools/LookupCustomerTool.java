@@ -146,6 +146,7 @@ public class LookupCustomerTool implements ToolExecutor {
                         }
                     }
                     sb.append("\n");
+                }
             });
         }
 
