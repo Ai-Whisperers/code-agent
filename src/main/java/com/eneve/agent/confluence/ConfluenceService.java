@@ -57,6 +57,10 @@ public class ConfluenceService {
                 && apiToken != null && !apiToken.isBlank();
     }
 
+    public boolean isConfigured() {
+        return isEnabled();
+    }
+
     // Getters for system credentials (used by LinkedAccountService for fallback)
     public String getBaseUrl() { return baseUrl; }
     public String getUser() { return user; }

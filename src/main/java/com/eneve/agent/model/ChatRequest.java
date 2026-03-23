@@ -20,5 +20,8 @@ public record ChatRequest(
 
         @Schema(description = "Chat mode: 'ask' for questions, 'plan' for planning requests", 
                 example = "ask")
-        String mode
+        String mode,
+
+        @Schema(description = "Optional conversation context including customers, products, and issues")
+        ConversationContext conversationContext
 ) {}

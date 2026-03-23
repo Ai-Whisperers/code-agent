@@ -446,21 +446,27 @@ public class JiraService {
      */
     public java.util.List<JiraIssueDetail> searchIssues(String jql, int maxResults) {
         int cap = Math.min(Math.max(1, maxResults), 100);
-        String fields = "summary,description,status,reporter,assignee,labels,comment,attachment";
-        String encodedJql;
+        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment");
+
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var body = mapper.createObjectNode();
+        body.put("jql", jql);
+        body.set("fields", mapper.valueToTree(fieldsList));
+        body.put("maxResults", cap);
+        body.put("expand", "renderedFields");
+
+        String jsonBody;
         try {
-            encodedJql = java.net.URLEncoder.encode(jql, StandardCharsets.UTF_8);
+            jsonBody = mapper.writeValueAsString(body);
         } catch (Exception e) {
-            LOG.warnf("Failed to encode JQL: %s", e.getMessage());
+            LOG.warnf("Failed to serialize search request: %s", e.getMessage());
             return java.util.List.of();
         }
-        String path = "/rest/api/3/search?jql=" + encodedJql
-                + "&fields=" + fields + "&maxResults=" + cap + "&expand=renderedFields";
-        String json = get(path, "search issues");
+
+        String json = postForBody("/rest/api/3/search/jql", jsonBody, "search issues");
         if (json == null) return java.util.List.of();
 
         try {
-            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
             var root = mapper.readTree(json);
             var issues = root.path("issues");
             if (!issues.isArray()) return java.util.List.of();
