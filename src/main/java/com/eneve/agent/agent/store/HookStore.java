@@ -26,7 +26,7 @@ public class HookStore {
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
     private static final String SELECT_COLS = """
-            id, name, description, enabled, trigger_type, pr_event, branch_pattern,
+            id, name, description, enabled, trigger_types, pr_event, branch_pattern,
             cron_expr, action_type, prompt, rule_names, extra_rules, target_branch,
             commit_direct, repo_url, trigger_filter, created_at, updated_at
             """;
@@ -70,11 +70,11 @@ public class HookStore {
      */
     public List<AutomationHook> findByTrigger(String triggerType, String prEvent) {
         String sql = "SELECT " + SELECT_COLS
-                + " FROM automation_hooks WHERE enabled = TRUE AND trigger_type = ? AND pr_event = ?";
+                + " FROM automation_hooks WHERE enabled = TRUE AND trigger_types @> ?::jsonb AND pr_event = ?";
         List<AutomationHook> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, triggerType);
+            ps.setString(1, "[\"" + triggerType + "\"]");
             ps.setString(2, prEvent);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
@@ -92,11 +92,11 @@ public class HookStore {
      */
     public List<AutomationHook> findByTriggerType(String triggerType) {
         String sql = "SELECT " + SELECT_COLS
-                + " FROM automation_hooks WHERE enabled = TRUE AND trigger_type = ?";
+                + " FROM automation_hooks WHERE enabled = TRUE AND trigger_types @> ?::jsonb";
         List<AutomationHook> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, triggerType);
+            ps.setString(1, "[\"" + triggerType + "\"]");
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     results.add(mapRow(rs));
@@ -111,14 +111,14 @@ public class HookStore {
     public void upsert(AutomationHook hook) {
         String sql = """
                 INSERT INTO automation_hooks
-                    (name, description, enabled, trigger_type, pr_event, branch_pattern,
+                    (name, description, enabled, trigger_types, pr_event, branch_pattern,
                      cron_expr, action_type, prompt, rule_names, extra_rules, target_branch,
                      commit_direct, repo_url, trigger_filter, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (name)
                 DO UPDATE SET description    = EXCLUDED.description,
                               enabled        = EXCLUDED.enabled,
-                              trigger_type   = EXCLUDED.trigger_type,
+                              trigger_types  = EXCLUDED.trigger_types,
                               pr_event       = EXCLUDED.pr_event,
                               branch_pattern = EXCLUDED.branch_pattern,
                               cron_expr      = EXCLUDED.cron_expr,
@@ -137,7 +137,7 @@ public class HookStore {
             ps.setString(1, hook.name());
             setNullableString(ps, 2, hook.description());
             ps.setBoolean(3, hook.enabled());
-            ps.setString(4, hook.triggerType());
+            ps.setString(4, toJson(hook.triggerTypes()));
             setNullableString(ps, 5, hook.prEvent());
             setNullableString(ps, 6, hook.branchPattern());
             setNullableString(ps, 7, hook.cronExpr());
@@ -194,7 +194,7 @@ public class HookStore {
                 rs.getString("name"),
                 rs.getString("description"),
                 rs.getBoolean("enabled"),
-                rs.getString("trigger_type"),
+                fromJson(rs.getString("trigger_types")),
                 rs.getString("pr_event"),
                 rs.getString("branch_pattern"),
                 rs.getString("cron_expr"),

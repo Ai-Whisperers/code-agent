@@ -13,7 +13,7 @@ public record AutomationHook(
         String name,
         String description,
         boolean enabled,
-        String triggerType,
+        List<String> triggerTypes,
         String prEvent,
         String branchPattern,
         String cronExpr,
