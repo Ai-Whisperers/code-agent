@@ -36,7 +36,7 @@ public class CustomerRegistryStore {
 
     public List<CustomerConfig> listCustomers() {
         String sql = """
-                SELECT customer_id, name, metadata, created_at, updated_at
+                SELECT customer_id, name, environments, metadata, created_at, updated_at
                 FROM customers
                 ORDER BY name
                 """;
@@ -55,7 +55,7 @@ public class CustomerRegistryStore {
 
     public Optional<CustomerConfig> getCustomer(String customerId) {
         String sql = """
-                SELECT customer_id, name, metadata, created_at, updated_at
+                SELECT customer_id, name, environments, metadata, created_at, updated_at
                 FROM customers
                 WHERE customer_id = ?
                 """;
@@ -75,18 +75,20 @@ public class CustomerRegistryStore {
 
     public void upsertCustomer(CustomerConfig customer) {
         String sql = """
-                INSERT INTO customers (customer_id, name, metadata, created_at, updated_at)
-                VALUES (?, ?, ?::jsonb, now(), now())
+                INSERT INTO customers (customer_id, name, environments, metadata, created_at, updated_at)
+                VALUES (?, ?, ?::jsonb, ?::jsonb, now(), now())
                 ON CONFLICT (customer_id) DO UPDATE
-                    SET name       = EXCLUDED.name,
-                        metadata   = EXCLUDED.metadata,
-                        updated_at = now()
+                    SET name         = EXCLUDED.name,
+                        environments = EXCLUDED.environments,
+                        metadata     = EXCLUDED.metadata,
+                        updated_at   = now()
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, customer.customerId());
             ps.setString(2, customer.name());
-            ps.setString(3, toJson(customer.metadata() != null ? customer.metadata() : Map.of()));
+            ps.setString(3, toJson(customer.environments() != null ? customer.environments() : List.of()));
+            ps.setString(4, toJson(customer.metadata() != null ? customer.metadata() : Map.of()));
             ps.executeUpdate();
             LOG.debugf("Upserted customer %s", customer.customerId());
         } catch (SQLException e) {
@@ -116,7 +118,7 @@ public class CustomerRegistryStore {
     public List<ProductConfig> listAllProducts() {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                       p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 ORDER BY p.display_name
@@ -138,7 +140,7 @@ public class CustomerRegistryStore {
     public List<ProductConfig> listProducts(String customerId) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                       p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
                 JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE cp.customer_id = ?
@@ -162,7 +164,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> getProduct(String productId) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                       p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE p.product_id = ?
@@ -185,14 +187,13 @@ public class CustomerRegistryStore {
     public void upsertProduct(ProductConfig product) {
         String sql = """
                 INSERT INTO products (product_id, display_name, git, jira, confluence,
-                                      environments, teams, metadata, created_at, updated_at)
-                VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
+                                      teams, metadata, created_at, updated_at)
+                VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
                 ON CONFLICT (product_id) DO UPDATE
                     SET display_name = EXCLUDED.display_name,
                         git          = EXCLUDED.git,
                         jira         = EXCLUDED.jira,
                         confluence   = EXCLUDED.confluence,
-                        environments = EXCLUDED.environments,
                         teams        = EXCLUDED.teams,
                         metadata     = EXCLUDED.metadata,
                         updated_at   = now()
@@ -204,9 +205,8 @@ public class CustomerRegistryStore {
             ps.setString(3, toJson(product.git()));
             ps.setString(4, toJson(product.jira()));
             ps.setString(5, toJson(product.confluence()));
-            ps.setString(6, toJson(product.environments() != null ? product.environments() : List.of()));
-            ps.setString(7, toJson(product.teams() != null ? product.teams() : Map.of()));
-            ps.setString(8, toJson(product.metadata() != null ? product.metadata() : Map.of()));
+            ps.setString(6, toJson(product.teams() != null ? product.teams() : Map.of()));
+            ps.setString(7, toJson(product.metadata() != null ? product.metadata() : Map.of()));
             ps.executeUpdate();
             LOG.debugf("Upserted product %s", product.productId());
         } catch (SQLException e) {
@@ -269,7 +269,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> findByJiraProject(String projectKey) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                       p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE p.jira -> 'projects' @> ?::jsonb
@@ -296,7 +296,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> findByRepoSlug(String workspace, String repoSlug) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.environments, p.teams, p.metadata, p.created_at, p.updated_at
+                       p.teams, p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 JOIN repo_settings rs ON rs.product_id = p.product_id
@@ -326,6 +326,7 @@ public class CustomerRegistryStore {
         return new CustomerConfig(
                 rs.getString("customer_id"),
                 rs.getString("name"),
+                fromJson(rs.getString("environments"), new TypeReference<List<EnvironmentConfig>>() {}),
                 fromJson(rs.getString("metadata"), new TypeReference<Map<String, Object>>() {}),
                 toInstant(rs.getTimestamp("created_at")),
                 toInstant(rs.getTimestamp("updated_at"))
@@ -342,7 +343,6 @@ public class CustomerRegistryStore {
                 fromJson(rs.getString("git"), new TypeReference<GitConfig>() {}),
                 fromJson(rs.getString("jira"), new TypeReference<JiraProjectConfig>() {}),
                 fromJson(rs.getString("confluence"), new TypeReference<ConfluenceProductConfig>() {}),
-                fromJson(rs.getString("environments"), new TypeReference<List<EnvironmentConfig>>() {}),
                 fromJson(rs.getString("teams"), new TypeReference<Map<String, List<TeamMember>>>() {}),
                 fromJson(rs.getString("metadata"), new TypeReference<Map<String, Object>>() {}),
                 toInstant(rs.getTimestamp("created_at")),

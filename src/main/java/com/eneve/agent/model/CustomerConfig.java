@@ -1,6 +1,7 @@
 package com.eneve.agent.model;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -12,6 +13,9 @@ public record CustomerConfig(
 
         @Schema(required = true, description = "Human-readable customer name", example = "Acme Corp")
         String name,
+
+        @Schema(description = "Deployment environments (acceptance, production, etc.)")
+        List<EnvironmentConfig> environments,
 
         @Schema(description = "Free-form metadata for custom fields")
         Map<String, Object> metadata,

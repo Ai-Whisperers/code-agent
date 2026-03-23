@@ -124,30 +124,33 @@ public class LookupCustomerTool implements ToolExecutor {
                     sb.append("  - ").append(m.name());
                     if (m.email() != null) sb.append(" <").append(m.email()).append(">");
                     if (m.jiraAccountId() != null) sb.append(" (Jira: ").append(m.jiraAccountId()).append(")");
-                    if (m.slackId() != null) sb.append(" (Slack: ").append(m.slackId()).append(")");
                     sb.append("\n");
                 }
             }
             sb.append("\n");
         }
 
-        // Environments
-        if (p.environments() != null && !p.environments().isEmpty()) {
-            sb.append("### Environments\n");
-            for (EnvironmentConfig env : p.environments()) {
-                sb.append("**").append(env.name()).append("**:\n");
-                if (env.aws() != null) {
-                    sb.append("  - AWS Account: ").append(env.aws().accountId()).append("\n");
-                    sb.append("  - Region: ").append(env.aws().region()).append("\n");
-                    if (env.aws().iamRole() != null) {
-                        sb.append("  - IAM Role: ").append(env.aws().iamRole()).append("\n");
+        // Environments (from customer)
+        if (p.customerId() != null) {
+            registryStore.getCustomer(p.customerId()).ifPresent(customer -> {
+                if (customer.environments() != null && !customer.environments().isEmpty()) {
+                    sb.append("### Environments\n");
+                    for (EnvironmentConfig env : customer.environments()) {
+                        sb.append("**").append(env.name()).append("**:\n");
+                        if (env.aws() != null) {
+                            sb.append("  - AWS Account: ").append(env.aws().accountId()).append("\n");
+                            sb.append("  - Region: ").append(env.aws().region()).append("\n");
+                            if (env.aws().iamRole() != null) {
+                                sb.append("  - IAM Role: ").append(env.aws().iamRole()).append("\n");
+                            }
+                        }
+                        if (env.deployedRepos() != null && !env.deployedRepos().isEmpty()) {
+                            sb.append("  - Repos: ").append(String.join(", ", env.deployedRepos())).append("\n");
+                        }
                     }
+                    sb.append("\n");
                 }
-                if (env.deployedRepos() != null && !env.deployedRepos().isEmpty()) {
-                    sb.append("  - Repos: ").append(String.join(", ", env.deployedRepos())).append("\n");
-                }
-            }
-            sb.append("\n");
+            });
         }
 
         // Jira

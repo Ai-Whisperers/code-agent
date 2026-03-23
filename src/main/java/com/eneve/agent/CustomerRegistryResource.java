@@ -81,7 +81,7 @@ public class CustomerRegistryResource {
         if (request == null || request.name() == null || request.name().isBlank()) {
             return Response.status(400).entity(Map.of("error", "name is required")).build();
         }
-        CustomerConfig config = new CustomerConfig(customerId, request.name(), request.metadata(), null, null);
+        CustomerConfig config = new CustomerConfig(customerId, request.name(), request.environments(), request.metadata(), null, null);
         store.upsertCustomer(config);
         return store.getCustomer(customerId)
                 .map(c -> Response.ok(c).build())
@@ -146,7 +146,7 @@ public class CustomerRegistryResource {
         ProductConfig config = new ProductConfig(
                 productId, null, request.displayName(),
                 request.git(), request.jira(), request.confluence(),
-                request.environments(), request.teams(), request.metadata(),
+                request.teams(), request.metadata(),
                 null, null
         );
         store.upsertProduct(config);
@@ -240,7 +240,6 @@ public class CustomerRegistryResource {
             ProductConfig updated = new ProductConfig(
                     existing.productId(), existing.customerId(), existing.displayName(),
                     existing.git(), existing.jira(), existing.confluence(),
-                    existing.environments(),
                     request.teams(),
                     existing.metadata(),
                     null, null
@@ -251,28 +250,26 @@ public class CustomerRegistryResource {
     }
 
     @PUT
-    @Path("/products/{productId}/environments")
-    @Operation(operationId = "updateProductEnvironments", summary = "Update the environments for a product")
+    @Path("/customers/{customerId}/environments")
+    @Operation(operationId = "updateCustomerEnvironments", summary = "Update the environments for a customer")
     @RequestBody(required = true, content = @Content(schema = @Schema(implementation = UpdateEnvironmentsRequest.class)))
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Environments updated"),
-            @APIResponse(responseCode = "404", description = "Product not found")
+            @APIResponse(responseCode = "404", description = "Customer not found")
     })
     public Response updateEnvironments(
-            @Parameter(required = true) @PathParam("productId") String productId,
+            @Parameter(required = true) @PathParam("customerId") String customerId,
             UpdateEnvironmentsRequest request) {
-        return store.getProduct(productId).map(existing -> {
-            ProductConfig updated = new ProductConfig(
-                    existing.productId(), existing.customerId(), existing.displayName(),
-                    existing.git(), existing.jira(), existing.confluence(),
+        return store.getCustomer(customerId).map(existing -> {
+            CustomerConfig updated = new CustomerConfig(
+                    existing.customerId(), existing.name(),
                     request.environments(),
-                    existing.teams(),
                     existing.metadata(),
                     null, null
             );
-            store.upsertProduct(updated);
-            return Response.ok(store.getProduct(productId).orElse(updated)).build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Product not found: " + productId)).build());
+            store.upsertCustomer(updated);
+            return Response.ok(store.getCustomer(customerId).orElse(updated)).build();
+        }).orElse(Response.status(404).entity(Map.of("error", "Customer not found: " + customerId)).build());
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -281,6 +278,7 @@ public class CustomerRegistryResource {
 
     public record UpsertCustomerRequest(
             @Schema(required = true) String name,
+            List<EnvironmentConfig> environments,
             Map<String, Object> metadata
     ) {}
 
@@ -289,7 +287,6 @@ public class CustomerRegistryResource {
             GitConfig git,
             JiraProjectConfig jira,
             ConfluenceProductConfig confluence,
-            List<EnvironmentConfig> environments,
             Map<String, List<TeamMember>> teams,
             Map<String, Object> metadata
     ) {}

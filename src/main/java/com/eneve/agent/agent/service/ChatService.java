@@ -341,21 +341,6 @@ public class ChatService {
             sb.append("\n");
         }
 
-        if (product.environments() != null && !product.environments().isEmpty()) {
-            sb.append("### Environments\n");
-            for (EnvironmentConfig env : product.environments()) {
-                sb.append("- **").append(env.name()).append("**");
-                if (env.aws() != null) {
-                    sb.append(": AWS account `").append(env.aws().accountId()).append("`");
-                    if (env.aws().region() != null) {
-                        sb.append(", region `").append(env.aws().region()).append("`");
-                    }
-                }
-                sb.append("\n");
-            }
-            sb.append("\n");
-        }
-
         if (product.jira() != null && product.jira().projects() != null
                 && !product.jira().projects().isEmpty()) {
             sb.append("### Jira Projects\n");

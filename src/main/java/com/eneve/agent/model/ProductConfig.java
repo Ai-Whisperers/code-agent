@@ -6,7 +6,7 @@ import java.util.Map;
 
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
 
-@Schema(description = "Product configuration including environments, teams, and tool integrations")
+@Schema(description = "Product configuration including teams and tool integrations")
 public record ProductConfig(
         @Schema(required = true, description = "Unique product identifier (slug)", example = "myproduct-platform")
         String productId,
@@ -25,9 +25,6 @@ public record ProductConfig(
 
         @Schema(description = "Confluence space configuration")
         ConfluenceProductConfig confluence,
-
-        @Schema(description = "Deployment environments (acceptance, production, etc.)")
-        List<EnvironmentConfig> environments,
 
         @Schema(description = "Team members by role. Role keys: productOwner, engineering, devops, operations, qa, security, supportQueue")
         Map<String, List<TeamMember>> teams,

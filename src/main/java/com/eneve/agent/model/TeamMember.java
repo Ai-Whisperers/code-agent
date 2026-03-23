@@ -12,8 +12,5 @@ public record TeamMember(
 
         @Schema(description = "Jira account ID for @mentions and assignments",
                 example = "5f8b2c1a3e4d0a001234abcd")
-        String jiraAccountId,
-
-        @Schema(description = "Slack member ID for notifications", example = "U012AB3CD")
-        String slackId
+        String jiraAccountId
 ) {}

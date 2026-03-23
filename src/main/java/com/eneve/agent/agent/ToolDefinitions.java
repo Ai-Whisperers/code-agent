@@ -838,7 +838,7 @@ public final class ToolDefinitions {
     private static Tool awsCloudWatchLogs() {
         return Tool.builder()
                 .name("aws_cloudwatch_logs")
-                .description("Query AWS CloudWatch Logs for a product environment. "
+                .description("Query AWS CloudWatch Logs for a customer environment. "
                         + "Use this to fetch application logs, search for errors or exceptions, "
                         + "or tail log streams from ECS Fargate containers. "
                         + "Cross-account access is handled automatically via IAM role assumption. "
@@ -846,9 +846,9 @@ public final class ToolDefinitions {
                         + "filter_events (filter log events by pattern and/or time range).")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
-                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                        "description", "Customer ID from the registry (e.g. 'acme-corp')"
                                 )))
                                 .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
                                         "type", "string",
@@ -884,7 +884,7 @@ public final class ToolDefinitions {
                                         "description", "Maximum number of log events to return (default: 100, max: 500)"
                                 )))
                                 .build())
-                        .addRequired("productId")
+                        .addRequired("customerId")
                         .addRequired("environmentName")
                         .addRequired("action")
                         .build())
@@ -894,7 +894,7 @@ public final class ToolDefinitions {
     private static Tool awsEcs() {
         return Tool.builder()
                 .name("aws_ecs")
-                .description("Inspect AWS ECS / Fargate resources for a product environment. "
+                .description("Inspect AWS ECS / Fargate resources for a customer environment. "
                         + "Use this to check container health, service status, task definitions, "
                         + "and diagnose deployment or configuration issues. "
                         + "Cross-account access is handled automatically via IAM role assumption. "
@@ -905,9 +905,9 @@ public final class ToolDefinitions {
                         + "describe_task_definition (shows image, CPU/memory, env var count).")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
-                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                        "description", "Customer ID from the registry (e.g. 'acme-corp')"
                                 )))
                                 .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
                                         "type", "string",
@@ -942,7 +942,7 @@ public final class ToolDefinitions {
                                         "description", "Filter list_tasks by desired status. Use STOPPED to find failed tasks."
                                 )))
                                 .build())
-                        .addRequired("productId")
+                        .addRequired("customerId")
                         .addRequired("environmentName")
                         .addRequired("action")
                         .build())
@@ -959,9 +959,9 @@ public final class ToolDefinitions {
                         + "Cross-account access is handled automatically via IAM role assumption.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
-                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Product ID from the registry (e.g. 'myproduct')"
+                                        "description", "Customer ID from the registry (e.g. 'acme-corp')"
                                 )))
                                 .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
                                         "type", "string",
@@ -997,7 +997,7 @@ public final class ToolDefinitions {
                                         "description", "Statistic to retrieve (default: Average)"
                                 )))
                                 .build())
-                        .addRequired("productId")
+                        .addRequired("customerId")
                         .addRequired("environmentName")
                         .addRequired("metricName")
                         .build())

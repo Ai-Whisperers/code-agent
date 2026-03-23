@@ -1,8 +1,8 @@
 package com.eneve.agent.tools;
 
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.model.CustomerConfig;
 import com.eneve.agent.model.EnvironmentConfig;
-import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -64,7 +64,7 @@ public class AwsEcsTool implements ToolExecutor {
 
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
-        String productId = (String) input.get("productId");
+        String customerId = (String) input.get("customerId");
         String environmentName = (String) input.get("environmentName");
         String action = (String) input.get("action");
 
@@ -74,7 +74,7 @@ public class AwsEcsTool implements ToolExecutor {
         }
 
         try {
-            AwsEnvConfig env = resolveEnv(productId, environmentName);
+            AwsEnvConfig env = resolveEnv(customerId, environmentName);
             try (EcsClient client = clientFactory.ecsClient(env.roleArn(), env.region())) {
                 return switch (action.toLowerCase()) {
                     case "list_clusters"         -> listClusters(client, env);
@@ -91,8 +91,8 @@ public class AwsEcsTool implements ToolExecutor {
         } catch (IllegalArgumentException e) {
             return "ERROR: " + e.getMessage();
         } catch (Exception e) {
-            LOG.warnf("aws_ecs failed for product=%s env=%s action=%s: %s",
-                    productId, environmentName, action, e.getMessage());
+            LOG.warnf("aws_ecs failed for customer=%s env=%s action=%s: %s",
+                    customerId, environmentName, action, e.getMessage());
             return "ERROR: " + e.getMessage();
         }
     }
@@ -309,33 +309,33 @@ public class AwsEcsTool implements ToolExecutor {
         return value;
     }
 
-    private AwsEnvConfig resolveEnv(String productId, String environmentName) {
-        if (productId == null || productId.isBlank()) {
-            throw new IllegalArgumentException("'productId' is required");
+    private AwsEnvConfig resolveEnv(String customerId, String environmentName) {
+        if (customerId == null || customerId.isBlank()) {
+            throw new IllegalArgumentException("'customerId' is required");
         }
         if (environmentName == null || environmentName.isBlank()) {
             throw new IllegalArgumentException("'environmentName' is required (e.g. 'production', 'acceptance')");
         }
-        Optional<ProductConfig> product = registryStore.getProduct(productId);
-        if (product.isEmpty()) {
-            throw new IllegalArgumentException("Product '" + productId + "' not found in registry");
+        Optional<CustomerConfig> customer = registryStore.getCustomer(customerId);
+        if (customer.isEmpty()) {
+            throw new IllegalArgumentException("Customer '" + customerId + "' not found in registry");
         }
-        if (product.get().environments() == null) {
-            throw new IllegalArgumentException("Product '" + productId + "' has no environments configured");
+        if (customer.get().environments() == null) {
+            throw new IllegalArgumentException("Customer '" + customerId + "' has no environments configured");
         }
-        EnvironmentConfig env = product.get().environments().stream()
+        EnvironmentConfig env = customer.get().environments().stream()
                 .filter(e -> environmentName.equalsIgnoreCase(e.name()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Environment '" + environmentName + "' not found for product '" + productId + "'"));
+                        "Environment '" + environmentName + "' not found for customer '" + customerId + "'"));
 
         if (env.aws() == null) {
             throw new IllegalArgumentException(
-                    "Environment '" + environmentName + "' of product '" + productId + "' has no AWS config");
+                    "Environment '" + environmentName + "' of customer '" + customerId + "' has no AWS config");
         }
         String roleArn = env.aws().iamRole() != null ? env.aws().iamRole() : "";
         String region = env.aws().region() != null ? env.aws().region() : "";
-        String label = productId + "/" + environmentName + " (" + env.aws().accountId() + ")";
+        String label = customerId + "/" + environmentName + " (" + env.aws().accountId() + ")";
         return new AwsEnvConfig(roleArn, region, label);
     }
 
