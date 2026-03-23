@@ -1,13 +1,8 @@
 # Stage 1: Build the Quarkus application
 FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57 AS build
 
-COPY fortigate-ca.crt /usr/local/share/ca-certificates/fortigate-ca.crt
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    update-ca-certificates && \
-    keytool -importcert -noprompt -trustcacerts -alias fortigate-ca \
-        -file /usr/local/share/ca-certificates/fortigate-ca.crt \
-        -keystore "${JAVA_HOME}/lib/security/cacerts" -storepass changeit && \
-    rm -rf /var/lib/apt/lists/*
+RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
+    echo 'Acquire::AllowInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99insecure
 
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
@@ -26,13 +21,8 @@ RUN mvn -B package -DskipTests -q
 # Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK
 FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57
 
-COPY fortigate-ca.crt /usr/local/share/ca-certificates/fortigate-ca.crt
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && \
-    update-ca-certificates && \
-    keytool -importcert -noprompt -trustcacerts -alias fortigate-ca \
-        -file /usr/local/share/ca-certificates/fortigate-ca.crt \
-        -keystore "${JAVA_HOME}/lib/security/cacerts" -storepass changeit && \
-    rm -rf /var/lib/apt/lists/*
+RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
+    echo 'Acquire::AllowInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99insecure
 
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven

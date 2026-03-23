@@ -300,6 +300,7 @@
                             <arguments>
                                 <argument>buildx</argument>
                                 <argument>build</argument>
+                                <argument>--no-cache</argument>
                                 <argument>--platform=linux/amd64</argument>
                                 <argument>-f</argument>
                                 <argument>${docker.file}</argument>
