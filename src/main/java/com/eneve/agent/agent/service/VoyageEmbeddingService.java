@@ -2,8 +2,9 @@ package com.eneve.agent.agent.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -25,20 +26,15 @@ public class VoyageEmbeddingService {
     private static final String VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings";
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @ConfigProperty(name = "voyage.api.key", defaultValue = "")
-    String apiKey;
-
-    @ConfigProperty(name = "voyage.model", defaultValue = "voyage-code-3")
-    String model;
-
-    @ConfigProperty(name = "voyage.batch-size", defaultValue = "128")
-    int batchSize;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(Duration.ofSeconds(10))
             .build();
 
     public boolean isConfigured() {
+        String apiKey = settingsService.getSecret("voyage.api.key");
         return apiKey != null && !apiKey.isBlank();
     }
 
@@ -71,6 +67,7 @@ public class VoyageEmbeddingService {
         }
 
         List<float[]> allEmbeddings = new ArrayList<>();
+        int batchSize = Integer.parseInt(settingsService.get("voyage.batch-size", "128"));
 
         for (int i = 0; i < texts.size(); i += batchSize) {
             List<String> batch = texts.subList(i, Math.min(i + batchSize, texts.size()));
@@ -83,6 +80,8 @@ public class VoyageEmbeddingService {
 
     private List<float[]> callApi(List<String> texts, String inputType) {
         try {
+            String apiKey = settingsService.getSecret("voyage.api.key");
+            String model = settingsService.get("voyage.model", "voyage-code-3");
             var requestBody = MAPPER.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("input_type", inputType);
