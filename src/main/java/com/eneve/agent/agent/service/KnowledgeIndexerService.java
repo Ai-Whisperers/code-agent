@@ -5,12 +5,12 @@ import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.ProductConfig;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
@@ -29,14 +29,6 @@ import java.util.Set;
 public class KnowledgeIndexerService {
 
     private static final Logger LOG = Logger.getLogger(KnowledgeIndexerService.class);
-
-    /** Maximum attachment size in bytes that will be downloaded and indexed. */
-    @ConfigProperty(name = "knowledge.indexer.max-attachment-bytes", defaultValue = "5242880")
-    long maxAttachmentBytes;
-
-    /** Maximum number of Jira issues fetched per project in a single indexing pass. */
-    @ConfigProperty(name = "knowledge.indexer.jira-max-results", defaultValue = "200")
-    int jiraMaxResults;
 
     /** Approximate token budget per Confluence page chunk (1 token ≈ 4 chars). */
     private static final int CONFLUENCE_CHUNK_CHARS = 2000;
@@ -57,6 +49,7 @@ public class KnowledgeIndexerService {
     @Inject VoyageEmbeddingService voyageService;
     @Inject KnowledgeEmbeddingStore store;
     @Inject CustomerRegistryStore registryStore;
+    @Inject SettingsService settingsService;
 
     public record IndexResult(
             String sourceType,
@@ -84,6 +77,7 @@ public class KnowledgeIndexerService {
         int skipped = 0;
         List<String> errors = new ArrayList<>();
 
+        int jiraMaxResults = Integer.parseInt(settingsService.get("knowledge.indexer.jira-max-results", "200"));
         String jql = "project = \"" + projectKey + "\" ORDER BY created DESC";
         List<JiraService.JiraIssueDetail> issues = jiraService.searchIssues(jql, jiraMaxResults);
 
@@ -247,6 +241,7 @@ public class KnowledgeIndexerService {
 
     private int indexAttachment(JiraService.JiraAttachment att, String issueKey,
                                  String productId, String customerId) {
+        long maxAttachmentBytes = Long.parseLong(settingsService.get("knowledge.indexer.max-attachment-bytes", "5242880"));
         if (att.size() > maxAttachmentBytes) {
             LOG.debugf("Skipping large attachment %s (%d bytes) on %s", att.filename(), att.size(), issueKey);
             return 0;

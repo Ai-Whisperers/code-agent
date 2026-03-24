@@ -1,9 +1,9 @@
 package com.eneve.agent.agent.service;
 
 import com.eneve.agent.agent.store.CodeGraphStore;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.LinkedHashMap;
@@ -23,13 +23,12 @@ public class CodeGraphQueryService {
     @Inject
     CodeGraphStore store;
 
-    @ConfigProperty(name = "code-graph.cross-repo.enabled", defaultValue = "true")
-    boolean crossRepoEnabled;
-
-    @ConfigProperty(name = "code-graph.cross-repo.critical-threshold", defaultValue = "3")
-    int criticalThreshold;
+    @Inject
+    SettingsService settingsService;
 
     public String buildImpactSection(String workspace, String repoSlug, List<String> changedFiles) {
+        boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
+        int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
                 .filter(f -> f.endsWith(".java") || f.endsWith(".cs"))
                 .toList();
@@ -58,7 +57,7 @@ public class CodeGraphQueryService {
             }
         }
 
-        boolean hasCrossRepo = crossRepoEnabled && buildCrossRepoImpact(workspace, repoSlug, sourceFiles, new StringBuilder()) > 0;
+        boolean hasCrossRepo = crossRepoEnabled && buildCrossRepoImpact(workspace, repoSlug, sourceFiles, new StringBuilder(), criticalThreshold) > 0;
 
         if (callersMap.isEmpty() && implMap.isEmpty() && !hasCrossRepo) {
             return "";
@@ -94,7 +93,7 @@ public class CodeGraphQueryService {
 
         if (crossRepoEnabled) {
             StringBuilder crossRepo = new StringBuilder();
-            int crossRepoCount = buildCrossRepoImpact(workspace, repoSlug, sourceFiles, crossRepo);
+            int crossRepoCount = buildCrossRepoImpact(workspace, repoSlug, sourceFiles, crossRepo, criticalThreshold);
             if (crossRepoCount > 0) {
                 sb.append("\n### Cross-repo impact\n");
                 sb.append(crossRepo);
@@ -118,7 +117,8 @@ public class CodeGraphQueryService {
      * whether the subsection should be included at all, without running the queries twice).
      */
     private int buildCrossRepoImpact(String workspace, String repoSlug,
-                                     List<String> sourceFiles, StringBuilder out) {
+                                     List<String> sourceFiles, StringBuilder out,
+                                     int criticalThreshold) {
         int symbolsWithCrossRepoUsage = 0;
         int remainingBudget = MAX_OUTPUT_CHARS / 2;
 
@@ -187,6 +187,8 @@ public class CodeGraphQueryService {
      * for the symbols changed in this PR. Used as context for LLM-generated Mermaid diagrams.
      */
     public String buildDiagramContext(String workspace, String repoSlug, List<String> changedFiles) {
+        boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
+        int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
                 .filter(f -> f.endsWith(".java") || f.endsWith(".cs"))
                 .limit(MAX_FILES_FOR_DIAGRAM)

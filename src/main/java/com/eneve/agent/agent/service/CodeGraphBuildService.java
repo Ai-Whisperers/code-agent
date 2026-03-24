@@ -7,10 +7,10 @@ import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.CodeGraphStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -30,12 +30,7 @@ public class CodeGraphBuildService {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject ArchetypeDetector archetypeDetector;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "code-graph.scheduler.default-branch", defaultValue = "main")
-    String defaultBranch;
-
-    @ConfigProperty(name = "code-graph.scheduler.clone-timeout-minutes", defaultValue = "10")
-    long cloneTimeoutMinutes;
+    @Inject SettingsService settingsService;
 
     public record BuildResult(int built, int skipped, int alreadyPresent) {}
 
@@ -119,6 +114,8 @@ public class CodeGraphBuildService {
     }
 
     private Boolean detectArchetypeOnce(String workspace, String repoSlug) {
+        String defaultBranch = settingsService.get("code-graph.scheduler.default-branch", "main");
+        long cloneTimeoutMinutes = Long.parseLong(settingsService.get("code-graph.scheduler.clone-timeout-minutes", "10"));
         String cloneUrl = platformService.buildCloneUrl(workspace, repoSlug);
         if (cloneUrl == null) {
             LOG.debugf("No clone URL for %s/%s — skipping archetype detection", workspace, repoSlug);
@@ -172,6 +169,8 @@ public class CodeGraphBuildService {
     }
 
     private boolean tryBuildGraph(String workspace, String repoSlug, String cloneUrl) {
+        String defaultBranch = settingsService.get("code-graph.scheduler.default-branch", "main");
+        long cloneTimeoutMinutes = Long.parseLong(settingsService.get("code-graph.scheduler.clone-timeout-minutes", "10"));
         LOG.infof("Building code graph for %s/%s (default branch: %s)", workspace, repoSlug, defaultBranch);
 
         try (WorkspaceContext ws = WorkspaceContext.create("graph-" + workspace + "-" + repoSlug)) {
