@@ -3,16 +3,15 @@ package com.eneve.agent.agent.service;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
+import com.eneve.agent.settings.SettingsService;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 
 /**
  * Reconciles Bitbucket webhooks against repo_settings on startup, and provides
@@ -42,22 +41,14 @@ public class WebhookSyncService {
     @Inject
     RepoSettingsStore settingsStore;
 
-    @ConfigProperty(name = "git.platform", defaultValue = "bitbucket")
-    String gitPlatform;
+    @Inject
+    SettingsService settingsService;
 
-    @ConfigProperty(name = "agent.base.url", defaultValue = "")
-    String agentBaseUrl;
-
-    /** Lazily normalised view of {@link #agentBaseUrl} with any trailing slashes removed. */
+    /** Lazily normalised view of {@code agent.base.url} with any trailing slashes removed. */
     private String normalizedBaseUrl() {
-        return agentBaseUrl == null ? "" : agentBaseUrl.stripTrailing().replaceAll("/+$", "");
+        String baseUrl = settingsService.get("agent.base.url", "");
+        return baseUrl == null ? "" : baseUrl.stripTrailing().replaceAll("/+$", "");
     }
-
-    @ConfigProperty(name = "webhook.secret.bitbucket")
-    Optional<String> webhookSecret;
-
-    @ConfigProperty(name = "bitbucket.workspace", defaultValue = "")
-    String workspace;
 
     void onStartup(@Observes StartupEvent event) {
         if (!isConfigured()) {
@@ -107,7 +98,7 @@ public class WebhookSyncService {
             return;
         }
 
-        String secret = webhookSecret.get();
+        String secret = settingsService.getSecret("webhook.secret.bitbucket");
         Map<String, String> existing = bitbucketPlatformService.listWebhooks(repoWorkspace, repoSlug);
 
         String prUrl = normalizedBaseUrl() + "/webhooks/bitbucket/pull-request";
@@ -158,6 +149,7 @@ public class WebhookSyncService {
     }
 
     private boolean isConfigured() {
+        String gitPlatform = settingsService.get("git.platform", "");
         if (!"bitbucket".equalsIgnoreCase(gitPlatform)) {
             return false;
         }
@@ -165,13 +157,11 @@ public class WebhookSyncService {
         if (baseUrl.isBlank() || "-".equals(baseUrl)) {
             return false;
         }
+        String workspace = settingsService.get("bitbucket.workspace", "");
         if (workspace == null || workspace.isBlank()) {
             return false;
         }
-        if (webhookSecret.isEmpty()) {
-            return false;
-        }
-        String secret = webhookSecret.get();
+        String secret = settingsService.getSecret("webhook.secret.bitbucket");
         return !secret.isBlank() && !"-".equals(secret);
     }
 }
