@@ -2,6 +2,7 @@ package com.eneve.agent;
 
 import java.util.Map;
 
+import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.settings.SettingsService.UpsertRequest;
 
@@ -12,6 +13,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -32,6 +34,7 @@ import jakarta.ws.rs.core.Response;
  *
  * Deleting a key reverts that setting to its application.properties / env-var default.
  */
+@RolesAllowed("app_admin")
 @Path("/settings")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -40,6 +43,9 @@ public class SettingsResource {
 
     @Inject
     SettingsService settingsService;
+
+    @Inject
+    AuditService auditService;
 
     @GET
     @Operation(
@@ -112,6 +118,8 @@ public class SettingsResource {
                     .build();
         }
 
+        auditService.log("SETTINGS", "SETTING_CHANGED", "setting", key,
+                Map.of("isSecret", String.valueOf(request.isSecret())));
         return Response.ok(Map.of(
                 "action",   "saved",
                 "key",      key,
@@ -142,6 +150,7 @@ public class SettingsResource {
                     .entity(Map.of("error", "No DB override found for key: " + key))
                     .build();
         }
+        auditService.log("SETTINGS", "SETTING_DELETED", "setting", key, null);
         return Response.ok(Map.of("action", "deleted", "key", key)).build();
     }
 }

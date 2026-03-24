@@ -10,6 +10,7 @@ import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
+import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.FixPrRequest;
@@ -35,6 +36,8 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
+import io.quarkus.security.Authenticated;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.GET;
@@ -45,6 +48,7 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+@Authenticated
 @Path("/")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -58,6 +62,7 @@ public class RunFixResource {
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
+    @Inject AuditService auditService;
 
     @ConfigProperty(name = "jira.agent.label", defaultValue = "WALL-E")
     String agentLabel;
@@ -67,6 +72,7 @@ public class RunFixResource {
 
     @POST
     @Path("/run-fix")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "runFix",
             summary = "Submit a new fix job",
@@ -107,11 +113,14 @@ public class RunFixResource {
         }
 
         LOG.infof("Job %s accepted for %s", jobId, request.jiraKey());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "FIX", "jiraKey", request.jiraKey()));
         return Response.accepted(Map.of("jobId", jobId)).build();
     }
 
     @POST
     @Path("/quick-fix")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "quickFix",
             summary = "Submit a quick fix job from a JIRA ticket",
@@ -174,11 +183,14 @@ public class RunFixResource {
         }
 
         LOG.infof("Quick-fix job %s accepted for %s (branch: %s)", jobId, request.jiraKey(), branchName);
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "QUICK_FIX", "jiraKey", request.jiraKey()));
         return Response.accepted(Map.of("jobId", jobId, "branch", branchName)).build();
     }
 
     @POST
     @Path("/aikido-fix")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Aikido")
     @Operation(
             operationId = "aikidoFix",
@@ -298,6 +310,9 @@ public class RunFixResource {
 
         LOG.infof("Aikido-fix job %s accepted for %s (group=%d, package=%s, branch=%s)",
                 jobId, jiraKey, groupId, issueInfo.packageName(), branchName);
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "AIKIDO_FIX", "jiraKey", jiraKey,
+                       "aikidoGroupId", String.valueOf(groupId)));
 
         return Response.accepted(Map.of(
                 "jobId", jobId,
@@ -354,11 +369,14 @@ public class RunFixResource {
         }
 
         LOG.infof("Review job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "REVIEW", "prId", request.prId()));
         return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
     }
 
     @POST
     @Path("/fix-pr")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Code Review")
     @Operation(
             operationId = "fixPr",
@@ -398,11 +416,14 @@ public class RunFixResource {
         }
 
         LOG.infof("Fix-PR job %s accepted for PR #%s on %s", jobId, request.prId(), request.repoUrl());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "FIX_PR", "prId", request.prId()));
         return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
     }
 
     @POST
     @Path("/generate-tests")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Code Review")
     @Operation(
             operationId = "generateTests",
@@ -442,11 +463,14 @@ public class RunFixResource {
         }
 
         LOG.infof("GenerateTests job %s accepted for %s (branch: %s)", jobId, request.repoUrl(), request.branchName());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "GENERATE_TESTS", "branch", request.branchName()));
         return Response.accepted(Map.of("jobId", jobId, "branch", request.branchName())).build();
     }
 
     @POST
     @Path("/generate-docs")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Documentation")
     @Operation(
             operationId = "generateDocs",
@@ -491,11 +515,14 @@ public class RunFixResource {
         }
 
         LOG.infof("GenerateDocs job %s accepted for %s", jobId, request.repoUrl());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "GENERATE_DOCS"));
         return Response.accepted(Map.of("jobId", jobId)).build();
     }
 
     @POST
     @Path("/sync-confluence")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Documentation")
     @Operation(
             operationId = "syncConfluence",
@@ -529,6 +556,8 @@ public class RunFixResource {
         }
 
         LOG.infof("SyncConfluence job %s accepted for %s", jobId, request.repoUrl());
+        auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
+                Map.of("jobType", "SYNC_CONFLUENCE"));
         return Response.accepted(Map.of("jobId", jobId)).build();
     }
 
@@ -554,6 +583,7 @@ public class RunFixResource {
 
     @POST
     @Path("/jobs/{jobId}/approve")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "approveJob",
             summary = "Approve and merge the PR",
@@ -578,6 +608,7 @@ public class RunFixResource {
             }
             try {
                 agentRunner.approve(job);
+                auditService.log("JOBS", "JOB_APPROVED", "job", jobId, null);
                 return Response.ok(Map.of("status", "merged", "jobId", jobId)).build();
             } catch (Exception e) {
                 return Response.serverError()
@@ -589,6 +620,7 @@ public class RunFixResource {
 
     @POST
     @Path("/jobs/{jobId}/reject")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "rejectJob",
             summary = "Reject and decline the PR",
@@ -617,6 +649,8 @@ public class RunFixResource {
                         .build();
             }
             agentRunner.reject(job, reason);
+            auditService.log("JOBS", "JOB_REJECTED", "job", jobId,
+                    reason != null ? Map.of("reason", reason) : null);
             return Response.ok(Map.of("status", "rejected", "jobId", jobId)).build();
         }).orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
     }
@@ -644,6 +678,7 @@ public class RunFixResource {
 
     @POST
     @Path("/sync-jira")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "syncJira",
             summary = "Sync open issues from JIRA",
@@ -730,6 +765,10 @@ public class RunFixResource {
 
         LOG.infof("sync-jira: found=%d, queued=%d, skipped=%d",
                 issues.size(), queued.size(), skipped.size());
+        auditService.log("JOBS", "JIRA_SYNC", "jira", null,
+                Map.of("found", String.valueOf(issues.size()),
+                       "queued", String.valueOf(queued.size()),
+                       "skipped", String.valueOf(skipped.size())));
 
         return Response.ok(Map.of(
                 "found", issues.size(),

@@ -226,7 +226,7 @@ public class McpProfileResource {
     public Response test(
             @Parameter(description = "Provider: jira or confluence", required = true)
             @PathParam("provider") String provider,
-            @RequestBody(description = "Account credentials to test", required = true)
+            @RequestBody(description = "Account credentials to test (optional — omit to test stored credentials)", required = false)
             TestConnectionRequest request) {
 
         String userId = resolveUserId();
@@ -238,28 +238,29 @@ public class McpProfileResource {
             return badRequest("Provider must be 'jira' or 'confluence'");
         }
 
-        if (request == null || request.baseUrl() == null || request.baseUrl().isBlank()
-                || request.username() == null || request.username().isBlank()
-                || request.apiToken() == null || request.apiToken().isBlank()) {
-            return badRequest("baseUrl, username, and apiToken are required");
-        }
+        boolean hasCredentials = request != null
+                && request.baseUrl() != null && !request.baseUrl().isBlank()
+                && request.username() != null && !request.username().isBlank()
+                && request.apiToken() != null && !request.apiToken().isBlank();
 
         boolean ok;
-        if ("jira".equals(provider)) {
-            ok = linkedAccountService.testJiraConnection(
-                    request.baseUrl().trim(),
-                    request.username().trim(),
-                    request.apiToken()
-            );
+        if (hasCredentials) {
+            ok = "jira".equals(provider)
+                    ? linkedAccountService.testJiraConnection(request.baseUrl().trim(), request.username().trim(), request.apiToken())
+                    : linkedAccountService.testConfluenceConnection(request.baseUrl().trim(), request.username().trim(), request.apiToken());
         } else {
-            ok = linkedAccountService.testConfluenceConnection(
-                    request.baseUrl().trim(),
-                    request.username().trim(),
-                    request.apiToken()
-            );
+            // No credentials supplied — test the already-stored account
+            java.util.Optional<Boolean> stored = "jira".equals(provider)
+                    ? linkedAccountService.testStoredJiraConnection(userId)
+                    : linkedAccountService.testStoredConfluenceConnection(userId);
+            if (stored.isEmpty()) {
+                return badRequest("No stored credentials for provider '" + provider + "'. Please save an account first.");
+            }
+            ok = stored.get();
         }
 
-        return Response.ok(Map.of("ok", ok)).build();
+        String message = ok ? "Connection successful" : "Connection failed — check your credentials";
+        return Response.ok(Map.of("success", ok, "message", message)).build();
     }
 
     // ─── Get defaults for linking (user email from JWT, system URLs from config) ────

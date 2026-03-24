@@ -178,6 +178,38 @@ public class LinkedAccountService {
         }
     }
 
+    /**
+     * Test the stored Jira credentials for the given user.
+     * Returns empty if no linked account exists.
+     */
+    public Optional<Boolean> testStoredJiraConnection(String userId) {
+        Optional<AccountRow> row = store.findByUserAndProvider(userId, "jira");
+        if (row.isEmpty()) return Optional.empty();
+        String token = encryption.decrypt(row.get().apiTokenEnc());
+        try {
+            return Optional.of(JiraService.testConnection(row.get().baseUrl(), row.get().username(), token));
+        } catch (Exception e) {
+            LOG.warnf("Jira stored connection test failed: %s", e.getMessage());
+            return Optional.of(false);
+        }
+    }
+
+    /**
+     * Test the stored Confluence credentials for the given user.
+     * Returns empty if no linked account exists.
+     */
+    public Optional<Boolean> testStoredConfluenceConnection(String userId) {
+        Optional<AccountRow> row = store.findByUserAndProvider(userId, "confluence");
+        if (row.isEmpty()) return Optional.empty();
+        String token = encryption.decrypt(row.get().apiTokenEnc());
+        try {
+            return Optional.of(ConfluenceService.testConnection(row.get().baseUrl(), row.get().username(), token));
+        } catch (Exception e) {
+            LOG.warnf("Confluence stored connection test failed: %s", e.getMessage());
+            return Optional.of(false);
+        }
+    }
+
     // ─── Helpers ─────────────────────────────────────────────────────────────────
 
     private AccountView toView(AccountRow row) {
