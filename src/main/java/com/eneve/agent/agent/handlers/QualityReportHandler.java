@@ -7,6 +7,7 @@ import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,12 +28,7 @@ public class QualityReportHandler implements JobHandler {
     @Inject QualityReportStore reportStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
+    @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "quality-report.job-timeout-minutes", defaultValue = "30")
     long timeoutMinutes;
@@ -64,7 +60,7 @@ public class QualityReportHandler implements JobHandler {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             try {
                 workspace.cloneRepoShallow(authUrl, request.branch(), timeoutMinutes);
             } catch (Exception e) {

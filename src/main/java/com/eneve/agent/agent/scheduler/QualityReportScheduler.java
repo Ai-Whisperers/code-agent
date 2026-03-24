@@ -7,11 +7,11 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.QualityReportJobRequest;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.settings.SettingsService;
 import io.quarkus.scheduler.Scheduled;
 import io.quarkus.scheduler.Scheduled.ConcurrentExecution;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -35,20 +35,16 @@ public class QualityReportScheduler {
     @Inject JobStore jobStore;
     @Inject JobQueue jobQueue;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "quality-report.scheduler.enabled", defaultValue = "false")
-    boolean enabled;
-
-    @ConfigProperty(name = "quality-report.branches", defaultValue = "main,develop")
-    String branchesConfig;
+    @Inject SettingsService settingsService;
 
     @Scheduled(every = "24h", delayed = "15m",
                concurrentExecution = ConcurrentExecution.SKIP)
     void collectQualityReports() {
-        if (!enabled) {
+        if (!"true".equalsIgnoreCase(settingsService.get("quality-report.scheduler.enabled", "false"))) {
             return;
         }
 
+        String branchesConfig = settingsService.get("quality-report.branches", "main,develop");
         List<RepoSettings> repos = repoSettingsStore.listQualityReportEnabled();
         String[] branches = branchesConfig.split(",");
 

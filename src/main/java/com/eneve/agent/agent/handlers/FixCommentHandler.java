@@ -32,12 +32,6 @@ public class FixCommentHandler implements JobHandler {
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
@@ -81,7 +75,7 @@ public class FixCommentHandler implements JobHandler {
             }
 
             String sourceBranch = prInfo.get("sourceBranch");
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             LOG.infof("FixComment: cloning %s/%s branch %s for comment fix on PR #%s",
                     coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {

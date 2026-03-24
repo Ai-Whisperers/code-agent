@@ -20,8 +20,8 @@ import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.AiCallStore;
 import com.eneve.agent.agent.store.MemoryStore;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.settings.SettingsService;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -39,9 +39,6 @@ public class LearningExtractor {
 
     private static final Logger LOG = Logger.getLogger(LearningExtractor.class);
 
-    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
-    String fastModelName;
-
     @Inject AnthropicClient client;
     @Inject
     AiCallStore aiCallStore;
@@ -49,6 +46,8 @@ public class LearningExtractor {
     MemoryStore memoryStore;
     @Inject
     PromptTemplateService promptTemplates;
+    @Inject
+    SettingsService settingsService;
 
     /**
      * Analyse the conversation thread and, if it contains a generalizable
@@ -93,6 +92,7 @@ public class LearningExtractor {
     }
 
     private Optional<String> extractLearning(List<ThreadComment> thread, CommentContext ctx) {
+        String fastModelName = settingsService.get("anthropic.fast-model", "claude-3-5-haiku-20241022");
         StringBuilder conversationText = new StringBuilder();
         for (ThreadComment tc : thread) {
             String role = tc.isAgent() ? "AI Reviewer" : "Developer (" + tc.author() + ")";

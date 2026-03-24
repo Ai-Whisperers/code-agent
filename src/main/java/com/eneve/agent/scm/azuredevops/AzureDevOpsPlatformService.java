@@ -557,6 +557,12 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         return null;
     }
 
+    @Override
+    public String buildCloneUrl(String workspace, String project, String repo) {
+        String user = !agentUser().isBlank() ? agentUser() : workspace;
+        return "https://" + user + ":" + pat() + "@dev.azure.com/" + workspace + "/" + project + "/_git/" + repo;
+    }
+
     /**
      * Validates that the target URL is directed at the configured Azure DevOps host,
      * preventing SSRF by ensuring requests never leave the configured API endpoint.

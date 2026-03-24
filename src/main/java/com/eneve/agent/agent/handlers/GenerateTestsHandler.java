@@ -28,12 +28,6 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject JiraService jiraService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
     int generateTestsMaxIterations;
 
@@ -71,7 +65,7 @@ public class GenerateTestsHandler implements JobHandler {
 
         try (WorkspaceContext ignored = workspace) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             String testBranch = request.branchName();
             if (workspace.hasClonedRepo()) {
                 LOG.infof("GenerateTests: reusing existing workspace for plan %s (branch: %s)",

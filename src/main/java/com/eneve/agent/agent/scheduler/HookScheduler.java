@@ -4,11 +4,11 @@ import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.AutomationHook;
 import com.eneve.agent.agent.model.TriggerType;
 import com.eneve.agent.agent.store.HookStore;
+import com.eneve.agent.settings.SettingsService;
 import io.quarkus.scheduler.Scheduled;
 import io.quarkus.scheduler.Scheduled.ConcurrentExecution;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.time.Instant;
@@ -29,16 +29,11 @@ public class HookScheduler {
 
     @Inject HookStore hookStore;
     @Inject HookEvaluator hookEvaluator;
-
-    @ConfigProperty(name = "hook.scheduler.enabled", defaultValue = "true")
-    boolean enabled;
-
-    @ConfigProperty(name = "hook.scheduler.timezone", defaultValue = "UTC")
-    String timezone;
+    @Inject SettingsService settingsService;
 
     @Scheduled(every = "1m", concurrentExecution = ConcurrentExecution.SKIP)
     void evaluateCronHooks() {
-        if (!enabled) {
+        if (!"true".equalsIgnoreCase(settingsService.get("hook.scheduler.enabled", "true"))) {
             LOG.trace("Hook scheduler is disabled");
             return;
         }
@@ -52,7 +47,7 @@ public class HookScheduler {
                 return;
             }
 
-            ZonedDateTime now = ZonedDateTime.now(ZoneId.of(timezone));
+            ZonedDateTime now = ZonedDateTime.now(ZoneId.of(settingsService.get("hook.scheduler.timezone", "UTC")));
             LOG.debugf("Hook scheduler: evaluating %d cron hooks at %s", 
                       cronHooks.size(), now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME));
 
@@ -135,7 +130,7 @@ public class HookScheduler {
         var context = Map.of(
                 "triggerTime", now.toInstant().toString(),
                 "cronExpression", hook.cronExpr() != null ? hook.cronExpr() : "",
-                "timezone", timezone
+                "timezone", settingsService.get("hook.scheduler.timezone", "UTC")
         );
 
         // Use hook's repoUrl to determine workspace/repo, or fall back to defaults

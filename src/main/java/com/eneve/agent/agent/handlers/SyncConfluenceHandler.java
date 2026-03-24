@@ -7,6 +7,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -29,12 +30,7 @@ public class SyncConfluenceHandler implements JobHandler {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
+    @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
@@ -89,7 +85,7 @@ public class SyncConfluenceHandler implements JobHandler {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             try {
                 workspace.cloneRepo(authUrl, request.branchOrDefault(), jobTimeoutMinutes);
             } catch (Exception e) {

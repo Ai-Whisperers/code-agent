@@ -12,11 +12,11 @@ import java.util.Base64;
 import java.util.List;
 
 import com.eneve.agent.agent.MermaidPngRenderer;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,14 +34,8 @@ public class ConfluenceService {
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @ConfigProperty(name = "confluence.base.url", defaultValue = "")
-    String baseUrl;
-
-    @ConfigProperty(name = "confluence.user", defaultValue = "")
-    String user;
-
-    @ConfigProperty(name = "confluence.api.token", defaultValue = "")
-    String apiToken;
+    @Inject
+    SettingsService settingsService;
 
     @Inject
     MermaidPngRenderer mermaidPngRenderer;
@@ -52,9 +46,9 @@ public class ConfluenceService {
             .build();
 
     public boolean isEnabled() {
-        return baseUrl != null && !baseUrl.isBlank()
-                && user != null && !user.isBlank()
-                && apiToken != null && !apiToken.isBlank();
+        return !settingsService.get("confluence.base.url", "").isBlank()
+                && !settingsService.get("confluence.user", "").isBlank()
+                && !settingsService.getSecret("confluence.api.token").isBlank();
     }
 
     public boolean isConfigured() {
@@ -62,9 +56,9 @@ public class ConfluenceService {
     }
 
     // Getters for system credentials (used by LinkedAccountService for fallback)
-    public String getBaseUrl() { return baseUrl; }
-    public String getUser() { return user; }
-    public String getApiToken() { return apiToken; }
+    public String getBaseUrl() { return settingsService.get("confluence.base.url", ""); }
+    public String getUser() { return settingsService.get("confluence.user", ""); }
+    public String getApiToken() { return settingsService.getSecret("confluence.api.token"); }
 
     /**
      * Test Confluence connection with the provided credentials.
@@ -145,7 +139,7 @@ public class ConfluenceService {
         try {
             String cql = "space=\"" + spaceKey + "\" AND title=\"" + title + "\" AND type=page";
             String encoded = URLEncoder.encode(cql, StandardCharsets.UTF_8);
-            String url = baseUrl + "/wiki/rest/api/content/search?cql=" + encoded + "&limit=1";
+            String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/search?cql=" + encoded + "&limit=1";
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -207,7 +201,7 @@ public class ConfluenceService {
         String boundary = "----AttachBoundary" + System.nanoTime();
         byte[] body = buildMultipartBody(boundary, filename, data, contentType);
 
-        String url = baseUrl + "/wiki/rest/api/content/" + pageId + "/child/attachment";
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/" + pageId + "/child/attachment";
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
@@ -240,7 +234,7 @@ public class ConfluenceService {
         }
 
         byte[] body = buildMultipartBody(boundary, filename, data, contentType);
-        String url = baseUrl + "/wiki/rest/api/content/" + pageId
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/" + pageId
                 + "/child/attachment/" + attachmentId + "/data";
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -259,7 +253,7 @@ public class ConfluenceService {
     }
 
     private String findAttachmentId(String pageId, String filename) throws Exception {
-        String url = baseUrl + "/wiki/rest/api/content/" + pageId
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/" + pageId
                 + "/child/attachment?filename=" + URLEncoder.encode(filename, StandardCharsets.UTF_8);
 
         HttpRequest request = HttpRequest.newBuilder()
@@ -322,7 +316,7 @@ public class ConfluenceService {
         storage.put("representation", "storage");
         storage.put("value", storageBody);
 
-        String url = baseUrl + "/wiki/api/v2/pages";
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages";
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
@@ -359,7 +353,7 @@ public class ConfluenceService {
         ObjectNode version = body.putObject("version");
         version.put("number", currentVersion + 1);
 
-        String url = baseUrl + "/wiki/api/v2/pages/" + pageId;
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId;
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
@@ -379,7 +373,7 @@ public class ConfluenceService {
     }
 
     private int getCurrentVersion(String pageId) throws Exception {
-        String url = baseUrl + "/wiki/api/v2/pages/" + pageId;
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId;
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
@@ -397,7 +391,7 @@ public class ConfluenceService {
      * The v2 pages endpoint requires a numeric space ID rather than a key.
      */
     private String resolveSpaceId(String spaceKey) throws Exception {
-        String url = baseUrl + "/wiki/api/v2/spaces?keys=" + URLEncoder.encode(spaceKey, StandardCharsets.UTF_8) + "&limit=1";
+        String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/spaces?keys=" + URLEncoder.encode(spaceKey, StandardCharsets.UTF_8) + "&limit=1";
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
@@ -443,7 +437,7 @@ public class ConfluenceService {
         try {
             String spaceId = resolveSpaceId(spaceKey);
             while (true) {
-                String url = baseUrl + "/wiki/api/v2/pages?spaceId=" + spaceId
+                String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages?spaceId=" + spaceId
                         + "&status=current&limit=50"
                         + (cursor != null ? "&cursor=" + URLEncoder.encode(cursor, StandardCharsets.UTF_8) : "");
 
@@ -498,7 +492,7 @@ public class ConfluenceService {
     public String getPageBody(String pageId) {
         if (!isEnabled()) return null;
         try {
-            String url = baseUrl + "/wiki/api/v2/pages/" + pageId
+            String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId
                     + "?body-format=storage";
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
@@ -557,11 +551,11 @@ public class ConfluenceService {
     }
 
     private String buildPageUrl(String pageId) {
-        return baseUrl + "/wiki/pages/" + pageId;
+        return settingsService.get("confluence.base.url", "") + "/wiki/pages/" + pageId;
     }
 
     private String authHeader() {
-        String credentials = user + ":" + apiToken;
+        String credentials = settingsService.get("confluence.user", "") + ":" + settingsService.getSecret("confluence.api.token");
         return "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
     }
 

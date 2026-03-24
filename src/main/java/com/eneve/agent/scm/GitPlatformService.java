@@ -135,4 +135,24 @@ public interface GitPlatformService {
     default String buildCloneUrl(String workspace, String repoSlug) {
         return null;
     }
+
+    /**
+     * Builds an authenticated HTTPS clone URL using full repository coordinates.
+     *
+     * <p>Used by job handlers after parsing a repo URL into {@link com.eneve.agent.model.RepoCoordinates}.
+     * Implementations derive credentials from their internal {@link com.eneve.agent.settings.SettingsService}
+     * rather than requiring callers to supply a username/password.
+     *
+     * <p>The default implementation delegates to {@link #buildCloneUrl(String, String)},
+     * which is sufficient for Bitbucket, GitLab, and GitHub.
+     * Azure DevOps overrides this to include the mandatory {@code project} path segment.
+     *
+     * @param workspace workspace, namespace, organisation, or owner slug
+     * @param project   project name (relevant for Azure DevOps; empty string for other platforms)
+     * @param repo      repository slug or name
+     * @return authenticated HTTPS clone URL
+     */
+    default String buildCloneUrl(String workspace, String project, String repo) {
+        return buildCloneUrl(workspace, repo);
+    }
 }

@@ -1,7 +1,8 @@
 package com.eneve.agent.jira;
 
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -20,26 +21,8 @@ public class JiraService {
 
     private static final Logger LOG = Logger.getLogger(JiraService.class);
 
-    @ConfigProperty(name = "jira.base.url")
-    String baseUrl;
-
-    @ConfigProperty(name = "jira.user")
-    String user;
-
-    @ConfigProperty(name = "jira.api.token")
-    String apiToken;
-
-    @ConfigProperty(name = "jira.transition.in-review", defaultValue = "")
-    String transitionInReview;
-
-    @ConfigProperty(name = "jira.transition.done", defaultValue = "")
-    String transitionDone;
-
-    @ConfigProperty(name = "jira.transition.rejected", defaultValue = "")
-    String transitionRejected;
-
-    @ConfigProperty(name = "jira.default.worklog", defaultValue = "30m")
-    String defaultWorklog;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
@@ -271,6 +254,7 @@ public class JiraService {
     }
 
     public void transitionToInReview(String issueKey) {
+        String transitionInReview = settingsService.get("jira.transition.in-review", "");
         if (transitionInReview.isBlank()) {
             LOG.warnf("JIRA transition.in-review not configured, skipping for %s", issueKey);
             return;
@@ -279,6 +263,7 @@ public class JiraService {
     }
 
     public void transitionToDone(String issueKey) {
+        String transitionDone = settingsService.get("jira.transition.done", "");
         if (transitionDone.isBlank()) {
             LOG.warnf("JIRA transition.done not configured, skipping for %s", issueKey);
             return;
@@ -287,6 +272,7 @@ public class JiraService {
     }
 
     public void transitionToRejected(String issueKey) {
+        String transitionRejected = settingsService.get("jira.transition.rejected", "");
         if (transitionRejected.isBlank()) {
             LOG.warnf("JIRA transition.rejected not configured, skipping for %s", issueKey);
             return;
@@ -295,7 +281,7 @@ public class JiraService {
     }
 
     public void addWorklog(String issueKey, String timeSpent) {
-        String ts = (timeSpent != null && !timeSpent.isBlank()) ? timeSpent : defaultWorklog;
+        String ts = (timeSpent != null && !timeSpent.isBlank()) ? timeSpent : settingsService.get("jira.default.worklog", "30m");
         String body = """
                 {"timeSpent":"%s","comment":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"Automated code fix by agent runner"}]}]}}
                 """.formatted(ts);
@@ -335,7 +321,7 @@ public class JiraService {
     private String get(String path, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Accept", "application/json")
                     .GET()
@@ -359,7 +345,7 @@ public class JiraService {
     private String postForBody(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -384,7 +370,7 @@ public class JiraService {
     private void post(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -575,15 +561,15 @@ public class JiraService {
      * Check if Jira is configured with valid credentials.
      */
     public boolean isConfigured() {
-        return baseUrl != null && !baseUrl.isBlank()
-                && user != null && !user.isBlank()
-                && apiToken != null && !apiToken.isBlank();
+        return !settingsService.get("jira.base.url", "").isBlank()
+                && !settingsService.get("jira.user", "").isBlank()
+                && !settingsService.getSecret("jira.api.token").isBlank();
     }
 
     // Getters for system credentials (used by LinkedAccountService for fallback)
-    public String getBaseUrl() { return baseUrl; }
-    public String getUser() { return user; }
-    public String getApiToken() { return apiToken; }
+    public String getBaseUrl() { return settingsService.get("jira.base.url", ""); }
+    public String getUser() { return settingsService.get("jira.user", ""); }
+    public String getApiToken() { return settingsService.getSecret("jira.api.token"); }
 
     /**
      * Test Jira connection with the provided credentials.
@@ -610,7 +596,7 @@ public class JiraService {
 
     private String basicAuth() {
         return Base64.getEncoder()
-                .encodeToString((user + ":" + apiToken).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((settingsService.get("jira.user", "") + ":" + settingsService.getSecret("jira.api.token")).getBytes(StandardCharsets.UTF_8));
     }
 
     private static String escapeJson(String text) {
@@ -942,7 +928,7 @@ public class JiraService {
      * Add a worklog to an issue.
      */
     public void addWorklog(String issueKey, String timeSpent, String comment, String started, JiraCredentials creds) {
-        String ts = (timeSpent != null && !timeSpent.isBlank()) ? timeSpent : defaultWorklog;
+        String ts = (timeSpent != null && !timeSpent.isBlank()) ? timeSpent : settingsService.get("jira.default.worklog", "30m");
         String commentJson = "";
         if (comment != null && !comment.isBlank()) {
             commentJson = ",\"comment\":{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"" + escapeJson(comment) + "\"}]}]}";

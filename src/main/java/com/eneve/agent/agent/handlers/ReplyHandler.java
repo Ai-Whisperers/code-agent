@@ -30,12 +30,6 @@ public class ReplyHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
@@ -78,7 +72,7 @@ public class ReplyHandler implements JobHandler {
             }
 
             String sourceBranch = prInfo.get("sourceBranch");
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             LOG.infof("Reply: cloning %s/%s branch %s for comment thread on PR #%s",
                     coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {

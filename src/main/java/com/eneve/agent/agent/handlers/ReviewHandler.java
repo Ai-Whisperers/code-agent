@@ -47,12 +47,6 @@ public class ReviewHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
@@ -98,7 +92,7 @@ public class ReviewHandler implements JobHandler {
             String prTitle = prInfo.get("title");
             job.setPrId(request.prId());
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             LOG.infof("Review: cloning %s/%s branch %s for PR #%s",
                     coords.organization(), coords.repository(), sourceBranch, request.prId());
             try {

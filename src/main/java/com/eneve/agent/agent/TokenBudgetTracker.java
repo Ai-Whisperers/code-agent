@@ -2,10 +2,11 @@ package com.eneve.agent.agent;
 
 import java.util.concurrent.ConcurrentLinkedDeque;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Tracks Anthropic API token consumption in a sliding one-minute window and
@@ -24,11 +25,8 @@ public class TokenBudgetTracker {
     private static final Logger LOG = Logger.getLogger(TokenBudgetTracker.class);
     private static final long WINDOW_MS = 60_000L;
 
-    @ConfigProperty(name = "anthropic.rate-limit.tokens-per-minute", defaultValue = "80000")
-    long tokensPerMinute;
-
-    @ConfigProperty(name = "anthropic.rate-limit.safety-margin", defaultValue = "0.80")
-    double safetyMargin;
+    @Inject
+    SettingsService settingsService;
 
     private record TokenEntry(long timestampMs, long tokens) {}
 
@@ -53,6 +51,8 @@ public class TokenBudgetTracker {
     public void waitIfNeeded() throws InterruptedException {
         pruneWindow();
         long used = sumWindow();
+        long tokensPerMinute = Long.parseLong(settingsService.get("anthropic.rate-limit.tokens-per-minute", "80000"));
+        double safetyMargin = Double.parseDouble(settingsService.get("anthropic.rate-limit.safety-margin", "0.80"));
         long limit = (long) (tokensPerMinute * safetyMargin);
         if (used < limit) {
             return;

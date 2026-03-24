@@ -6,6 +6,7 @@ import com.eneve.agent.agent.JobLifecycleHelper;
 import com.eneve.agent.agent.store.CodeMetricsStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -21,12 +22,7 @@ public class MetricsHandler implements JobHandler {
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
+    @Inject GitPlatformService platformService;
 
     @ConfigProperty(name = "metrics.job-timeout-minutes", defaultValue = "30")
     long metricsTimeoutMinutes;
@@ -56,7 +52,7 @@ public class MetricsHandler implements JobHandler {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             try {
                 workspace.cloneRepoShallow(authUrl, request.branch(), metricsTimeoutMinutes);
             } catch (Exception e) {

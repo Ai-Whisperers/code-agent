@@ -24,12 +24,6 @@ public class HookHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject TeamsNotifier teamsNotifier;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
@@ -58,7 +52,7 @@ public class HookHandler implements JobHandler {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
 
             if (request.commitDirect()) {
                 try {

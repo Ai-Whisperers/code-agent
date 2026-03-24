@@ -33,12 +33,6 @@ public class GenerateDocsHandler implements JobHandler {
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject PlanWorkspaceManager planWorkspaceManager;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long jobTimeoutMinutes;
 
@@ -92,7 +86,7 @@ public class GenerateDocsHandler implements JobHandler {
 
         try (WorkspaceContext ignored = workspace) {
 
-            String authUrl = coords.httpsCloneUrl(gitUser, gitPassword);
+            String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             String targetBranch = request.targetBranchOrDefault();
 
             if (workspace.hasClonedRepo()) {

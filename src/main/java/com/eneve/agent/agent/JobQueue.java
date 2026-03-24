@@ -4,13 +4,13 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.planner.JobCompletedEvent;
+import com.eneve.agent.settings.SettingsService;
 import io.quarkus.runtime.ShutdownEvent;
 import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.Comparator;
@@ -30,12 +30,10 @@ public class JobQueue {
     @Inject AgentRunner agentRunner;
     @Inject JobStore jobStore;
     @Inject Event<JobCompletedEvent> jobCompletedEvent;
+    @Inject SettingsService settingsService;
 
-    @ConfigProperty(name = "run-fix.max-concurrent-jobs", defaultValue = "3")
-    int maxConcurrentJobs;
-
-    @ConfigProperty(name = "run-fix.max-queue-size", defaultValue = "20")
-    int maxQueueSize;
+    private int maxConcurrentJobs;
+    private int maxQueueSize;
 
     private PriorityBlockingQueue<JobRecord> pendingQueue;
     private ExecutorService executor;
@@ -44,6 +42,9 @@ public class JobQueue {
     private volatile boolean running = true;
 
     void onStart(@Observes StartupEvent event) {
+        maxConcurrentJobs = Integer.parseInt(settingsService.get("run-fix.max-concurrent-jobs", "3"));
+        maxQueueSize = Integer.parseInt(settingsService.get("run-fix.max-queue-size", "20"));
+
         pendingQueue = new PriorityBlockingQueue<>(
                 maxQueueSize,
                 Comparator.comparingInt((JobRecord j) -> j.getJobType().priority())

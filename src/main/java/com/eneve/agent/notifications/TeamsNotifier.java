@@ -5,12 +5,13 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.model.RunResult;
+import com.eneve.agent.settings.SettingsService;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * One-way Microsoft Teams notification via incoming webhook.
@@ -21,12 +22,13 @@ public class TeamsNotifier {
 
     private static final Logger LOG = Logger.getLogger(TeamsNotifier.class);
 
-    @ConfigProperty(name = "teams.webhook.url", defaultValue = "")
-    String webhookUrl;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
 
     public void sendNotification(RunResult result) {
+        String webhookUrl = settingsService.get("teams.webhook.url", "");
         if (webhookUrl.isBlank()) {
             LOG.debug("Teams webhook URL not configured, skipping notification");
             return;
