@@ -363,6 +363,10 @@ public class BitbucketPlatformService implements GitPlatformService {
                 LOG.infof("Uploaded diagram '%s' to Bitbucket downloads: %s", filename, downloadUrl);
                 return downloadUrl;
             } else {
+                if (response.statusCode() == 401) {
+                    LOG.errorf("Bitbucket upload returned 401 Unauthorized — URL: %s, credentials: %s",
+                            request.uri(), credentialsDiagnostic());
+                }
                 LOG.warnf("Bitbucket download upload failed (HTTP %d): %s",
                         response.statusCode(), response.body());
                 return null;
@@ -563,6 +567,10 @@ public class BitbucketPlatformService implements GitPlatformService {
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 LOG.infof("Deleted webhook %s (uuid=%s) from %s/%s", urlForLog, uuid, workspace, repo);
             } else {
+                if (response.statusCode() == 401) {
+                    LOG.errorf("Bitbucket delete webhook returned 401 Unauthorized — URL: %s, credentials: %s",
+                            request.uri(), credentialsDiagnostic());
+                }
                 LOG.warnf("Failed to delete webhook uuid=%s from %s/%s: HTTP %d",
                         uuid, workspace, repo, response.statusCode());
             }
@@ -588,6 +596,10 @@ public class BitbucketPlatformService implements GitPlatformService {
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 return response.body();
             } else {
+                if (response.statusCode() == 401) {
+                    LOG.errorf("Bitbucket %s returned 401 Unauthorized — URL: %s, credentials: %s",
+                            operation, request.uri(), credentialsDiagnostic());
+                }
                 LOG.errorf("Bitbucket %s failed (HTTP %d): %s", operation, response.statusCode(), response.body());
                 throw new RuntimeException("Bitbucket " + operation + " failed: HTTP "
                         + response.statusCode() + " — " + response.body());
@@ -625,6 +637,10 @@ public class BitbucketPlatformService implements GitPlatformService {
                 LOG.infof("Bitbucket %s succeeded (HTTP %d)", operation, response.statusCode());
                 return response.body();
             } else {
+                if (response.statusCode() == 401) {
+                    LOG.errorf("Bitbucket %s returned 401 Unauthorized — URL: %s, credentials: %s",
+                            operation, request.uri(), credentialsDiagnostic());
+                }
                 LOG.errorf("Bitbucket %s failed (HTTP %d) for user '%s': %s",
                         operation, response.statusCode(), bbUser(), response.body());
                 throw new RuntimeException("Bitbucket " + operation + " failed: HTTP "
@@ -640,6 +656,26 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     private String bbUser() {
         return settingsService.get("bitbucket.user");
+    }
+
+    private String credentialsDiagnostic() {
+        String user = bbUser();
+        String pwd = appPassword();
+        String userDiag = user == null ? "<null>"
+                : String.format("len=%d, starts='%s', ends='%s', hasWhitespace=%b, hasLineBreak=%b",
+                        user.length(),
+                        user.length() >= 4 ? user.substring(0, 4) : user,
+                        user.length() >= 4 ? user.substring(user.length() - 4) : user,
+                        user.chars().anyMatch(Character::isWhitespace),
+                        user.contains("\n") || user.contains("\r"));
+        String pwdDiag = pwd == null ? "<null>"
+                : String.format("len=%d, starts='%s', ends='%s', hasWhitespace=%b, hasLineBreak=%b",
+                        pwd.length(),
+                        pwd.length() >= 4 ? pwd.substring(0, 4) : "****",
+                        pwd.length() >= 4 ? pwd.substring(pwd.length() - 4) : "****",
+                        pwd.chars().anyMatch(Character::isWhitespace),
+                        pwd.contains("\n") || pwd.contains("\r"));
+        return "user=[" + userDiag + "], password=[" + pwdDiag + "]";
     }
 
     private String appPassword() {

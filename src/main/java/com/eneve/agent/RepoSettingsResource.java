@@ -5,6 +5,7 @@ import java.util.Map;
 
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.service.RepoSyncService;
 import com.eneve.agent.agent.service.WebhookSyncService;
 
 import org.jboss.logging.Logger;
@@ -45,6 +46,26 @@ public class RepoSettingsResource {
 
     @Inject
     WebhookSyncService webhookSyncService;
+
+    @Inject
+    RepoSyncService repoSyncService;
+
+    @POST
+    @Path("/sync")
+    @Operation(
+            operationId = "syncRepos",
+            summary = "Trigger a repository sync",
+            description = "Discovers repositories from the configured Git platform and registers any new ones with default settings."
+    )
+    @APIResponse(responseCode = "200", description = "Sync triggered")
+    public Response sync() {
+        try {
+            repoSyncService.syncRepos();
+        } catch (Exception e) {
+            LOG.warnf("Manual repo sync failed (non-fatal): %s", e.getMessage());
+        }
+        return Response.ok(Map.of("action", "sync_triggered")).build();
+    }
 
     @GET
     @Operation(

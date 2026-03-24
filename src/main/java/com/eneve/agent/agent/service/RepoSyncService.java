@@ -42,7 +42,7 @@ public class RepoSyncService {
         t.start();
     }
 
-    private void syncRepos() {
+    public void syncRepos() {
         try {
             List<String> repoSlugs = gitPlatformService.listRepositories(workspace);
             int newCount = 0;
