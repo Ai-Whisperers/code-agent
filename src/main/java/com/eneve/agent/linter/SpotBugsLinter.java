@@ -21,13 +21,15 @@ import com.eneve.agent.util.ProcessHelper;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 
+import java.util.Optional;
+
 @ApplicationScoped
 public class SpotBugsLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(SpotBugsLinter.class);
 
-    @ConfigProperty(name = "build.java-home", defaultValue = "")
-    String javaHome;
+    @ConfigProperty(name = "build.java-home")
+    Optional<String> javaHome;
 
     private static final String COMPILE_ARGS = " compile -q";
     private static final String SPOTBUGS_ARGS =
@@ -49,7 +51,7 @@ public class SpotBugsLinter implements LinterRunner {
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running SpotBugs analysis (compile + analyze)...");
         String mvn = ProcessHelper.mvn(workspaceRoot);
-        String effectiveJavaHome = javaHome != null && !javaHome.isBlank() ? javaHome : null;
+        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
 
         try {
             String compileOutput = runProcess(workspaceRoot, mvn + COMPILE_ARGS, timeoutMinutes);
@@ -99,7 +101,7 @@ public class SpotBugsLinter implements LinterRunner {
 
     private String runProcess(Path workspaceRoot, String command, long timeoutMinutes)
             throws CompilationFailedException {
-        String effectiveJavaHome = javaHome != null && !javaHome.isBlank() ? javaHome : null;
+        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())

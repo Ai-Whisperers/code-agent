@@ -7,6 +7,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -20,8 +21,8 @@ public class BuildValidator {
     @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
     long timeoutMinutes;
 
-    @ConfigProperty(name = "build.java-home", defaultValue = "")
-    String javaHome;
+    @ConfigProperty(name = "build.java-home")
+    Optional<String> javaHome;
 
     public void validate(WorkspaceContext workspace) throws Exception {
         String command = detectTestCommand(workspace.getRoot());
@@ -31,7 +32,7 @@ public class BuildValidator {
         }
 
         LOG.infof("Build validation using: %s", command);
-        String effectiveJavaHome = javaHome != null && !javaHome.isBlank() ? javaHome : null;
+        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
         ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);
