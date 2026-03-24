@@ -7,6 +7,7 @@ import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.service.RepoSyncService;
 import com.eneve.agent.agent.service.WebhookSyncService;
+import com.eneve.agent.audit.AuditService;
 
 import org.jboss.logging.Logger;
 
@@ -17,6 +18,8 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
+import io.quarkus.security.Authenticated;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -34,6 +37,7 @@ import jakarta.ws.rs.core.Response;
  * REST endpoints for managing per-repository settings — review enablement,
  * shared rule selection, and custom review prompt templates.
  */
+@Authenticated
 @Path("/settings/repos")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
@@ -51,8 +55,12 @@ public class RepoSettingsResource {
     @Inject
     RepoSyncService repoSyncService;
 
+    @Inject
+    AuditService auditService;
+
     @POST
     @Path("/sync")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "syncRepos",
             summary = "Trigger a repository sync",
@@ -65,6 +73,7 @@ public class RepoSettingsResource {
         } catch (Exception e) {
             LOG.warnf("Manual repo sync failed (non-fatal): %s", e.getMessage());
         }
+        auditService.log("REPO_SETTINGS", "REPO_SYNC", "repo_settings", null, null);
         return Response.ok(Map.of("action", "sync_triggered")).build();
     }
 
@@ -106,6 +115,7 @@ public class RepoSettingsResource {
 
     @PUT
     @Path("/{workspace}/{repoSlug}")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "upsertRepoSettings",
             summary = "Create or update repository settings",
@@ -148,6 +158,7 @@ public class RepoSettingsResource {
             LOG.warnf("Webhook sync failed after upsert for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
         }
 
+        auditService.log("REPO_SETTINGS", "REPO_SETTINGS_SAVED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of(
                 "action", "saved",
                 "workspace", workspace,
@@ -163,6 +174,7 @@ public class RepoSettingsResource {
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/enable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "enableRepoReview",
             summary = "Enable automated review for a repository",
@@ -192,11 +204,13 @@ public class RepoSettingsResource {
                 LOG.warnf("Webhook sync failed after enable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
             }
         }
+        auditService.log("REPO_SETTINGS", "REPO_REVIEW_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/disable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "disableRepoReview",
             summary = "Disable automated review for a repository",
@@ -224,11 +238,13 @@ public class RepoSettingsResource {
         } catch (Exception e) {
             LOG.warnf("Webhook sync failed after disable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
         }
+        auditService.log("REPO_SETTINGS", "REPO_REVIEW_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/vector/enable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "enableRepoVector",
             summary = "Enable vector indexing for a repository",
@@ -251,11 +267,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setVectorEnabled(workspace, repoSlug, true);
+        auditService.log("REPO_SETTINGS", "REPO_VECTOR_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "vector_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/vector/disable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "disableRepoVector",
             summary = "Disable vector indexing for a repository",
@@ -278,11 +296,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setVectorEnabled(workspace, repoSlug, false);
+        auditService.log("REPO_SETTINGS", "REPO_VECTOR_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "vector_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/docs/enable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "enableRepoDocs",
             summary = "Enable documentation generation for a repository",
@@ -304,11 +324,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setDocsEnabled(workspace, repoSlug, true);
+        auditService.log("REPO_SETTINGS", "REPO_DOCS_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "docs_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/docs/disable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "disableRepoDocs",
             summary = "Disable documentation generation for a repository",
@@ -330,11 +352,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setDocsEnabled(workspace, repoSlug, false);
+        auditService.log("REPO_SETTINGS", "REPO_DOCS_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/upgrade/enable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "enableRepoUpgrade",
             summary = "Enable automatic upgrades for a repository",
@@ -357,11 +381,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setUpgradeEnabled(workspace, repoSlug, true);
+        auditService.log("REPO_SETTINGS", "REPO_UPGRADE_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "upgrade_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/upgrade/disable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "disableRepoUpgrade",
             summary = "Disable automatic upgrades for a repository",
@@ -384,11 +410,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setUpgradeEnabled(workspace, repoSlug, false);
+        auditService.log("REPO_SETTINGS", "REPO_UPGRADE_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/quality-report/enable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "enableRepoQualityReport",
             summary = "Enable quality report collection for a repository",
@@ -411,11 +439,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setQualityReportEnabled(workspace, repoSlug, true);
+        auditService.log("REPO_SETTINGS", "REPO_QUALITY_REPORT_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "quality_report_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/quality-report/disable")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "disableRepoQualityReport",
             summary = "Disable quality report collection for a repository",
@@ -438,11 +468,13 @@ public class RepoSettingsResource {
                     .build();
         }
         settingsStore.setQualityReportEnabled(workspace, repoSlug, false);
+        auditService.log("REPO_SETTINGS", "REPO_QUALITY_REPORT_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/archive")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "archiveRepo",
             summary = "Archive a repository",
@@ -470,11 +502,13 @@ public class RepoSettingsResource {
         } catch (Exception e) {
             LOG.warnf("Webhook sync failed after archive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
         }
+        auditService.log("REPO_SETTINGS", "REPO_ARCHIVED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
     @Path("/{workspace}/{repoSlug}/unarchive")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "unarchiveRepo",
             summary = "Unarchive a repository",
@@ -504,11 +538,13 @@ public class RepoSettingsResource {
                 LOG.warnf("Webhook sync failed after unarchive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
             }
         }
+        auditService.log("REPO_SETTINGS", "REPO_UNARCHIVED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @DELETE
     @Path("/{workspace}/{repoSlug}")
+    @RolesAllowed("app_admin")
     @Operation(
             operationId = "deleteRepoSettings",
             summary = "Remove repository settings",
@@ -535,6 +571,7 @@ public class RepoSettingsResource {
         } catch (Exception e) {
             LOG.warnf("Webhook removal failed after delete for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
         }
+        auditService.log("REPO_SETTINGS", "REPO_DELETED", "repo_setting", workspace + "/" + repoSlug, null);
         return Response.ok(Map.of("action", "deleted", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
