@@ -128,9 +128,15 @@ public class BitbucketCommentWebhookResource {
                 return ok("skipped", "Review disabled for " + repoFullName);
             }
 
-            // Guard: ignore comments from the agent itself (prevent infinite loops)
-            if (commentAuthor.equals(bbUser)) {
-                LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, bbUser);
+            // Guard: ignore comments from the agent itself (prevent infinite loops).
+            // Use the API-resolved account username rather than the raw config value, because
+            // Bitbucket Access Tokens use "x-token-auth" as the HTTP credential but the actual
+            // Bitbucket account username is different — if we compared against "x-token-auth"
+            // the filter would never match and every agent reply would re-trigger processing.
+            String botUsername = platformService.getCurrentUserUsername();
+            if (botUsername.isBlank()) botUsername = bbUser;
+            if (commentAuthor.equals(botUsername)) {
+                LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, botUsername);
                 audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                 return ok("ignored", "Comment is from the agent itself");
             }

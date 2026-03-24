@@ -103,6 +103,21 @@ public interface GitPlatformService {
     }
 
     /**
+     * Returns the platform account username of the authenticated bot/service account,
+     * as it appears in webhook payloads and comment author fields.
+     * <p>
+     * This may differ from the HTTP authentication credential (e.g. Bitbucket Access Tokens
+     * use {@code x-token-auth} as the HTTP username, while the actual Bitbucket account
+     * username is resolved via the API).
+     * <p>
+     * Returns an empty string if the platform does not support this lookup or if the
+     * resolution fails, in which case callers should fall back to a configured value.
+     */
+    default String getCurrentUserUsername() {
+        return "";
+    }
+
+    /**
      * List all repository slugs / names within an org or workspace.
      * <p>
      * Implementations that do not support workspace-level repository listing

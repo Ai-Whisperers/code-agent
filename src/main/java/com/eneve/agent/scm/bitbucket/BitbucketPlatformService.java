@@ -44,6 +44,9 @@ public class BitbucketPlatformService implements GitPlatformService {
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
+    /** Lazily resolved actual Bitbucket account username (distinct from the HTTP auth credential). */
+    private volatile String cachedAccountUsername;
+
     @Override
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
@@ -213,7 +216,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                             String raw = comment.path("content").path("raw").asText("").trim();
                             String createdOn = comment.path("created_on").asText("");
                             boolean isAgent = comment.path("user").path("username").asText(
-                                    comment.path("user").path("nickname").asText("")).equals(bbUser());
+                                    comment.path("user").path("nickname").asText("")).equals(effectiveBotUsername());
                             thread.add(new ThreadComment(id, parentId, author, raw, createdOn, isAgent));
                         }
                     }
@@ -247,7 +250,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (author.equals(bbUser())) {
+                        if (author.equals(effectiveBotUsername())) {
                             continue;
                         }
 
@@ -300,7 +303,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (!author.equals(bbUser())) {
+                        if (!author.equals(effectiveBotUsername())) {
                             continue;
                         }
 
@@ -656,6 +659,52 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     private String bbUser() {
         return settingsService.get("bitbucket.user");
+    }
+
+    /**
+     * Returns the actual Bitbucket account username of the authenticated service account,
+     * as it appears in webhook payloads and comment author fields. This is distinct from the
+     * HTTP auth credential ({@code x-token-auth} is used for Bearer/Access Token auth but is
+     * not a real Bitbucket username).
+     * <p>
+     * The result is fetched once from {@code GET /user} and then cached for the lifetime of
+     * the application.
+     *
+     * @return resolved Bitbucket account username, or empty string on failure
+     */
+    @Override
+    public String getCurrentUserUsername() {
+        if (cachedAccountUsername != null) return cachedAccountUsername;
+        synchronized (this) {
+            if (cachedAccountUsername != null) return cachedAccountUsername;
+            try {
+                String responseBody = getAndReturn("/user", "get current user");
+                JsonNode node = objectMapper.readTree(responseBody);
+                String username = node.path("username").asText(
+                        node.path("nickname").asText(""));
+                if (!username.isBlank()) {
+                    cachedAccountUsername = username;
+                    LOG.infof("Resolved Bitbucket account username: '%s'", username);
+                    return username;
+                }
+                LOG.warnf("Bitbucket /user response contained no username or nickname");
+            } catch (Exception e) {
+                LOG.warnf("Failed to resolve Bitbucket account username (self-filter may be impaired): %s",
+                        e.getMessage());
+            }
+            return "";
+        }
+    }
+
+    /**
+     * Returns the username to use when comparing comment authors to determine if a comment
+     * was posted by this agent (loop guard). Prefers the API-resolved account username over
+     * the configured HTTP auth credential, which may be {@code x-token-auth} rather than the
+     * real Bitbucket account username.
+     */
+    private String effectiveBotUsername() {
+        String resolved = getCurrentUserUsername();
+        return resolved.isBlank() ? bbUser() : resolved;
     }
 
     private String credentialsDiagnostic() {
