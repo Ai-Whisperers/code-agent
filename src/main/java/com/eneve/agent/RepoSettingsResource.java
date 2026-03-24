@@ -18,7 +18,6 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
-import io.quarkus.security.Authenticated;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -37,7 +36,6 @@ import jakarta.ws.rs.core.Response;
  * REST endpoints for managing per-repository settings — review enablement,
  * shared rule selection, and custom review prompt templates.
  */
-@Authenticated
 @Path("/settings/repos")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
