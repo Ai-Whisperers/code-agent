@@ -1,6 +1,7 @@
 package com.eneve.agent.webhooks;
 
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
@@ -8,8 +9,11 @@ import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -48,6 +52,7 @@ public class BitbucketWebhookResource {
     @Inject JobStore jobStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject HookEvaluator hookEvaluator;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -77,16 +82,17 @@ public class BitbucketWebhookResource {
     public Response handlePrWebhook(
             @HeaderParam("X-Event-Key") String eventKey,
             String rawPayload) {
+        String event = eventKey != null ? eventKey : "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            String event = eventKey != null ? eventKey : "";
             LOG.infof("Bitbucket webhook received: %s", event);
 
             boolean isCreateOrUpdate = event.equals("pullrequest:created") || event.equals("pullrequest:updated");
             boolean isFulfilled = event.equals("pullrequest:fulfilled");
 
             if (!isCreateOrUpdate && !isFulfilled) {
+                audit("bitbucket", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + event);
             }
 
@@ -101,10 +107,13 @@ public class BitbucketWebhookResource {
             String repoFullName = repo.path("full_name").asText("");
 
             if (prId.isBlank() || repoFullName.isBlank()) {
+                audit("bitbucket", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Missing PR ID or repository in payload");
             }
 
             String[] repoParts = repoFullName.split("/", 2);
+            String workspace = repoParts.length == 2 ? repoParts[0] : "";
+            String repoSlug = repoParts.length == 2 ? repoParts[1] : "";
             String repoUrl = "https://bitbucket.org/" + repoFullName + ".git";
 
             if (isFulfilled) {
@@ -112,9 +121,9 @@ public class BitbucketWebhookResource {
                         prId, sourceBranch, destBranch, repoFullName);
                 if (repoParts.length == 2) {
                     // Legacy hook evaluation for backward compatibility
-                    var legacyJobIds = hookEvaluator.evaluate(
-                            repoParts[0], repoParts[1], repoUrl, event, destBranch);
-                    
+                    HookEvalResult legacyResult = hookEvaluator.evaluate(
+                            workspace, repoSlug, repoUrl, event, destBranch);
+
                     // New generic hook evaluation with context
                     var context = Map.of(
                             "prId", prId,
@@ -123,31 +132,38 @@ public class BitbucketWebhookResource {
                             "prTitle", prTitle,
                             "author", prAuthor,
                             "platform", "bitbucket",
-                            "repoSlug", repoParts[1]
+                            "repoSlug", repoSlug
                     );
-                    var newJobIds = hookEvaluator.evaluateByTrigger(
-                            "scm.pr_merged", repoParts[0], repoParts[1], repoUrl, context);
-                    
-                    var totalJobIds = new ArrayList<>(legacyJobIds);
-                    totalJobIds.addAll(newJobIds);
-                    
+                    HookEvalResult newResult = hookEvaluator.evaluateByTrigger(
+                            "scm.pr_merged", workspace, repoSlug, repoUrl, context);
+
+                    var totalJobIds = new ArrayList<>(legacyResult.jobIds());
+                    totalJobIds.addAll(newResult.jobIds());
+                    var allHookNames = new ArrayList<>(legacyResult.hookNames());
+                    allHookNames.addAll(newResult.hookNames());
+
+                    audit("bitbucket", event, workspace, repoSlug, prId, prAuthor,
+                            "hooks_evaluated", allHookNames, rawPayload);
                     return Response.ok(Map.of(
                             "action", "hooks_evaluated",
                             "hooksTriggered", totalJobIds.size(),
                             "jobIds", totalJobIds
                     )).build();
                 }
+                audit("bitbucket", event, null, null, prId, prAuthor, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Could not parse workspace/repo from " + repoFullName);
             }
 
             if (repoParts.length == 2
-                    && !repoSettingsStore.isReviewEnabled(repoParts[0], repoParts[1])) {
+                    && !repoSettingsStore.isReviewEnabled(workspace, repoSlug)) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s — review disabled for %s", prId, repoFullName);
+                audit("bitbucket", event, workspace, repoSlug, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "Review disabled for " + repoFullName);
             }
 
             if (shouldSkipAuthor(prAuthor)) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s by '%s' (matches skip-authors)", prId, prAuthor);
+                audit("bitbucket", event, workspace, repoSlug, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
             }
 
@@ -155,6 +171,7 @@ public class BitbucketWebhookResource {
                     && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
                 LOG.infof("Bitbucket webhook: skipping PR #%s — title does not contain '%s'",
                         prId, requireTitleKeyword);
+                audit("bitbucket", event, workspace, repoSlug, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
             }
 
@@ -167,6 +184,7 @@ public class BitbucketWebhookResource {
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
 
             // Evaluate hooks for PR created/updated events
+            HookEvalResult hookResult = HookEvalResult.empty();
             if (repoParts.length == 2) {
                 String triggerType = event.equals("pullrequest:created") ? "scm.pr_created" : "scm.pr_updated";
                 var context = Map.of(
@@ -176,20 +194,22 @@ public class BitbucketWebhookResource {
                         "prTitle", prTitle,
                         "author", prAuthor,
                         "platform", "bitbucket",
-                        "repoSlug", repoParts[1]
+                        "repoSlug", repoSlug
                 );
-                var hookJobIds = hookEvaluator.evaluateByTrigger(
-                        triggerType, repoParts[0], repoParts[1], repoUrl, context);
-                
-                if (!hookJobIds.isEmpty()) {
-                    LOG.infof("Bitbucket webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+                hookResult = hookEvaluator.evaluateByTrigger(triggerType, workspace, repoSlug, repoUrl, context);
+
+                if (!hookResult.isEmpty()) {
+                    LOG.infof("Bitbucket webhook: triggered %d hook jobs for %s", hookResult.size(), triggerType);
                 }
             }
 
+            audit("bitbucket", event, workspace, repoSlug, prId, prAuthor,
+                    "review_triggered", hookResult.hookNames(), rawPayload);
             return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("Bitbucket webhook processing error: %s", e.getMessage());
+            audit("bitbucket", event, null, null, null, null, "error", List.of(), rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -239,6 +259,17 @@ public class BitbucketWebhookResource {
         if (title == null || title.isBlank()) return null;
         Matcher matcher = JIRA_KEY_PATTERN.matcher(title);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private void audit(String platform, String eventType, String workspace, String repoSlug,
+                        String prId, String author, String action,
+                        List<String> hooksExecuted, String payload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, repoSlug, prId, author, action, hooksExecuted, payload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save webhook audit entry (non-fatal): %s", e.getMessage());
+        }
     }
 
     private static Response ok(String action, String reason) {

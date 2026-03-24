@@ -9,8 +9,11 @@ import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,6 +53,7 @@ public class GitHubWebhookResource {
     @Inject JobStore jobStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject HookEvaluator hookEvaluator;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -80,13 +84,14 @@ public class GitHubWebhookResource {
     public Response handlePrWebhook(
             @HeaderParam("X-GitHub-Event") String eventHeader,
             String rawPayload) {
+        String event = eventHeader != null ? eventHeader : "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            String event = eventHeader != null ? eventHeader : "";
             LOG.infof("GitHub webhook received: %s", event);
 
             if (!event.equalsIgnoreCase("pull_request")) {
+                audit("github", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + event);
             }
 
@@ -98,6 +103,7 @@ public class GitHubWebhookResource {
                     && payload.path("pull_request").path("merged").asBoolean(false);
 
             if (!isOpenOrUpdate && !isMerge) {
+                audit("github", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported PR action: " + action);
             }
 
@@ -116,6 +122,7 @@ public class GitHubWebhookResource {
             String repoHtmlUrl = repoNode.path("html_url").asText("");
 
             if (prNumber.equals("0") || fullName.isBlank()) {
+                audit("github", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Missing PR number or repository full_name in payload");
             }
 
@@ -127,10 +134,10 @@ public class GitHubWebhookResource {
             if (isMerge) {
                 LOG.infof("GitHub webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
                         prNumber, sourceBranch, targetBranch, fullName);
-                        
+
                 // Legacy hook evaluation for backward compatibility
-                var legacyJobIds = hookEvaluator.evaluate(org, repo, repoUrl, "merge", targetBranch);
-                
+                HookEvalResult legacyResult = hookEvaluator.evaluate(org, repo, repoUrl, "merge", targetBranch);
+
                 // New generic hook evaluation with context
                 var context = Map.of(
                         "prId", prNumber,
@@ -141,12 +148,16 @@ public class GitHubWebhookResource {
                         "platform", "github",
                         "repoSlug", repo
                 );
-                var newJobIds = hookEvaluator.evaluateByTrigger(
+                HookEvalResult newResult = hookEvaluator.evaluateByTrigger(
                         "scm.pr_merged", org, repo, repoUrl, context);
-                
-                var totalJobIds = new ArrayList<>(legacyJobIds);
-                totalJobIds.addAll(newJobIds);
-                
+
+                var totalJobIds = new ArrayList<>(legacyResult.jobIds());
+                totalJobIds.addAll(newResult.jobIds());
+                var allHookNames = new ArrayList<>(legacyResult.hookNames());
+                allHookNames.addAll(newResult.hookNames());
+
+                audit("github", event, org, repo, prNumber, prAuthor,
+                        "hooks_evaluated", allHookNames, rawPayload);
                 return Response.ok(Map.of(
                         "action", "hooks_evaluated",
                         "hooksTriggered", totalJobIds.size(),
@@ -156,11 +167,13 @@ public class GitHubWebhookResource {
 
             if (!repoSettingsStore.isReviewEnabled(org, repo)) {
                 LOG.infof("GitHub webhook: skipping PR #%s — review disabled for %s", prNumber, fullName);
+                audit("github", event, org, repo, prNumber, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "Review disabled for " + fullName);
             }
 
             if (shouldSkipAuthor(prAuthor)) {
                 LOG.infof("GitHub webhook: skipping PR #%s by '%s' (matches skip-authors)", prNumber, prAuthor);
+                audit("github", event, org, repo, prNumber, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
             }
 
@@ -168,6 +181,7 @@ public class GitHubWebhookResource {
                     && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
                 LOG.infof("GitHub webhook: skipping PR #%s — title does not contain '%s'",
                         prNumber, requireTitleKeyword);
+                audit("github", event, org, repo, prNumber, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
             }
 
@@ -188,17 +202,20 @@ public class GitHubWebhookResource {
                     "platform", "github",
                     "repoSlug", repo
             );
-            var hookJobIds = hookEvaluator.evaluateByTrigger(
+            HookEvalResult hookResult = hookEvaluator.evaluateByTrigger(
                     triggerType, org, repo, repoUrl, context);
-            
-            if (!hookJobIds.isEmpty()) {
-                LOG.infof("GitHub webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+
+            if (!hookResult.isEmpty()) {
+                LOG.infof("GitHub webhook: triggered %d hook jobs for %s", hookResult.size(), triggerType);
             }
 
+            audit("github", event, org, repo, prNumber, prAuthor,
+                    "review_triggered", hookResult.hookNames(), rawPayload);
             return submitReviewJob(repoUrl, prNumber, targetBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("GitHub webhook processing error: %s", e.getMessage());
+            audit("github", event, null, null, null, null, "error", List.of(), rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -248,6 +265,17 @@ public class GitHubWebhookResource {
         if (title == null || title.isBlank()) return null;
         Matcher matcher = JIRA_KEY_PATTERN.matcher(title);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private void audit(String platform, String eventType, String workspace, String repoSlug,
+                        String prId, String author, String action,
+                        List<String> hooksExecuted, String payload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, repoSlug, prId, author, action, hooksExecuted, payload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save webhook audit entry (non-fatal): %s", e.getMessage());
+        }
     }
 
     private static Response ok(String action, String reason) {

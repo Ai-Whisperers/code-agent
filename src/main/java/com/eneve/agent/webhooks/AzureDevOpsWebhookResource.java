@@ -1,11 +1,15 @@
 package com.eneve.agent.webhooks;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.HookEvaluator;
+import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.scm.GitPlatformService;
 
 import com.eneve.agent.agent.JobQueue;
@@ -47,6 +51,7 @@ public class AzureDevOpsWebhookResource {
     @Inject JobQueue jobQueue;
     @Inject HookEvaluator hookEvaluator;
     @Inject JobStore jobStore;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -75,14 +80,16 @@ public class AzureDevOpsWebhookResource {
             @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response handlePrWebhook(String rawPayload) {
+        String eventType = "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            String eventType = payload.path("eventType").asText("");
+            eventType = payload.path("eventType").asText("");
             LOG.infof("Azure DevOps webhook received: %s", eventType);
 
             if (!eventType.equals("git.pullrequest.created")
                     && !eventType.equals("git.pullrequest.updated")) {
+                audit("azuredevops", eventType, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + eventType);
             }
 
@@ -108,11 +115,13 @@ public class AzureDevOpsWebhookResource {
             }
 
             if (prId.equals("0") || repoName.isBlank()) {
+                audit("azuredevops", eventType, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Missing PR ID or repository in payload");
             }
 
             if (shouldSkipAuthor(prAuthor)) {
                 LOG.infof("Azure DevOps webhook: skipping PR #%s by '%s' (matches skip-authors)", prId, prAuthor);
+                audit("azuredevops", eventType, projectName, repoName, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
             }
 
@@ -120,6 +129,7 @@ public class AzureDevOpsWebhookResource {
                     && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
                 LOG.infof("Azure DevOps webhook: skipping PR #%s — title does not contain '%s'",
                         prId, requireTitleKeyword);
+                audit("azuredevops", eventType, projectName, repoName, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
             }
 
@@ -139,7 +149,7 @@ public class AzureDevOpsWebhookResource {
                 case "git.pullrequest.merged" -> triggerType = "scm.pr_merged";
                 default -> triggerType = "scm.pr_updated"; // fallback
             }
-            
+
             var context = Map.of(
                     "prId", prId,
                     "sourceBranch", sourceBranch,
@@ -149,17 +159,20 @@ public class AzureDevOpsWebhookResource {
                     "platform", "azuredevops",
                     "repoSlug", repoName
             );
-            var hookJobIds = hookEvaluator.evaluateByTrigger(
+            HookEvalResult hookResult = hookEvaluator.evaluateByTrigger(
                     triggerType, projectName, repoName, repoUrl, context);
-            
-            if (!hookJobIds.isEmpty()) {
-                LOG.infof("Azure DevOps webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+
+            if (!hookResult.isEmpty()) {
+                LOG.infof("Azure DevOps webhook: triggered %d hook jobs for %s", hookResult.size(), triggerType);
             }
 
+            audit("azuredevops", eventType, projectName, repoName, prId, prAuthor,
+                    "review_triggered", hookResult.hookNames(), rawPayload);
             return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("Azure DevOps webhook processing error: %s", e.getMessage());
+            audit("azuredevops", eventType, null, null, null, null, "error", List.of(), rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -209,6 +222,17 @@ public class AzureDevOpsWebhookResource {
             return refName.substring("refs/heads/".length());
         }
         return refName != null ? refName : "";
+    }
+
+    private void audit(String platform, String eventType, String workspace, String repoSlug,
+                        String prId, String author, String action,
+                        List<String> hooksExecuted, String payload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, repoSlug, prId, author, action, hooksExecuted, payload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save webhook audit entry (non-fatal): %s", e.getMessage());
+        }
     }
 
     private static Response ok(String action, String reason) {

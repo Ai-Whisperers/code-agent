@@ -16,6 +16,8 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.model.MemoryEntry;
 import com.eneve.agent.agent.store.MemoryStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
@@ -61,6 +63,7 @@ public class BitbucketCommentWebhookResource {
     @Inject MemoryStore memoryStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitPlatformService platformService;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     @ConfigProperty(name = "bitbucket.user")
     String bbUser;
@@ -86,13 +89,14 @@ public class BitbucketCommentWebhookResource {
     public Response handleCommentWebhook(
             @HeaderParam("X-Event-Key") String eventKey,
             String rawPayload) {
+        String event = eventKey != null ? eventKey : "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            String event = eventKey != null ? eventKey : "";
             LOG.infof("Bitbucket comment webhook received: %s", event);
 
             if (!event.equals("pullrequest:comment_created")) {
+                audit("bitbucket", event, null, null, null, null, "ignored", rawPayload);
                 return ok("ignored", "Unsupported event: " + event);
             }
 
@@ -109,35 +113,44 @@ public class BitbucketCommentWebhookResource {
             String repoFullName = repo.path("full_name").asText("");
 
             if (commentId == 0 || prId.equals("0") || repoFullName.isBlank()) {
+                audit("bitbucket", event, null, null, null, null, "ignored", rawPayload);
                 return ok("ignored", "Missing comment ID, PR ID, or repository in payload");
             }
 
             String[] repoParts = repoFullName.split("/", 2);
+            String workspace = repoParts.length == 2 ? repoParts[0] : "";
+            String repoSlug = repoParts.length == 2 ? repoParts[1] : "";
+
             if (repoParts.length == 2
-                    && !repoSettingsStore.isReviewEnabled(repoParts[0], repoParts[1])) {
+                    && !repoSettingsStore.isReviewEnabled(workspace, repoSlug)) {
                 LOG.infof("Comment webhook: skipping — review disabled for %s", repoFullName);
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "skipped", rawPayload);
                 return ok("skipped", "Review disabled for " + repoFullName);
             }
 
             // Guard: ignore comments from the agent itself (prevent infinite loops)
             if (commentAuthor.equals(bbUser)) {
                 LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, bbUser);
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                 return ok("ignored", "Comment is from the agent itself");
             }
 
             // Guard: only process replies (comments with a parent)
             JsonNode parentNode = comment.path("parent");
             if (parentNode.isMissingNode() || !parentNode.has("id")) {
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                 return ok("ignored", "Not a reply — no parent comment");
             }
             long parentCommentId = parentNode.path("id").asLong(0);
             if (parentCommentId == 0) {
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                 return ok("ignored", "Not a reply — parent ID is zero");
             }
 
             // Guard: only reply if the parent comment is one of ours
             if (!commentStore.contains(parentCommentId)) {
                 LOG.debugf("Comment webhook: parent comment %d is not from the agent, ignoring", parentCommentId);
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                 return ok("ignored", "Parent comment is not from the agent");
             }
 
@@ -156,35 +169,38 @@ public class BitbucketCommentWebhookResource {
                     commentId, parentCommentId, prId, repoFullName);
 
             // Fast path: /learn command stores a team preference directly
-            if (commentText.toLowerCase(Locale.ROOT).startsWith("/learn ")) {
-                String[] parts = repoFullName.split("/", 2);
-                if (parts.length != 2) {
+            String lowerText = commentText.toLowerCase(Locale.ROOT);
+            if (lowerText.startsWith("/learn ")) {
+                if (repoParts.length != 2) {
+                    audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                     return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
                 }
-                return handleLearnCommand(commentText, parts[0], parts[1], repoUrl, prId,
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "learn_command", rawPayload);
+                return handleLearnCommand(commentText, workspace, repoSlug, repoUrl, prId,
                         parentCommentId, commentAuthor);
             }
 
             // Fast path: /fp or /false-positive marks the finding as a false positive
-            String lowerText = commentText.toLowerCase(Locale.ROOT);
             if (lowerText.equals("/fp") || lowerText.equals("/false-positive")
                     || lowerText.startsWith("/fp ") || lowerText.startsWith("/false-positive ")) {
-                String[] parts = repoFullName.split("/", 2);
-                if (parts.length != 2) {
+                if (repoParts.length != 2) {
+                    audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                     return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
                 }
-                return handleFalsePositiveCommand(parts[0], parts[1], repoUrl, prId,
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "false_positive", rawPayload);
+                return handleFalsePositiveCommand(workspace, repoSlug, repoUrl, prId,
                         parentCommentId, commentAuthor);
             }
 
             // Fast path: /generate-tests triggers a unit test generation job for this PR
             if (lowerText.equals("/generate-tests")) {
-                String[] parts = repoFullName.split("/", 2);
-                if (parts.length != 2) {
+                if (repoParts.length != 2) {
+                    audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
                     return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
                 }
+                audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "generate_tests", rawPayload);
                 return handleGenerateTestsCommand(repoUrl, prId, parentCommentId,
-                        parts[0], parts[1]);
+                        workspace, repoSlug);
             }
 
             // Classify intent: is this a fix request or a discussion?
@@ -195,11 +211,14 @@ public class BitbucketCommentWebhookResource {
 
             LOG.infof("Comment webhook: classified intent as %s for comment %d", jobType, commentId);
 
+            String auditAction = (jobType == JobType.FIX_COMMENT) ? "fix_triggered" : "reply_triggered";
+            audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, auditAction, rawPayload);
             return submitJob(repoUrl, prId, parentCommentId, commentText,
                     filePath, line, jobType);
 
         } catch (Exception e) {
             LOG.errorf("Bitbucket comment webhook processing error: %s", e.getMessage());
+            audit("bitbucket", event, null, null, null, null, "error", rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -352,6 +371,16 @@ public class BitbucketCommentWebhookResource {
             MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, memoryText, "auto-suppress");
             memoryStore.save(entry);
             LOG.infof("Auto-suppressed recurring FP pattern for %s/%s: %s", workspace, repoSlug, pattern);
+        }
+    }
+
+    private void audit(String platform, String eventType, String workspace, String repoSlug,
+                        String prId, String author, String action, String payload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, repoSlug, prId, author, action, List.of(), payload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save webhook audit entry (non-fatal): %s", e.getMessage());
         }
     }
 

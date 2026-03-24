@@ -1,6 +1,7 @@
 package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.model.AutomationHook;
+import com.eneve.agent.agent.model.HookEvalResult;
 import com.eneve.agent.agent.store.HookStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
@@ -38,19 +39,20 @@ public class HookEvaluator {
 
     /**
      * Evaluates all hooks matching the given PR event and destination branch.
-     * Returns a list of job IDs that were submitted.
+     * Returns a {@link HookEvalResult} containing the submitted job IDs and the executed hook names.
      */
-    public List<String> evaluate(String workspace, String repoSlug,
-                                 String repoUrl, String prEvent,
-                                 String destBranch) {
+    public HookEvalResult evaluate(String workspace, String repoSlug,
+                                   String repoUrl, String prEvent,
+                                   String destBranch) {
 
         List<AutomationHook> hooks = hookStore.findByTrigger("pr_event", prEvent);
         if (hooks.isEmpty()) {
             LOG.debugf("No hooks configured for event '%s'", prEvent);
-            return List.of();
+            return HookEvalResult.empty();
         }
 
         List<String> submittedJobIds = new ArrayList<>();
+        List<String> executedHookNames = new ArrayList<>();
 
         for (AutomationHook hook : hooks) {
             if (!matchesBranch(hook.branchPattern(), destBranch)) {
@@ -68,26 +70,28 @@ public class HookEvaluator {
             String jobId = submitHookJob(hook, workspace, repoSlug, repoUrl, destBranch);
             if (jobId != null) {
                 submittedJobIds.add(jobId);
+                executedHookNames.add(hook.name());
             }
         }
 
-        return submittedJobIds;
+        return new HookEvalResult(submittedJobIds, executedHookNames);
     }
 
     /**
      * Evaluates all hooks matching the given trigger type with optional context injection.
-     * Returns a list of job IDs that were submitted.
+     * Returns a {@link HookEvalResult} containing the submitted job IDs and the executed hook names.
      */
-    public List<String> evaluateByTrigger(String triggerType, String workspace, 
-                                          String repoSlug, String repoUrl, 
-                                          Map<String, String> context) {
+    public HookEvalResult evaluateByTrigger(String triggerType, String workspace,
+                                            String repoSlug, String repoUrl,
+                                            Map<String, String> context) {
         List<AutomationHook> hooks = hookStore.findByTriggerType(triggerType);
         if (hooks.isEmpty()) {
             LOG.debugf("No hooks configured for trigger type '%s'", triggerType);
-            return List.of();
+            return HookEvalResult.empty();
         }
 
         List<String> submittedJobIds = new ArrayList<>();
+        List<String> executedHookNames = new ArrayList<>();
 
         for (AutomationHook hook : hooks) {
             // Check trigger filter matching
@@ -106,10 +110,11 @@ public class HookEvaluator {
             String jobId = submitHookJobWithContext(hook, workspace, repoSlug, repoUrl, context);
             if (jobId != null) {
                 submittedJobIds.add(jobId);
+                executedHookNames.add(hook.name());
             }
         }
 
-        return submittedJobIds;
+        return new HookEvalResult(submittedJobIds, executedHookNames);
     }
 
     private boolean matchesTriggerFilter(Map<String, String> filter, Map<String, String> context) {

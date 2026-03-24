@@ -9,8 +9,11 @@ import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -50,6 +53,7 @@ public class GitLabWebhookResource {
     @Inject JobStore jobStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject HookEvaluator hookEvaluator;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
     String skipAuthors;
@@ -80,13 +84,14 @@ public class GitLabWebhookResource {
     public Response handleMrWebhook(
             @HeaderParam("X-Gitlab-Event") String eventHeader,
             String rawPayload) {
+        String event = eventHeader != null ? eventHeader : "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
 
-            String event = eventHeader != null ? eventHeader : "";
             LOG.infof("GitLab webhook received: %s", event);
 
             if (!event.equalsIgnoreCase("Merge Request Hook")) {
+                audit("gitlab", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + event);
             }
 
@@ -98,6 +103,7 @@ public class GitLabWebhookResource {
             boolean isMerge = action.equals("merge");
 
             if (!isOpenOrUpdate && !isMerge) {
+                audit("gitlab", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported MR action: " + action);
             }
 
@@ -116,6 +122,7 @@ public class GitLabWebhookResource {
             String repoUrl = projectWebUrl.isBlank() ? "" : projectWebUrl + ".git";
 
             if (mrIid.equals("0") || projectPath.isBlank()) {
+                audit("gitlab", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Missing MR IID or project path in payload");
             }
 
@@ -127,10 +134,10 @@ public class GitLabWebhookResource {
             if (isMerge) {
                 LOG.infof("GitLab webhook: MR !%s merged (%s -> %s) on %s — evaluating hooks",
                         mrIid, sourceBranch, targetBranch, projectPath);
-                        
+
                 // Legacy hook evaluation for backward compatibility
-                var legacyJobIds = hookEvaluator.evaluate(namespace, repoSlug, repoUrl, "merge", targetBranch);
-                
+                HookEvalResult legacyResult = hookEvaluator.evaluate(namespace, repoSlug, repoUrl, "merge", targetBranch);
+
                 // New generic hook evaluation with context
                 var context = Map.of(
                         "prId", mrIid,
@@ -141,12 +148,16 @@ public class GitLabWebhookResource {
                         "platform", "gitlab",
                         "repoSlug", repoSlug
                 );
-                var newJobIds = hookEvaluator.evaluateByTrigger(
+                HookEvalResult newResult = hookEvaluator.evaluateByTrigger(
                         "scm.pr_merged", namespace, repoSlug, repoUrl, context);
-                
-                var totalJobIds = new ArrayList<>(legacyJobIds);
-                totalJobIds.addAll(newJobIds);
-                
+
+                var totalJobIds = new ArrayList<>(legacyResult.jobIds());
+                totalJobIds.addAll(newResult.jobIds());
+                var allHookNames = new ArrayList<>(legacyResult.hookNames());
+                allHookNames.addAll(newResult.hookNames());
+
+                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor,
+                        "hooks_evaluated", allHookNames, rawPayload);
                 return Response.ok(Map.of(
                         "action", "hooks_evaluated",
                         "hooksTriggered", totalJobIds.size(),
@@ -156,11 +167,13 @@ public class GitLabWebhookResource {
 
             if (!repoSettingsStore.isReviewEnabled(namespace, repoSlug)) {
                 LOG.infof("GitLab webhook: skipping MR !%s — review disabled for %s", mrIid, projectPath);
+                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "Review disabled for " + projectPath);
             }
 
             if (shouldSkipAuthor(mrAuthor)) {
                 LOG.infof("GitLab webhook: skipping MR !%s by '%s' (matches skip-authors)", mrIid, mrAuthor);
+                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "MR author '" + mrAuthor + "' is in skip list");
             }
 
@@ -168,6 +181,7 @@ public class GitLabWebhookResource {
                     && !mrTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
                 LOG.infof("GitLab webhook: skipping MR !%s — title does not contain '%s'",
                         mrIid, requireTitleKeyword);
+                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "MR title does not contain required keyword: " + requireTitleKeyword);
             }
 
@@ -190,17 +204,20 @@ public class GitLabWebhookResource {
                     "platform", "gitlab",
                     "repoSlug", repoSlug
             );
-            var hookJobIds = hookEvaluator.evaluateByTrigger(
+            HookEvalResult hookResult = hookEvaluator.evaluateByTrigger(
                     triggerType, namespace, repoSlug, repoUrl, context);
-            
-            if (!hookJobIds.isEmpty()) {
-                LOG.infof("GitLab webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+
+            if (!hookResult.isEmpty()) {
+                LOG.infof("GitLab webhook: triggered %d hook jobs for %s", hookResult.size(), triggerType);
             }
 
+            audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor,
+                    "review_triggered", hookResult.hookNames(), rawPayload);
             return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey, headCommitSha);
 
         } catch (Exception e) {
             LOG.errorf("GitLab webhook processing error: %s", e.getMessage());
+            audit("gitlab", event, null, null, null, null, "error", List.of(), rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -250,6 +267,17 @@ public class GitLabWebhookResource {
         if (title == null || title.isBlank()) return null;
         Matcher matcher = JIRA_KEY_PATTERN.matcher(title);
         return matcher.find() ? matcher.group(1) : null;
+    }
+
+    private void audit(String platform, String eventType, String workspace, String repoSlug,
+                        String prId, String author, String action,
+                        List<String> hooksExecuted, String payload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, repoSlug, prId, author, action, hooksExecuted, payload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save webhook audit entry (non-fatal): %s", e.getMessage());
+        }
     }
 
     private static Response ok(String action, String reason) {
