@@ -2,6 +2,7 @@ package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.service.CodeGraphQueryService;
 import com.eneve.agent.agent.store.CodeGraphStore;
+import com.eneve.agent.settings.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -29,8 +30,7 @@ class CodeGraphCrossRepoTest {
         store = new StubCodeGraphStore();
         service = new CodeGraphQueryService();
         setField(service, "store", store);
-        setField(service, "crossRepoEnabled", true);
-        setField(service, "criticalThreshold", 3);
+        setField(service, "settingsService", new StubSettingsService(true, 3));
     }
 
     // ── Non-source files produce empty output ────────────────────────────
@@ -131,7 +131,7 @@ class CodeGraphCrossRepoTest {
 
     @Test
     void crossRepoDisabled_skipsWorkspaceQueries() throws Exception {
-        setField(service, "crossRepoEnabled", false);
+        setField(service, "settingsService", new StubSettingsService(false, 3));
 
         store.symbols.put(key(REPO, "src/Util.java"), List.of("Util.parse"));
 
@@ -156,7 +156,26 @@ class CodeGraphCrossRepoTest {
         }
     }
 
-    // ── Stub ─────────────────────────────────────────────────────────────
+    // ── Stubs ─────────────────────────────────────────────────────────────
+
+    static class StubSettingsService extends SettingsService {
+        private final boolean crossRepoEnabled;
+        private final int criticalThreshold;
+
+        StubSettingsService(boolean crossRepoEnabled, int criticalThreshold) {
+            this.crossRepoEnabled = crossRepoEnabled;
+            this.criticalThreshold = criticalThreshold;
+        }
+
+        @Override
+        public String get(String key, String defaultValue) {
+            return switch (key) {
+                case "code-graph.cross-repo.enabled" -> String.valueOf(crossRepoEnabled);
+                case "code-graph.cross-repo.critical-threshold" -> String.valueOf(criticalThreshold);
+                default -> defaultValue;
+            };
+        }
+    }
 
     static class StubCodeGraphStore extends CodeGraphStore {
 

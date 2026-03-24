@@ -19,9 +19,9 @@ import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
@@ -44,15 +44,7 @@ public class QualityReportCollector {
     @Inject CommentStore commentStore;
     @Inject CommentFeedbackStore feedbackStore;
     @Inject CoverageReporter coverageReporter;
-
-    @ConfigProperty(name = "quality-report.cc-threshold", defaultValue = "10")
-    int defaultCcThreshold;
-
-    @ConfigProperty(name = "quality-report.job-timeout-minutes", defaultValue = "30")
-    long coverageTimeoutMinutes;
-
-    @ConfigProperty(name = "quality-report.coverage.enabled", defaultValue = "true")
-    boolean coverageEnabled;
+    @Inject SettingsService settingsService;
 
     /**
      * Collects all available quality metrics for the given workspace and returns a complete
@@ -67,12 +59,16 @@ public class QualityReportCollector {
     public QualityReport collect(WorkspaceContext workspace, String workspaceName, String repoSlug, String branch) {
         LOG.infof("QualityReportCollector: collecting metrics for %s/%s branch=%s", workspaceName, repoSlug, branch);
 
+        int defaultCcThreshold = Integer.parseInt(settingsService.get("quality-report.cc-threshold", "10"));
+        long coverageTimeoutMinutes = Long.parseLong(settingsService.get("quality-report.job-timeout-minutes", "30"));
+        boolean coverageEnabled = Boolean.parseBoolean(settingsService.get("quality-report.coverage.enabled", "true"));
+
         TestPresenceSection testPresenceSection = collectTestPresence(workspace, workspaceName, repoSlug);
         LinterSection linterSection = collectLinter(workspace, workspaceName, repoSlug);
         AikidoSection aikidoSection = collectAikido(repoSlug);
-        ComplexitySection complexitySection = collectComplexity(workspace, workspaceName, repoSlug, branch);
+        ComplexitySection complexitySection = collectComplexity(workspace, workspaceName, repoSlug, branch, defaultCcThreshold);
         ReviewSection reviewSection = collectReview(workspaceName, repoSlug);
-        CoverageSection coverageSection = collectCoverage(workspace, workspaceName, repoSlug);
+        CoverageSection coverageSection = collectCoverage(workspace, workspaceName, repoSlug, coverageEnabled, coverageTimeoutMinutes);
 
         double score = QualityReport.computeScore(coverageSection, testPresenceSection, linterSection,
                 aikidoSection, complexitySection, reviewSection);
@@ -179,7 +175,7 @@ public class QualityReportCollector {
     }
 
     private ComplexitySection collectComplexity(WorkspaceContext workspace, String workspaceName,
-                                                String repoSlug, String branch) {
+                                                String repoSlug, String branch, int defaultCcThreshold) {
         try {
             CodeMetricsSnapshot snap = metricsCalculator.calculate(
                     workspace.getRoot(), workspaceName, repoSlug, branch, defaultCcThreshold);
@@ -198,7 +194,8 @@ public class QualityReportCollector {
         }
     }
 
-    private CoverageSection collectCoverage(WorkspaceContext workspace, String workspaceName, String repoSlug) {
+    private CoverageSection collectCoverage(WorkspaceContext workspace, String workspaceName, String repoSlug,
+                                             boolean coverageEnabled, long coverageTimeoutMinutes) {
         if (!coverageEnabled) {
             LOG.debugf("QualityReportCollector: coverage collection disabled — skipping");
             return null;
