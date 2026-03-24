@@ -62,7 +62,8 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
-    mkdir -p /home/appuser/.m2
+    mkdir -p /home/appuser/.m2 && \
+    chown -R appuser:appuser /home/appuser/.m2
 
 # Tell Puppeteer to use the system-installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
