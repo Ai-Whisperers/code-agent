@@ -693,9 +693,17 @@ public class UpgradeService {
     // ─── Version comparison helpers ──────────────────────────────────────────────
 
     /**
-     * Returns {@code true} if {@code current} is strictly older than {@code latest}.
+     * Returns {@code true} if {@code current} is old enough to warrant an upgrade.
      * Both versions are normalized before comparison (leading non-numeric prefixes like
      * {@code "net"} or {@code "v"} are stripped).
+     *
+     * <p>Tolerance rules (being behind by this amount or less is acceptable):
+     * <ul>
+     *   <li><b>Major</b> — any difference always triggers an upgrade.</li>
+     *   <li><b>Minor</b> — up to 3 minor versions behind is tolerated; 4+ triggers.</li>
+     *   <li><b>Patch</b> — up to 3 patch versions behind is tolerated; 4+ triggers.</li>
+     * </ul>
+     *
      * Returns {@code false} if either version is null/blank or cannot be parsed.
      */
     static boolean isOlderVersion(String current, String latest) {
@@ -707,14 +715,20 @@ public class UpgradeService {
         }
         String[] currentParts = normalizedCurrent.trim().split("\\.");
         String[] latestParts  = normalizedLatest.trim().split("\\.");
-        int len = Math.max(currentParts.length, latestParts.length);
-        for (int i = 0; i < len; i++) {
-            int c = i < currentParts.length ? parseSegment(currentParts[i]) : 0;
-            int l = i < latestParts.length  ? parseSegment(latestParts[i])  : 0;
-            if (c < l) return true;
-            if (c > l) return false;
-        }
-        return false; // equal
+
+        int currentMajor = currentParts.length > 0 ? parseSegment(currentParts[0]) : 0;
+        int latestMajor  = latestParts.length  > 0 ? parseSegment(latestParts[0])  : 0;
+        if (latestMajor > currentMajor) return true;
+        if (latestMajor < currentMajor) return false;
+
+        int currentMinor = currentParts.length > 1 ? parseSegment(currentParts[1]) : 0;
+        int latestMinor  = latestParts.length  > 1 ? parseSegment(latestParts[1])  : 0;
+        if (latestMinor > currentMinor + 3) return true;
+        if (latestMinor != currentMinor) return false;
+
+        int currentPatch = currentParts.length > 2 ? parseSegment(currentParts[2]) : 0;
+        int latestPatch  = latestParts.length  > 2 ? parseSegment(latestParts[2])  : 0;
+        return latestPatch > currentPatch + 3;
     }
 
     /**

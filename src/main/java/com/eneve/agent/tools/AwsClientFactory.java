@@ -1,6 +1,6 @@
 package com.eneve.agent.tools;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
 import software.amazon.awssdk.auth.credentials.AwsCredentialsProvider;
@@ -17,7 +17,7 @@ import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
 import software.amazon.awssdk.services.sts.model.Credentials;
 
 import jakarta.enterprise.context.ApplicationScoped;
-import java.util.Optional;
+import jakarta.inject.Inject;
 
 /**
  * Factory that creates short-lived AWS SDK v2 clients scoped to a specific customer account.
@@ -56,17 +56,8 @@ public class AwsClientFactory {
     private static final String SESSION_NAME = "code-agent-readonly";
     private static final int SESSION_DURATION_SECONDS = 3600;
 
-    @ConfigProperty(name = "tools.aws.enabled", defaultValue = "true")
-    boolean enabled;
-
-    @ConfigProperty(name = "aws.region", defaultValue = "eu-central-1")
-    String defaultRegion;
-
-    @ConfigProperty(name = "aws.access-key-id", defaultValue = "")
-    Optional<String> configAccessKeyId;
-
-    @ConfigProperty(name = "aws.secret-access-key", defaultValue = "")
-    Optional<String> configSecretAccessKey;
+    @Inject
+    SettingsService settingsService;
 
     // ─── Public factory methods ───────────────────────────────────────────────────
 
@@ -97,12 +88,14 @@ public class AwsClientFactory {
     // ─── Internal ─────────────────────────────────────────────────────────────────
 
     private void checkEnabled() {
+        boolean enabled = Boolean.parseBoolean(settingsService.get("tools.aws.enabled", "true"));
         if (!enabled) {
             throw new IllegalStateException("AWS tools are disabled. Set tools.aws.enabled=true to enable.");
         }
     }
 
     private Region toRegion(String region) {
+        String defaultRegion = settingsService.get("aws.region", "eu-central-1");
         return (region != null && !region.isBlank()) ? Region.of(region) : Region.of(defaultRegion);
     }
 
@@ -143,8 +136,8 @@ public class AwsClientFactory {
     }
 
     private AwsCredentialsProvider baseCredentials() {
-        String keyId = configAccessKeyId.orElse("").strip();
-        String secret = configSecretAccessKey.orElse("").strip();
+        String keyId = settingsService.getSecret("aws.access-key-id").strip();
+        String secret = settingsService.getSecret("aws.secret-access-key").strip();
         if (!keyId.isBlank() && !secret.isBlank()) {
             LOG.debugf("Using explicit AWS credentials from config");
             return StaticCredentialsProvider.create(AwsBasicCredentials.create(keyId, secret));
