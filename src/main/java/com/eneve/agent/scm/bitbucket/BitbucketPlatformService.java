@@ -3,10 +3,12 @@ package com.eneve.agent.scm.bitbucket;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -36,11 +38,8 @@ public class BitbucketPlatformService implements GitPlatformService {
     @ConfigProperty(name = "bitbucket.base.url", defaultValue = "https://api.bitbucket.org/2.0")
     String baseUrl;
 
-    @ConfigProperty(name = "bitbucket.user")
-    String bbUser;
-
-    @ConfigProperty(name = "bitbucket.app.password")
-    String appPassword;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -214,7 +213,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                             String raw = comment.path("content").path("raw").asText("").trim();
                             String createdOn = comment.path("created_on").asText("");
                             boolean isAgent = comment.path("user").path("username").asText(
-                                    comment.path("user").path("nickname").asText("")).equals(bbUser);
+                                    comment.path("user").path("nickname").asText("")).equals(bbUser());
                             thread.add(new ThreadComment(id, parentId, author, raw, createdOn, isAgent));
                         }
                     }
@@ -248,7 +247,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (author.equals(bbUser)) {
+                        if (author.equals(bbUser())) {
                             continue;
                         }
 
@@ -301,7 +300,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (!author.equals(bbUser)) {
+                        if (!author.equals(bbUser())) {
                             continue;
                         }
 
@@ -627,7 +626,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                 return response.body();
             } else {
                 LOG.errorf("Bitbucket %s failed (HTTP %d) for user '%s': %s",
-                        operation, response.statusCode(), bbUser, response.body());
+                        operation, response.statusCode(), bbUser(), response.body());
                 throw new RuntimeException("Bitbucket " + operation + " failed: HTTP "
                         + response.statusCode() + " — " + response.body());
             }
@@ -639,16 +638,26 @@ public class BitbucketPlatformService implements GitPlatformService {
         }
     }
 
+    private String bbUser() {
+        return settingsService.get("bitbucket.user");
+    }
+
+    private String appPassword() {
+        return settingsService.getSecret("bitbucket.app.password");
+    }
+
     /**
      * Repository/Workspace Access Tokens use Bearer auth.
      * App Passwords use Basic auth with username:password.
      */
     private String authHeader() {
-        if ("x-token-auth".equals(bbUser)) {
-            return "Bearer " + appPassword;
+        String user = bbUser();
+        String password = appPassword();
+        if ("x-token-auth".equals(user)) {
+            return "Bearer " + password;
         }
         return "Basic " + Base64.getEncoder()
-                .encodeToString((bbUser + ":" + appPassword).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((user + ":" + password).getBytes(StandardCharsets.UTF_8));
     }
 
     private long parseCommentId(String responseBody) {
@@ -663,7 +672,7 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
-        return "https://" + bbUser + ":" + appPassword
+        return "https://" + bbUser() + ":" + appPassword()
                 + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
     }
 

@@ -3,10 +3,12 @@ package com.eneve.agent.scm.azuredevops;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -43,11 +45,8 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     @ConfigProperty(name = "azuredevops.base.url", defaultValue = "https://dev.azure.com")
     String baseUrl;
 
-    @ConfigProperty(name = "azuredevops.pat", defaultValue = "")
-    String pat;
-
-    @ConfigProperty(name = "azuredevops.agent.user", defaultValue = "")
-    String agentUser;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -285,7 +284,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                         String content = c.path("content").asText("").trim();
                         String publishedDate = c.path("publishedDate").asText("");
                         String uniqueName = c.path("author").path("uniqueName").asText("");
-                        boolean isAgent = !agentUser.isEmpty() && uniqueName.equalsIgnoreCase(agentUser);
+                        boolean isAgent = !agentUser().isEmpty() && uniqueName.equalsIgnoreCase(agentUser());
                         result.add(new ThreadComment(id, parentId, author, content, publishedDate, isAgent));
                     }
                     break;
@@ -318,7 +317,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
 
                     for (JsonNode c : threadComments) {
                         String uniqueName = c.path("author").path("uniqueName").asText("");
-                        if (!agentUser.isEmpty() && uniqueName.equalsIgnoreCase(agentUser)) continue;
+                        if (!agentUser().isEmpty() && uniqueName.equalsIgnoreCase(agentUser())) continue;
                         int commentType = c.path("commentType").asInt(0);
                         if (commentType == 2) continue; // system comment
 
@@ -368,7 +367,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
 
                     for (JsonNode c : threadComments) {
                         String uniqueName = c.path("author").path("uniqueName").asText("");
-                        if (agentUser.isEmpty() || !uniqueName.equalsIgnoreCase(agentUser)) continue;
+                        if (agentUser().isEmpty() || !uniqueName.equalsIgnoreCase(agentUser())) continue;
 
                         String content = c.path("content").asText("").trim();
                         if (content.isEmpty()) continue;
@@ -532,9 +531,17 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         }
     }
 
+    private String pat() {
+        return settingsService.getSecret("azuredevops.pat");
+    }
+
+    private String agentUser() {
+        return settingsService.get("azuredevops.agent.user");
+    }
+
     private String authHeader() {
         return "Basic " + Base64.getEncoder()
-                .encodeToString((":" + pat).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((":" + pat()).getBytes(StandardCharsets.UTF_8));
     }
 
     /**

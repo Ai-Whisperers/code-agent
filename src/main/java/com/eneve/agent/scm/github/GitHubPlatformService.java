@@ -3,10 +3,12 @@ package com.eneve.agent.scm.github;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -44,11 +46,8 @@ public class GitHubPlatformService implements GitPlatformService {
     @ConfigProperty(name = "github.base.url", defaultValue = "https://api.github.com")
     String baseUrl;
 
-    @ConfigProperty(name = "github.token", defaultValue = "")
-    String token;
-
-    @ConfigProperty(name = "github.agent.user", defaultValue = "")
-    String agentUser;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -224,7 +223,7 @@ public class GitHubPlatformService implements GitPlatformService {
                             String content = comment.path("body").asText("").trim();
                             String createdAt = comment.path("created_at").asText("");
                             long parentId = (id == rootCommentId) ? 0L : rootCommentId;
-                            boolean isAgent = !agentUser.isEmpty() && author.equalsIgnoreCase(agentUser);
+                            boolean isAgent = !agentUser().isEmpty() && author.equalsIgnoreCase(agentUser());
                             result.add(new ThreadComment(id, parentId, author, content, createdAt, isAgent));
                         }
                     }
@@ -282,7 +281,7 @@ public class GitHubPlatformService implements GitPlatformService {
                 if (nodes.isArray()) {
                     for (JsonNode comment : nodes) {
                         String author = comment.path("user").path("login").asText("");
-                        if (agentUser.isEmpty() || !author.equalsIgnoreCase(agentUser)) continue;
+                        if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
                         String content = comment.path("body").asText("").trim();
                         if (!content.isEmpty()) {
                             comments.add(new AgentComment("", 0, content));
@@ -307,7 +306,7 @@ public class GitHubPlatformService implements GitPlatformService {
                 if (nodes.isArray()) {
                     for (JsonNode comment : nodes) {
                         String author = comment.path("user").path("login").asText("");
-                        if (agentUser.isEmpty() || !author.equalsIgnoreCase(agentUser)) continue;
+                        if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
                         String content = comment.path("body").asText("").trim();
                         if (content.isEmpty()) continue;
                         String filePath = comment.path("path").asText("");
@@ -360,10 +359,18 @@ public class GitHubPlatformService implements GitPlatformService {
         return repos;
     }
 
+    private String token() {
+        return settingsService.getSecret("github.token");
+    }
+
+    private String agentUser() {
+        return settingsService.get("github.agent.user");
+    }
+
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
-        String user = agentUser != null && !agentUser.isBlank() ? agentUser : "x-access-token";
-        return "https://" + user + ":" + token + "@github.com/" + workspace + "/" + repoSlug + ".git";
+        String user = !agentUser().isBlank() ? agentUser() : "x-access-token";
+        return "https://" + user + ":" + token() + "@github.com/" + workspace + "/" + repoSlug + ".git";
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -391,7 +398,7 @@ public class GitHubPlatformService implements GitPlatformService {
                 if (nodes.isArray()) {
                     for (JsonNode comment : nodes) {
                         String author = comment.path("user").path("login").asText("");
-                        boolean isAgent = !agentUser.isEmpty() && author.equalsIgnoreCase(agentUser);
+                        boolean isAgent = !agentUser().isEmpty() && author.equalsIgnoreCase(agentUser());
                         if (agentOnly && !isAgent) continue;
                         if (!agentOnly && isAgent) continue;
                         String content = comment.path("body").asText("").trim();
@@ -416,7 +423,7 @@ public class GitHubPlatformService implements GitPlatformService {
                 if (nodes.isArray()) {
                     for (JsonNode comment : nodes) {
                         String author = comment.path("user").path("login").asText("");
-                        boolean isAgent = !agentUser.isEmpty() && author.equalsIgnoreCase(agentUser);
+                        boolean isAgent = !agentUser().isEmpty() && author.equalsIgnoreCase(agentUser());
                         if (agentOnly && !isAgent) continue;
                         if (!agentOnly && isAgent) continue;
                         String content = comment.path("body").asText("").trim();
@@ -479,7 +486,7 @@ public class GitHubPlatformService implements GitPlatformService {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("Authorization", "Bearer " + token)
+                    .header("Authorization", "Bearer " + token())
                     .header("Accept", "application/vnd.github+json")
                     .header("X-GitHub-Api-Version", "2022-11-28")
                     .GET()
@@ -518,7 +525,7 @@ public class GitHubPlatformService implements GitPlatformService {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("Authorization", "Bearer " + token)
+                    .header("Authorization", "Bearer " + token())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/vnd.github+json")
                     .header("X-GitHub-Api-Version", "2022-11-28")

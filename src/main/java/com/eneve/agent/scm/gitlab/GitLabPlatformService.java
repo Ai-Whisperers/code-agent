@@ -3,10 +3,12 @@ package com.eneve.agent.scm.gitlab;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
@@ -44,11 +46,8 @@ public class GitLabPlatformService implements GitPlatformService {
     @ConfigProperty(name = "gitlab.base.url", defaultValue = "https://gitlab.com/api/v4")
     String baseUrl;
 
-    @ConfigProperty(name = "gitlab.token", defaultValue = "")
-    String token;
-
-    @ConfigProperty(name = "gitlab.agent.user", defaultValue = "")
-    String agentUser;
+    @Inject
+    SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -259,7 +258,7 @@ public class GitLabPlatformService implements GitPlatformService {
                             String displayName = note.path("author").path("name").asText(author);
                             String content = note.path("body").asText("").trim();
                             String createdAt = note.path("created_at").asText("");
-                            boolean isAgent = !agentUser.isEmpty() && author.equalsIgnoreCase(agentUser);
+                            boolean isAgent = !agentUser().isEmpty() && author.equalsIgnoreCase(agentUser());
                             result.add(new ThreadComment(id, parentId, displayName, content, createdAt, isAgent));
                         }
                         break;
@@ -296,7 +295,7 @@ public class GitLabPlatformService implements GitPlatformService {
 
                         for (JsonNode note : notes) {
                             String author = note.path("author").path("username").asText("");
-                            if (!agentUser.isEmpty() && author.equalsIgnoreCase(agentUser)) continue;
+                            if (!agentUser().isEmpty() && author.equalsIgnoreCase(agentUser())) continue;
                             if (note.path("system").asBoolean(false)) continue;
 
                             String content = note.path("body").asText("").trim();
@@ -349,7 +348,7 @@ public class GitLabPlatformService implements GitPlatformService {
 
                         for (JsonNode note : notes) {
                             String author = note.path("author").path("username").asText("");
-                            if (agentUser.isEmpty() || !author.equalsIgnoreCase(agentUser)) continue;
+                            if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
 
                             String content = note.path("body").asText("").trim();
                             if (content.isEmpty()) continue;
@@ -511,7 +510,7 @@ public class GitLabPlatformService implements GitPlatformService {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("PRIVATE-TOKEN", token)
+                    .header("PRIVATE-TOKEN", token())
                     .header("Accept", "application/json")
                     .GET()
                     .build();
@@ -545,7 +544,7 @@ public class GitLabPlatformService implements GitPlatformService {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(url))
-                    .header("PRIVATE-TOKEN", token)
+                    .header("PRIVATE-TOKEN", token())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .method(method, HttpRequest.BodyPublishers.ofString(body))
@@ -568,10 +567,18 @@ public class GitLabPlatformService implements GitPlatformService {
         }
     }
 
+    private String token() {
+        return settingsService.getSecret("gitlab.token");
+    }
+
+    private String agentUser() {
+        return settingsService.get("gitlab.agent.user");
+    }
+
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
-        String user = agentUser != null && !agentUser.isBlank() ? agentUser : "gitlab-ci-token";
-        return "https://" + user + ":" + token + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
+        String user = !agentUser().isBlank() ? agentUser() : "gitlab-ci-token";
+        return "https://" + user + ":" + token() + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
     }
 
     /**

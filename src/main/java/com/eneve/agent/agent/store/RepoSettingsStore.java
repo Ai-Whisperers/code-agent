@@ -133,7 +133,7 @@ public class RepoSettingsStore {
     public boolean insertIfAbsent(String workspace, String repoSlug) {
         String sql = """
                 INSERT INTO repo_settings (workspace, repo_slug, review_enabled, created_at, updated_at)
-                VALUES (?, ?, TRUE, now(), now())
+                VALUES (?, ?, FALSE, now(), now())
                 ON CONFLICT (workspace, repo_slug) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
