@@ -1,11 +1,16 @@
 package com.eneve.agent.webhooks;
 
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
+import com.eneve.agent.agent.service.KnowledgeReindexQueue;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.jira.JiraService;
@@ -51,6 +56,9 @@ public class JiraWebhookResource {
     @Inject AikidoService aikidoService;
     @Inject HookEvaluator hookEvaluator;
     @Inject SettingsService settings;
+    @Inject KnowledgeReindexQueue reindexQueue;
+    @Inject CustomerRegistryStore registryStore;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     private String agentAssignee()  { return settings.get("jira.agent.assignee", ""); }
     private String defaultRepoUrl() { return settings.get("jira.agent.default-repo-url", ""); }
@@ -73,37 +81,54 @@ public class JiraWebhookResource {
             @APIResponse(responseCode = "429", description = "Job queue is full")
     })
     public Response handleJiraWebhook(String rawPayload) {
+        String issueKey = "";
+        String event = "";
+        String action = "error";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
-            String event = payload.path("webhookEvent").asText("");
+            event = payload.path("webhookEvent").asText("");
             LOG.infof("JIRA webhook received: %s", event);
 
             if (!event.equals("jira:issue_created") && !event.equals("jira:issue_updated")) {
                 LOG.debugf("Ignoring JIRA webhook event: %s", event);
-                return ok("ignored", "Unsupported event type: " + event);
+                action = "ignored";
+                audit("jira", event, "", "", action, "", rawPayload);
+                return ok(action, "Unsupported event type: " + event);
             }
 
             JsonNode issue = payload.path("issue");
-            String issueKey = issue.path("key").asText("");
+            issueKey = issue.path("key").asText("");
             JsonNode fields = issue.path("fields");
 
             if (issueKey.isBlank()) {
-                return ok("ignored", "No issue key in payload");
+                action = "ignored";
+                audit("jira", event, "", "", action, "", rawPayload);
+                return ok(action, "No issue key in payload");
             }
 
-            // Check assignee
+            String projectKey = fields.path("project").path("key").asText("");
+            String reporter = fields.path("reporter").path("displayName").asText("");
+
+            // Always reindex tracked issues, regardless of assignee
+            triggerKnowledgeReindex(issueKey, fields);
+
+            // Check assignee — fix-job and hooks only trigger for the agent user
             String assigneeDisplay = fields.path("assignee").path("displayName").asText("");
             String assigneeEmail = fields.path("assignee").path("emailAddress").asText("");
             String assigneeAccountId = fields.path("assignee").path("accountId").asText("");
 
             if (!isAgentAssignee(assigneeDisplay, assigneeEmail, assigneeAccountId)) {
-                LOG.infof("JIRA webhook: ignoring %s (assignee: %s, not agent user)", issueKey, assigneeDisplay);
+                LOG.infof("JIRA webhook: ignoring fix job for %s (assignee: %s, not agent user)", issueKey, assigneeDisplay);
+                action = "reindex_only";
+                audit("jira", event, projectKey, issueKey, action, reporter, rawPayload);
                 return ok("ignored", "Not assigned to agent user");
             }
 
             // For issue_updated, verify the assignee actually changed (not just any field update)
             if (event.equals("jira:issue_updated") && !assigneeChangedInChangelog(payload)) {
-                LOG.infof("JIRA webhook: ignoring %s update (assignee didn't change)", issueKey);
+                LOG.infof("JIRA webhook: ignoring fix job for %s update (assignee didn't change)", issueKey);
+                action = "reindex_only";
+                audit("jira", event, projectKey, issueKey, action, reporter, rawPayload);
                 return ok("ignored", "Assignee did not change in this update");
             }
 
@@ -115,10 +140,13 @@ public class JiraWebhookResource {
             // Additionally evaluate hooks for Jira events
             evaluateJiraHooks(event, issueKey, fields);
 
+            action = "job_triggered";
+            audit("jira", event, projectKey, issueKey, action, reporter, rawPayload);
             return response;
 
         } catch (Exception e) {
             LOG.errorf("JIRA webhook processing error: %s", e.getMessage());
+            audit("jira", event, "", issueKey, "error", "", rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
@@ -285,6 +313,29 @@ public class JiraWebhookResource {
             
         } catch (Exception e) {
             LOG.warnf("Failed to evaluate Jira hooks for %s: %s", issueKey, e.getMessage());
+        }
+    }
+
+    private void audit(String platform, String eventType, String workspace,
+                       String issueKey, String action, String author, String rawPayload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, workspace, issueKey, null, author, action, List.of(), rawPayload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save Jira webhook audit entry (non-fatal): %s", e.getMessage());
+        }
+    }
+
+    private void triggerKnowledgeReindex(String issueKey, JsonNode fields) {
+        try {
+            String projectKey = fields.path("project").path("key").asText("");
+            if (!projectKey.isBlank() && registryStore.findByJiraProject(projectKey).isPresent()) {
+                boolean accepted = reindexQueue.submitJiraIssue(issueKey);
+                LOG.debugf("JIRA webhook: knowledge reindex for %s %s",
+                        issueKey, accepted ? "queued" : "skipped (duplicate or queue full)");
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to trigger knowledge reindex for Jira issue %s: %s", issueKey, e.getMessage());
         }
     }
 

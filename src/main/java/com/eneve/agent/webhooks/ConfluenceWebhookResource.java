@@ -1,8 +1,13 @@
 package com.eneve.agent.webhooks;
 
+import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.HookEvaluator;
+import com.eneve.agent.agent.model.WebhookAuditEntry;
+import com.eneve.agent.agent.service.KnowledgeReindexQueue;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
@@ -35,6 +40,9 @@ public class ConfluenceWebhookResource {
     private static final Logger LOG = Logger.getLogger(ConfluenceWebhookResource.class);
 
     @Inject HookEvaluator hookEvaluator;
+    @Inject KnowledgeReindexQueue reindexQueue;
+    @Inject CustomerRegistryStore registryStore;
+    @Inject WebhookAuditStore webhookAuditStore;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -53,30 +61,35 @@ public class ConfluenceWebhookResource {
             @APIResponse(responseCode = "202", description = "Webhook received but no action taken")
     })
     public Response handleConfluenceWebhook(String rawPayload) {
+        String eventType = "";
+        String spaceKey = "";
+        String pageId = "";
         try {
             JsonNode payload = objectMapper.readTree(rawPayload);
-            String eventType = payload.path("eventType").asText("");
+            eventType = payload.path("eventType").asText("");
             LOG.infof("Confluence webhook received: eventType=%s", eventType);
 
             // Only handle page events
             if (!eventType.equals("page_created") && !eventType.equals("page_updated")) {
                 LOG.debugf("Ignoring Confluence webhook event: %s", eventType);
+                audit("confluence", eventType, "", "", "ignored", rawPayload);
                 return ok("ignored", "Unsupported event type: " + eventType);
             }
 
             // Extract page information
             JsonNode page = payload.path("page");
             if (page.isMissingNode()) {
+                audit("confluence", eventType, "", "", "ignored", rawPayload);
                 return ok("ignored", "No page information in payload");
             }
 
-            String pageId = page.path("id").asText("");
+            pageId = page.path("id").asText("");
             String pageTitle = page.path("title").asText("");
             String pageUrl = page.path("_links").path("webui").asText("");
 
             // Extract space information
             JsonNode space = page.path("space");
-            String spaceKey = space.path("key").asText("");
+            spaceKey = space.path("key").asText("");
             String spaceTitle = space.path("name").asText("");
 
             // Extract author information
@@ -85,6 +98,7 @@ public class ConfluenceWebhookResource {
                     author.path("username").asText("unknown"));
 
             if (pageId.isBlank() || spaceKey.isBlank()) {
+                audit("confluence", eventType, spaceKey, pageId, "ignored", rawPayload);
                 return ok("ignored", "Missing required page or space information");
             }
 
@@ -107,21 +121,45 @@ public class ConfluenceWebhookResource {
             var hookJobIds = hookEvaluator.evaluateByTrigger(
                     triggerType, spaceKey, "confluence", null, context);
 
-            if (hookJobIds.isEmpty()) {
-                LOG.debugf("No hooks triggered for Confluence %s", triggerType);
-                return ok("no_hooks", "No hooks configured for " + triggerType);
+            // Reindex this page in the knowledge store if the space is tracked
+            boolean reindexQueued = false;
+            if (registryStore.findByConfluenceSpace(spaceKey).isPresent()) {
+                reindexQueued = reindexQueue.submitConfluencePage(pageId, pageTitle);
+                LOG.debugf("Confluence webhook: knowledge reindex for page %s %s",
+                        pageId, reindexQueued ? "queued" : "skipped (duplicate or queue full)");
             }
 
-            LOG.infof("Confluence webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+            if (hookJobIds.isEmpty() && !reindexQueued) {
+                LOG.debugf("No hooks triggered and no reindex queued for Confluence %s", triggerType);
+                audit("confluence", eventType, spaceKey, pageId, "no_action", rawPayload);
+                return ok("no_action", "No hooks configured and space not tracked for " + triggerType);
+            }
+
+            String action = reindexQueued ? (hookJobIds.isEmpty() ? "reindex_queued" : "processed") : "hooks_evaluated";
+            audit("confluence", eventType, spaceKey, pageId, action, rawPayload);
+            LOG.infof("Confluence webhook: triggered %d hook jobs for %s, reindex=%s",
+                    hookJobIds.size(), triggerType, reindexQueued);
             return Response.ok(Map.of(
-                    "action", "hooks_evaluated",
+                    "action", action,
                     "hooksTriggered", hookJobIds.size(),
-                    "jobIds", hookJobIds
+                    "jobIds", hookJobIds,
+                    "reindexQueued", reindexQueued
             )).build();
 
         } catch (Exception e) {
             LOG.errorf("Confluence webhook processing error: %s", e.getMessage());
+            audit("confluence", eventType, spaceKey, pageId, "error", rawPayload);
             return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+        }
+    }
+
+    private void audit(String platform, String eventType, String spaceKey,
+                       String pageId, String action, String rawPayload) {
+        try {
+            webhookAuditStore.save(WebhookAuditEntry.create(
+                    platform, eventType, spaceKey, pageId, null, null, action, List.of(), rawPayload));
+        } catch (Exception e) {
+            LOG.warnf("Failed to save Confluence webhook audit entry (non-fatal): %s", e.getMessage());
         }
     }
 

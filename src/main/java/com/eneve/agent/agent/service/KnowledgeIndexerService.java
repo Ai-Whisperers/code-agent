@@ -159,6 +159,84 @@ public class KnowledgeIndexerService {
     }
 
     /**
+     * Index (or reindex) a single Jira issue, including its attachments and linked
+     * Confluence pages. Existing chunks for the issue are deleted first so that
+     * stale content (edited description, removed comments, replaced attachments)
+     * does not persist in the knowledge store.
+     *
+     * @param issueKey Jira issue key (e.g. "ENG-123")
+     */
+    public IndexResult indexJiraIssue(String issueKey) {
+        LOG.infof("Starting single-issue Jira indexing for %s", issueKey);
+        int indexed = 0;
+        int skipped = 0;
+        List<String> errors = new ArrayList<>();
+
+        // Delete stale chunks before re-indexing
+        store.deleteBySource("jira", issueKey);
+        store.deleteBySourceIdPrefix("jira-attachment", issueKey + "/attachment/");
+
+        String jql = "issue = \"" + issueKey + "\"";
+        List<JiraService.JiraIssueDetail> issues = jiraService.searchIssues(jql, 1);
+        if (issues.isEmpty()) {
+            LOG.warnf("Single-issue indexing: issue %s not found via JQL", issueKey);
+            return new IndexResult("jira", issueKey, 0, 0, List.of("Issue not found: " + issueKey));
+        }
+
+        JiraService.JiraIssueDetail issue = issues.get(0);
+        try {
+            String issueText = SecretRedactor.redact(buildIssueText(issue));
+            if (!issueText.isBlank()) {
+                var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
+                        "jira",
+                        issue.key(),
+                        issue.summary(),
+                        issueText,
+                        Map.of(
+                                "status", issue.status() != null ? issue.status() : "",
+                                "reporter", issue.reporter() != null ? issue.reporter() : "",
+                                "assignee", issue.assignee() != null ? issue.assignee() : "",
+                                "labels", issue.labels() != null ? String.join(",", issue.labels()) : "",
+                                "url", ""
+                        )
+                );
+                if (embedAndStore(chunk)) indexed++; else skipped++;
+            }
+
+            if (issue.attachments() != null) {
+                for (JiraService.JiraAttachment att : issue.attachments()) {
+                    try {
+                        int attResult = indexAttachment(att, issue.key());
+                        if (attResult > 0) indexed += attResult;
+                        else if (attResult == 0) skipped++;
+                    } catch (Exception e) {
+                        errors.add("Attachment " + att.filename() + " on " + issue.key() + ": " + e.getMessage());
+                    }
+                }
+            }
+
+            List<JiraService.JiraRemoteLink> remoteLinks = jiraService.fetchRemoteLinks(issue.key());
+            for (JiraService.JiraRemoteLink link : remoteLinks) {
+                String pageId = confluenceService.extractPageIdFromUrl(link.url());
+                if (pageId == null) continue;
+                try {
+                    int pageResult = indexConfluencePage(pageId, link.title());
+                    indexed += pageResult;
+                } catch (Exception e) {
+                    errors.add("Confluence page " + pageId + " linked from " + issue.key() + ": " + e.getMessage());
+                }
+            }
+        } catch (Exception e) {
+            errors.add("Issue " + issue.key() + ": " + e.getMessage());
+            LOG.warnf("Failed to index Jira issue %s: %s", issue.key(), e.getMessage());
+        }
+
+        LOG.infof("Single-issue Jira indexing complete for %s: indexed=%d, skipped=%d, errors=%d",
+                issueKey, indexed, skipped, errors.size());
+        return new IndexResult("jira", issueKey, indexed, skipped, errors);
+    }
+
+    /**
      * Index all pages in a Confluence space, chunked by heading section.
      *
      * @param spaceKey Confluence space key
@@ -386,7 +464,7 @@ public class KnowledgeIndexerService {
     // Private helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    private int indexConfluencePage(String pageId, String title) {
+    int indexConfluencePage(String pageId, String title) {
         String body = SecretRedactor.redact(confluenceService.getPageBody(pageId));
         if (body == null || body.isBlank()) return 0;
 

@@ -293,6 +293,32 @@ public class CustomerRegistryStore {
     }
 
     /**
+     * Finds the product whose Confluence config contains the given space key.
+     */
+    public Optional<ProductConfig> findByConfluenceSpace(String spaceKey) {
+        String sql = """
+                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                       p.teams, p.metadata, p.created_at, p.updated_at
+                FROM products p
+                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
+                WHERE p.confluence ->> 'spaceKey' = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, spaceKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(mapProduct(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to find product by Confluence space %s: %s", spaceKey, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
      * Finds the product that a repo_settings row belongs to, via the product_id FK.
      */
     public Optional<ProductConfig> findByRepoSlug(String workspace, String repoSlug) {
