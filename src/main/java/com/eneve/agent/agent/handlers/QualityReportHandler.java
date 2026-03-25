@@ -91,9 +91,9 @@ public class QualityReportHandler implements JobHandler {
             // Evaluate any hooks registered for the quality.report_generated trigger
             try {
                 HookEvalResult hookResult = hookEvaluator.evaluateQualityReport(report, request.repoUrl());
-                if (!hookResult.executedHookNames().isEmpty()) {
+                if (!hookResult.hookNames().isEmpty()) {
                     LOG.infof("Quality report hooks triggered for %s/%s (branch=%s): %s",
-                            workspaceName, repoSlug, request.branch(), hookResult.executedHookNames());
+                            workspaceName, repoSlug, request.branch(), hookResult.hookNames());
                 }
             } catch (Exception e) {
                 // Hook evaluation failure must not roll back a successful quality report
