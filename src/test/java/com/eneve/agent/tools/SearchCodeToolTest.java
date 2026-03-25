@@ -25,9 +25,6 @@ class SearchCodeToolTest {
     @BeforeEach
     void setUp() {
         searchCodeTool = new SearchCodeTool();
-        // Inject test git credentials
-        searchCodeTool.gitUsername = "test-user";
-        searchCodeTool.gitPassword = "test-password";
         
         input = new HashMap<>();
     }

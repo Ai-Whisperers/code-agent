@@ -52,8 +52,8 @@ public class JiraWebhookResource {
     @Inject HookEvaluator hookEvaluator;
     @Inject SettingsService settings;
 
-    private String agentAssignee()()  { return settings.get("jira.agent.assignee", ""); }
-    private String defaultRepoUrl()() { return settings.get("jira.agent.default-repo-url", ""); }
+    private String agentAssignee()  { return settings.get("jira.agent.assignee", ""); }
+    private String defaultRepoUrl() { return settings.get("jira.agent.default-repo-url", ""); }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 

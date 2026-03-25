@@ -23,8 +23,6 @@ class SearchCodeToolIntegrationTest {
     @BeforeEach
     void setUp() {
         searchCodeTool = new SearchCodeTool();
-        searchCodeTool.gitUsername = "test-user";
-        searchCodeTool.gitPassword = "test-token";
     }
 
     @Test

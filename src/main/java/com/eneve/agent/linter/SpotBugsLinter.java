@@ -103,7 +103,8 @@ public class SpotBugsLinter implements LinterRunner {
 
     private String runProcess(Path workspaceRoot, String command, long timeoutMinutes)
             throws CompilationFailedException {
-        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
+        String javaHomeVal = settings.get("build.java-home", "");
+        String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())

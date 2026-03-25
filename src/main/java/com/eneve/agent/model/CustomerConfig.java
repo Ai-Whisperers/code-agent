@@ -14,7 +14,10 @@ public record CustomerConfig(
         @Schema(required = true, description = "Human-readable customer name", example = "Acme Corp")
         String name,
 
-        @Schema(description = "Deployment environments (acceptance, production, etc.)")
+        @Schema(description = "ID of the global cloud account (credentials) used for this customer's environments")
+        String cloudAccountId,
+
+        @Schema(description = "Deployment environments (production, acceptance, etc.)")
         List<EnvironmentConfig> environments,
 
         @Schema(description = "Free-form metadata for custom fields")

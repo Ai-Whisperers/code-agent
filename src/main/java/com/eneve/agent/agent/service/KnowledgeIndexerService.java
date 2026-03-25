@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.service;
 
+import com.eneve.agent.agent.SecretRedactor;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
 import com.eneve.agent.confluence.ConfluenceService;
@@ -87,7 +88,7 @@ public class KnowledgeIndexerService {
         for (JiraService.JiraIssueDetail issue : issues) {
             try {
                 // 1. Main issue chunk: summary + description + comments
-                String issueText = buildIssueText(issue);
+                String issueText = SecretRedactor.redact(buildIssueText(issue));
                 if (!issueText.isBlank()) {
                     var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
                             "jira",
@@ -217,7 +218,7 @@ public class KnowledgeIndexerService {
     // ──────────────────────────────────────────────────────────────────────
 
     private int indexConfluencePage(String pageId, String title, String productId, String customerId) {
-        String body = confluenceService.getPageBody(pageId);
+        String body = SecretRedactor.redact(confluenceService.getPageBody(pageId));
         if (body == null || body.isBlank()) return 0;
 
         List<String> chunks = splitIntoChunks(body, CONFLUENCE_CHUNK_CHARS);
@@ -247,7 +248,7 @@ public class KnowledgeIndexerService {
             return 0;
         }
 
-        String text = extractAttachmentText(att);
+        String text = SecretRedactor.redact(extractAttachmentText(att));
         if (text == null || text.isBlank()) return 0;
 
         List<String> chunks = splitIntoChunks(text, CONFLUENCE_CHUNK_CHARS);

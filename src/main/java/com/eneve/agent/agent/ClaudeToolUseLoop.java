@@ -354,6 +354,8 @@ public class ClaudeToolUseLoop {
                                 List<ToolUnion> tools, List<MessageParam> messages,
                                 String jobId, String jobType, int iterationCap,
                                 Consumer<ChatEvent> eventSink) {
+        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         try {
             for (int iteration = 0; iteration < iterationCap; iteration++) {
                 LOG.infof("Streaming agent loop iteration %d/%d", iteration + 1, iterationCap);

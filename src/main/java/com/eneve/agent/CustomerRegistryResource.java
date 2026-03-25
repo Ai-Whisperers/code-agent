@@ -81,7 +81,7 @@ public class CustomerRegistryResource {
         if (request == null || request.name() == null || request.name().isBlank()) {
             return Response.status(400).entity(Map.of("error", "name is required")).build();
         }
-        CustomerConfig config = new CustomerConfig(customerId, request.name(), request.environments(), request.metadata(), null, null);
+        CustomerConfig config = new CustomerConfig(customerId, request.name(), request.cloudAccountId(), request.environments(), request.metadata(), null, null);
         store.upsertCustomer(config);
         return store.getCustomer(customerId)
                 .map(c -> Response.ok(c).build())
@@ -263,6 +263,7 @@ public class CustomerRegistryResource {
         return store.getCustomer(customerId).map(existing -> {
             CustomerConfig updated = new CustomerConfig(
                     existing.customerId(), existing.name(),
+                    existing.cloudAccountId(),
                     request.environments(),
                     existing.metadata(),
                     null, null
@@ -278,6 +279,7 @@ public class CustomerRegistryResource {
 
     public record UpsertCustomerRequest(
             @Schema(required = true) String name,
+            String cloudAccountId,
             List<EnvironmentConfig> environments,
             Map<String, Object> metadata
     ) {}

@@ -65,8 +65,8 @@ public class RunFixResource {
     @Inject AuditService auditService;
     @Inject SettingsService settings;
 
-    private String agentLabel()()    { return settings.get("jira.agent.label", "WALL-E"); }
-    private String defaultRepoUrl()() { return settings.get("jira.agent.default-repo-url", ""); }
+    private String agentLabel()    { return settings.get("jira.agent.label", "WALL-E"); }
+    private String defaultRepoUrl() { return settings.get("jira.agent.default-repo-url", ""); }
 
     @POST
     @Path("/run-fix")

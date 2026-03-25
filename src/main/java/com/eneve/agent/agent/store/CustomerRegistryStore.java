@@ -36,7 +36,7 @@ public class CustomerRegistryStore {
 
     public List<CustomerConfig> listCustomers() {
         String sql = """
-                SELECT customer_id, name, environments, metadata, created_at, updated_at
+                SELECT customer_id, name, cloud_account_id, environments, metadata, created_at, updated_at
                 FROM customers
                 ORDER BY name
                 """;
@@ -55,7 +55,7 @@ public class CustomerRegistryStore {
 
     public Optional<CustomerConfig> getCustomer(String customerId) {
         String sql = """
-                SELECT customer_id, name, environments, metadata, created_at, updated_at
+                SELECT customer_id, name, cloud_account_id, environments, metadata, created_at, updated_at
                 FROM customers
                 WHERE customer_id = ?
                 """;
@@ -75,20 +75,22 @@ public class CustomerRegistryStore {
 
     public void upsertCustomer(CustomerConfig customer) {
         String sql = """
-                INSERT INTO customers (customer_id, name, environments, metadata, created_at, updated_at)
-                VALUES (?, ?, ?::jsonb, ?::jsonb, now(), now())
+                INSERT INTO customers (customer_id, name, cloud_account_id, environments, metadata, created_at, updated_at)
+                VALUES (?, ?, ?, ?::jsonb, ?::jsonb, now(), now())
                 ON CONFLICT (customer_id) DO UPDATE
-                    SET name         = EXCLUDED.name,
-                        environments = EXCLUDED.environments,
-                        metadata     = EXCLUDED.metadata,
-                        updated_at   = now()
+                    SET name             = EXCLUDED.name,
+                        cloud_account_id = EXCLUDED.cloud_account_id,
+                        environments     = EXCLUDED.environments,
+                        metadata         = EXCLUDED.metadata,
+                        updated_at       = now()
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, customer.customerId());
             ps.setString(2, customer.name());
-            ps.setString(3, toJson(customer.environments() != null ? customer.environments() : List.of()));
-            ps.setString(4, toJson(customer.metadata() != null ? customer.metadata() : Map.of()));
+            ps.setString(3, customer.cloudAccountId());
+            ps.setString(4, toJson(customer.environments() != null ? customer.environments() : List.of()));
+            ps.setString(5, toJson(customer.metadata() != null ? customer.metadata() : Map.of()));
             ps.executeUpdate();
             LOG.debugf("Upserted customer %s", customer.customerId());
         } catch (SQLException e) {
@@ -323,9 +325,12 @@ public class CustomerRegistryStore {
     // ──────────────────────────────────────────────────────────
 
     private CustomerConfig mapCustomer(ResultSet rs) throws SQLException {
+        String cloudAccountId = rs.getString("cloud_account_id");
+        if (rs.wasNull()) cloudAccountId = null;
         return new CustomerConfig(
                 rs.getString("customer_id"),
                 rs.getString("name"),
+                cloudAccountId,
                 fromJson(rs.getString("environments"), new TypeReference<List<EnvironmentConfig>>() {}),
                 fromJson(rs.getString("metadata"), new TypeReference<Map<String, Object>>() {}),
                 toInstant(rs.getTimestamp("created_at")),
