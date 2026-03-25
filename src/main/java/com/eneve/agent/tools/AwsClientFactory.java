@@ -12,6 +12,7 @@ import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
 import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient;
 import software.amazon.awssdk.services.ecs.EcsClient;
+import software.amazon.awssdk.services.rds.RdsClient;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
@@ -48,6 +49,7 @@ import jakarta.inject.Inject;
  *   ecs:ListClusters, ecs:DescribeClusters, ecs:ListServices, ecs:DescribeServices,
  *   ecs:ListTasks, ecs:DescribeTasks, ecs:DescribeTaskDefinition
  *   cloudwatch:GetMetricStatistics, cloudwatch:GetMetricData
+ *   rds:DescribeDBInstances, rds:DescribeDBClusters
  * </pre>
  */
 @ApplicationScoped
@@ -81,6 +83,14 @@ public class AwsClientFactory {
     public CloudWatchClient cloudWatchClient(String roleArn, String region, CloudAccount account) {
         checkEnabled();
         return CloudWatchClient.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    public RdsClient rdsClient(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return RdsClient.builder()
                 .credentialsProvider(resolveCredentials(roleArn, region, account))
                 .region(toRegion(region))
                 .build();

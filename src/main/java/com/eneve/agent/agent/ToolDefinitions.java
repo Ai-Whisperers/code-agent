@@ -115,6 +115,7 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(awsCloudWatchLogs()),
                 ToolUnion.ofTool(awsEcs()),
                 ToolUnion.ofTool(awsCloudWatchMetrics()),
+                ToolUnion.ofTool(awsRds()),
                 // Jira read tools (all roles)
                 ToolUnion.ofTool(jiraSearchIssues()),
                 ToolUnion.ofTool(jiraGetIssue()),
@@ -1022,6 +1023,69 @@ public final class ToolDefinitions {
                         .addRequired("customerId")
                         .addRequired("environmentName")
                         .addRequired("metricName")
+                        .build())
+                .build();
+    }
+
+    private static Tool awsRds() {
+        return Tool.builder()
+                .name("aws_rds")
+                .description("Inspect AWS RDS DB instances and Aurora clusters, and fetch database metrics. "
+                        + "Use this to list or describe RDS instances/clusters (engine, status, endpoint, storage, "
+                        + "backup retention) or to retrieve CloudWatch AWS/RDS metrics such as CPUUtilization, "
+                        + "DatabaseConnections, FreeStorageSpace, ReadLatency, or WriteLatency for a specific instance. "
+                        + "Cross-account access is handled automatically via IAM role assumption.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Customer ID from the registry (e.g. 'acme-corp')"
+                                )))
+                                .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Environment name (e.g. 'production', 'acceptance')"
+                                )))
+                                .putAdditionalProperty("action", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("list_instances", "describe_instance",
+                                                "list_clusters", "describe_cluster", "get_instance_metrics"),
+                                        "description", "Action to perform"
+                                )))
+                                .putAdditionalProperty("dbInstanceId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "DB instance identifier — required for describe_instance and get_instance_metrics"
+                                )))
+                                .putAdditionalProperty("dbClusterId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "DB cluster identifier — required for describe_cluster"
+                                )))
+                                .putAdditionalProperty("metricName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "CloudWatch metric name for get_instance_metrics, "
+                                                + "e.g. CPUUtilization, DatabaseConnections, FreeStorageSpace, "
+                                                + "ReadLatency, WriteLatency, ReadIOPS, WriteIOPS"
+                                )))
+                                .putAdditionalProperty("startTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Start of the time range, ISO-8601 (defaults to 1 hour ago)"
+                                )))
+                                .putAdditionalProperty("endTime", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "End of the time range, ISO-8601 (defaults to now)"
+                                )))
+                                .putAdditionalProperty("period", JsonValue.from(Map.of(
+                                        "type", "integer",
+                                        "description", "Aggregation period in seconds for get_instance_metrics (minimum 60, default 300)"
+                                )))
+                                .putAdditionalProperty("stat", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "enum", List.of("Average", "Maximum", "Minimum", "Sum"),
+                                        "description", "Statistic to retrieve for get_instance_metrics (default: Average)"
+                                )))
+                                .build())
+                        .addRequired("customerId")
+                        .addRequired("environmentName")
+                        .addRequired("action")
                         .build())
                 .build();
     }

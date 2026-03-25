@@ -114,7 +114,7 @@ public class HookStore {
                     (name, description, enabled, trigger_types, pr_event, branch_pattern,
                      cron_expr, action_type, prompt, rule_names, extra_rules, target_branch,
                      commit_direct, repo_url, trigger_filter, created_at, updated_at)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, now(), now())
                 ON CONFLICT (name)
                 DO UPDATE SET description    = EXCLUDED.description,
                               enabled        = EXCLUDED.enabled,
@@ -137,7 +137,7 @@ public class HookStore {
             ps.setString(1, hook.name());
             setNullableString(ps, 2, hook.description());
             ps.setBoolean(3, hook.enabled());
-            ps.setString(4, toJson(hook.triggerTypes()));
+            setNullableJsonb(ps, 4, toJson(hook.triggerTypes()));
             setNullableString(ps, 5, hook.prEvent());
             setNullableString(ps, 6, hook.branchPattern());
             setNullableString(ps, 7, hook.cronExpr());
@@ -148,7 +148,7 @@ public class HookStore {
             setNullableString(ps, 12, hook.targetBranch());
             ps.setBoolean(13, hook.commitDirect());
             setNullableString(ps, 14, hook.repoUrl());
-            setNullableString(ps, 15, toJsonMap(hook.triggerFilter()));
+            setNullableJsonb(ps, 15, toJsonMap(hook.triggerFilter()));
             ps.executeUpdate();
             LOG.debugf("Upserted automation hook '%s'", hook.name());
         } catch (SQLException e) {
@@ -252,6 +252,15 @@ public class HookStore {
             ps.setString(index, value);
         } else {
             ps.setNull(index, Types.VARCHAR);
+        }
+    }
+
+    /** Use for jsonb columns — passes NULL with type OTHER so the ::jsonb cast is satisfied. */
+    private void setNullableJsonb(PreparedStatement ps, int index, String value) throws SQLException {
+        if (value != null) {
+            ps.setString(index, value);
+        } else {
+            ps.setNull(index, Types.OTHER);
         }
     }
 }
