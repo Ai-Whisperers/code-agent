@@ -6,6 +6,7 @@ import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.PlanFileManager;
 import com.eneve.agent.agent.ToolDefinitions;
 import com.eneve.agent.agent.model.ChatEvent;
+import com.eneve.agent.agent.store.ConversationContextStore;
 import com.eneve.agent.agent.store.ConversationRepository;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.attachment.AttachmentService;
@@ -52,6 +53,7 @@ public class ChatService {
 
     @Inject ClaudeToolUseLoop toolLoop;
     @Inject ConversationRepository conversationRepository;
+    @Inject ConversationContextStore conversationContextStore;
     @Inject CustomerRegistryStore registryStore;
     @Inject PromptTemplateService promptTemplateService;
     @Inject PlannerService plannerService;
@@ -109,13 +111,21 @@ public class ChatService {
                 // ── Create workspace context for tool access ───────────
                 workspace = createChatWorkspace(conversationId, request.productId());
                 workspace.setUserId(userId);
+                workspace.setConversationId(conversationId);
+
+                // ── Hydrate workspace from persisted context (resume) ──
+                hydrateWorkspaceFromStoredContext(conversationId, workspace);
 
                 // ── Build message content blocks (text + attachments) ────
                 List<ContentBlockParam> userContentBlocks = buildMessageContentWithAttachments(
                         request.message(), request.attachmentIds());
 
                 // ── Run the streaming loop ─────────────────────────────
-                String systemPrompt = buildSystemPrompt(request.productId(), request.conversationContext(), userId);
+                ConversationContext storedContext = conversationContextStore.getContext(conversationId).orElse(null);
+                String systemPrompt = buildSystemPrompt(
+                        request.productId(),
+                        mergeContexts(storedContext, request.conversationContext()),
+                        userId);
                 List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs);
                 
                 // Create final reference for lambda
@@ -252,8 +262,11 @@ public class ChatService {
                 productContext = buildProductContext(product);
             }
         } else {
-            productContext = "No product is pre-selected. Call `lookup_customer_context` with **no parameters** "
-                    + "to list all available products and identify which one the user is asking about.\n\n";
+            productContext = "No customer or product is pre-selected. "
+                    + "If the user mentions a customer by name, call `lookup_customer_context` with `customerName` "
+                    + "to resolve their environments, AWS accounts, and linked products. "
+                    + "If no customer is clear from the question, call `lookup_customer_context` with **no parameters** "
+                    + "to list all registered customers and their environments.\n\n";
         }
 
         // Enrich conversation context if present
@@ -321,6 +334,80 @@ public class ChatService {
     private static boolean hasToolResultBlocks(MessageParam msg) {
         if (!msg.content().isBlockParams()) return false;
         return msg.content().asBlockParams().stream().anyMatch(b -> b.toolResult().isPresent());
+    }
+
+    /**
+     * Loads the persisted {@link ConversationContext} for a conversation and hydrates
+     * workspace metadata from it.  This restores the customer / product context that
+     * was resolved in earlier turns (e.g. via {@code lookup_customer_context}) so the
+     * workspace is correctly configured when a conversation is resumed.
+     */
+    private void hydrateWorkspaceFromStoredContext(String conversationId, WorkspaceContext workspace) {
+        try {
+            var storedContext = conversationContextStore.getContext(conversationId).orElse(null);
+            if (storedContext == null) return;
+
+            // Restore customerId so AWS tools can read it without a fresh lookup
+            if (storedContext.customerIds() != null && !storedContext.customerIds().isEmpty()) {
+                workspace.putMetadata("customerId", storedContext.customerIds().get(0));
+            }
+
+            // Restore git workspace / repo metadata from the first linked product
+            if (storedContext.productIds() != null && !storedContext.productIds().isEmpty()) {
+                for (String pid : storedContext.productIds()) {
+                    var product = registryStore.getProduct(pid).orElse(null);
+                    if (product != null && product.git() != null && product.git().workspace() != null) {
+                        workspace.putMetadata("workspace", product.git().workspace());
+                        var repos = product.git().repos();
+                        if (repos != null && !repos.isEmpty()) {
+                            workspace.putMetadata("productRepos", String.join(",", repos));
+                            workspace.putMetadata("repoSlug", repos.get(0));
+                        }
+                        break; // use first product that has git config
+                    }
+                }
+            }
+
+            LOG.debugf("Hydrated workspace from stored context for conversation %s "
+                    + "(customers=%s products=%s)", conversationId,
+                    storedContext.customerIds(), storedContext.productIds());
+        } catch (Exception e) {
+            LOG.warnf("Failed to hydrate workspace from stored context for %s: %s",
+                    conversationId, e.getMessage());
+        }
+    }
+
+    /**
+     * Returns a union of two {@link ConversationContext} objects.
+     * The stored context (from DB) and the inline request context (from the UI) are
+     * both valid sources; merging ensures neither overwrites the other.
+     */
+    private static ConversationContext mergeContexts(ConversationContext stored, ConversationContext inline) {
+        if (stored == null) return inline;
+        if (inline == null) return stored;
+        return new ConversationContext(
+                stored.conversationId(),
+                mergeLists(stored.customerIds(),      inline.customerIds()),
+                mergeLists(stored.productIds(),       inline.productIds()),
+                mergeIntLists(stored.aikidoIssueIds(), inline.aikidoIssueIds()),
+                mergeLists(stored.jiraIssueKeys(),    inline.jiraIssueKeys()),
+                mergeLists(stored.confluenceDocIds(), inline.confluenceDocIds()),
+                stored.createdAt(),
+                stored.updatedAt()
+        );
+    }
+
+    private static <T> List<T> mergeLists(List<T> a, List<T> b) {
+        if (b == null || b.isEmpty()) return a != null ? a : List.of();
+        List<T> result = new ArrayList<>(a != null ? a : List.of());
+        for (T item : b) {
+            if (item != null && !result.contains(item)) result.add(item);
+        }
+        return result;
+    }
+
+    private static List<Integer> mergeIntLists(List<Integer> a, List<Integer> b) {
+        return mergeLists(a, b);
     }
 
     private String buildProductContext(ProductConfig product) {

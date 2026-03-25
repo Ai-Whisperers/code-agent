@@ -225,10 +225,12 @@ public class AwsCloudWatchLogsTool implements ToolExecutor {
             throw new IllegalArgumentException("Customer '" + customerId + "' has no environments configured");
         }
         EnvironmentConfig env = cfg.environments().stream()
-                .filter(e -> environmentName.equalsIgnoreCase(e.name()))
+                .filter(e -> matchesEnvironment(e, environmentName))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Environment '" + environmentName + "' not found for customer '" + customerId + "'"));
+                        "Environment '" + environmentName + "' not found for customer '" + customerId + "'. "
+                        + "Available: " + cfg.environments().stream()
+                                .map(AwsCloudWatchLogsTool::effectiveEnvName).toList()));
 
         if (env.aws() == null) {
             throw new IllegalArgumentException(
@@ -266,4 +268,12 @@ public class AwsCloudWatchLogsTool implements ToolExecutor {
     }
 
     record AwsEnvConfig(String roleArn, String region, String label, CloudAccount cloudAccount) {}
+
+    static String effectiveEnvName(EnvironmentConfig e) {
+        return (e.name() != null && !e.name().isBlank()) ? e.name() : e.type();
+    }
+
+    private static boolean matchesEnvironment(EnvironmentConfig e, String environmentName) {
+        return environmentName.equalsIgnoreCase(effectiveEnvName(e));
+    }
 }

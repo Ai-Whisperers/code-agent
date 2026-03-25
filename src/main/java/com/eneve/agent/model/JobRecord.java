@@ -25,6 +25,9 @@ public class JobRecord {
     private volatile int linesChanged;
     private volatile String prId;
     private volatile String planId;
+    private volatile String prAuthor;
+    private volatile String workspace;
+    private volatile String repoSlug;
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
@@ -237,4 +240,13 @@ public class JobRecord {
 
     public String getPlanId() { return planId; }
     public void setPlanId(String planId) { this.planId = planId; }
+
+    public String getPrAuthor() { return prAuthor; }
+    public void setPrAuthor(String prAuthor) { this.prAuthor = prAuthor; }
+
+    public String getWorkspace() { return workspace; }
+    public void setWorkspace(String workspace) { this.workspace = workspace; }
+
+    public String getRepoSlug() { return repoSlug; }
+    public void setRepoSlug(String repoSlug) { this.repoSlug = repoSlug; }
 }

@@ -22,6 +22,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
+import jakarta.enterprise.context.RequestScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
@@ -47,6 +48,7 @@ import jakarta.ws.rs.core.Response;
  * data: {"type":"done","conversationId":"chat-abc123"}
  * </pre>
  */
+@RequestScoped
 @Path("/chat")
 @Authenticated
 @Tag(name = "Chat", description = "Freeform AI chat with knowledge base and code search access")

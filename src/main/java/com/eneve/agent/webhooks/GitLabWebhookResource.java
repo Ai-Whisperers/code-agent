@@ -196,7 +196,7 @@ public class GitLabWebhookResource {
 
             audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor,
                     "review_triggered", hookResult.hookNames(), rawPayload);
-            return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey, headCommitSha);
+            return submitReviewJob(repoUrl, mrIid, targetBranch, jiraKey, headCommitSha, namespace, repoSlug, mrAuthor);
 
         } catch (Exception e) {
             LOG.errorf("GitLab webhook processing error: %s", e.getMessage());
@@ -206,7 +206,7 @@ public class GitLabWebhookResource {
     }
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
-                                     String headCommitSha) {
+                                     String headCommitSha, String workspace, String repoSlug, String mrAuthor) {
         String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
@@ -217,11 +217,15 @@ public class GitLabWebhookResource {
                 null,
                 null,
                 null,
-                headCommitSha
+                headCommitSha,
+                mrAuthor
         );
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
+        job.setWorkspace(workspace);
+        job.setRepoSlug(repoSlug);
+        job.setPrAuthor(mrAuthor);
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {

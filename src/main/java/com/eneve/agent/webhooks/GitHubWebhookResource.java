@@ -194,7 +194,7 @@ public class GitHubWebhookResource {
 
             audit("github", event, org, repo, prNumber, prAuthor,
                     "review_triggered", hookResult.hookNames(), rawPayload);
-            return submitReviewJob(repoUrl, prNumber, targetBranch, jiraKey, headCommitSha);
+            return submitReviewJob(repoUrl, prNumber, targetBranch, jiraKey, headCommitSha, org, repo, prAuthor);
 
         } catch (Exception e) {
             LOG.errorf("GitHub webhook processing error: %s", e.getMessage());
@@ -204,7 +204,7 @@ public class GitHubWebhookResource {
     }
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
-                                     String headCommitSha) {
+                                     String headCommitSha, String workspace, String repoSlug, String prAuthor) {
         String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
@@ -215,11 +215,15 @@ public class GitHubWebhookResource {
                 null,
                 null,
                 null,
-                headCommitSha
+                headCommitSha,
+                prAuthor
         );
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
+        job.setWorkspace(workspace);
+        job.setRepoSlug(repoSlug);
+        job.setPrAuthor(prAuthor);
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {

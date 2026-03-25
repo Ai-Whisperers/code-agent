@@ -361,6 +361,9 @@ public class RunFixResource {
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
+        if (request.prAuthor() != null && !request.prAuthor().isBlank()) {
+            job.setPrAuthor(request.prAuthor());
+        }
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {

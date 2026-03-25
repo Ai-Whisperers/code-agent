@@ -400,28 +400,36 @@ public final class ToolDefinitions {
     private static Tool lookupCustomerContext() {
         return Tool.builder()
                 .name("lookup_customer_context")
-                .description("Look up customer and product information from the registry. "
-                        + "Call with NO parameters to list all available products with their repo slugs and git workspace — "
-                        + "use this first when the user's question does not specify a product or repository. "
-                        + "When a productId is known, returns full details: team members by role "
-                        + "(productOwner, engineering, devops, operations, qa), "
-                        + "deployment environments with AWS account IDs and regions, "
-                        + "Jira project keys, Confluence space keys, and Git workspace details. "
-                        + "Use this when you need to know who to notify, which AWS account an environment runs in, "
-                        + "or which Jira project to reference.")
+                .description("Resolve a customer name (or ID) to its full context: deployment environments "
+                        + "with AWS account IDs and IAM roles, associated products (git repos, Jira projects, "
+                        + "Confluence spaces), and team members by role. "
+                        + "ALWAYS call this first when the user mentions a customer name — it stores the "
+                        + "`customerId` in the workspace so AWS tools (aws_ecs, aws_cloudwatch_metrics, "
+                        + "aws_cloudwatch_logs, aws_rds) can use the correct account without you having to "
+                        + "repeat it. "
+                        + "Call with NO parameters to list all registered customers with their environments. "
+                        + "Lookup priority: customerName (partial, case-insensitive) → customerId (exact) "
+                        + "→ jiraProject key → productId.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
-                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                .putAdditionalProperty("customerName", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Product ID from the registry"
+                                        "description", "Customer name or partial name as the user typed it "
+                                                + "(case-insensitive, partial match). Use this when the user "
+                                                + "refers to a customer by name, e.g. \"Acme Corp\" or \"acme\"."
                                 )))
                                 .putAdditionalProperty("customerId", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Customer ID (returns all products if multiple exist)"
+                                        "description", "Exact customer ID slug, e.g. \"acme-corp\". "
+                                                + "Use when the ID is already known from a previous lookup."
                                 )))
                                 .putAdditionalProperty("jiraProject", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "Jira project key — used to look up the owning product"
+                                        "description", "Jira project key — resolves the owning customer via the linked product"
+                                )))
+                                .putAdditionalProperty("productId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Product ID — resolves the owning customer and returns full context"
                                 )))
                                 .build())
                         .build())

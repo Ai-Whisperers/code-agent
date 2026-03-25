@@ -30,6 +30,7 @@ public class WorkspaceContext implements AutoCloseable {
     private final Map<String, Path> clonedRepos = new HashMap<>(); // repoSlug -> subdirectory path
     private boolean planManaged;
     private String userId;
+    private String conversationId;
 
     private WorkspaceContext(Path root) {
         this.root = root;
@@ -47,6 +48,20 @@ public class WorkspaceContext implements AutoCloseable {
      */
     public String getUserId() {
         return userId;
+    }
+
+    /**
+     * Set the conversation ID so tools can persist context back to the database.
+     */
+    public void setConversationId(String conversationId) {
+        this.conversationId = conversationId;
+    }
+
+    /**
+     * Get the conversation ID, or {@code null} for non-chat workspaces.
+     */
+    public String getConversationId() {
+        return conversationId;
     }
 
     public static WorkspaceContext create(String jobId) throws IOException {

@@ -53,6 +53,32 @@ public class CustomerRegistryStore {
         return results;
     }
 
+    /**
+     * Case-insensitive partial-name search across customers.
+     * Returns all customers whose {@code name} contains {@code name} (ILIKE).
+     */
+    public List<CustomerConfig> findCustomersByName(String name) {
+        String sql = """
+                SELECT customer_id, name, cloud_account_id, environments, metadata, created_at, updated_at
+                FROM customers
+                WHERE name ILIKE ?
+                ORDER BY name
+                """;
+        List<CustomerConfig> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, "%" + name + "%");
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapCustomer(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to search customers by name '%s': %s", name, e.getMessage());
+        }
+        return results;
+    }
+
     public Optional<CustomerConfig> getCustomer(String customerId) {
         String sql = """
                 SELECT customer_id, name, cloud_account_id, environments, metadata, created_at, updated_at

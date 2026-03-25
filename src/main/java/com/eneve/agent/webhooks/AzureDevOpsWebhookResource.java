@@ -150,7 +150,7 @@ public class AzureDevOpsWebhookResource {
 
             audit("azuredevops", eventType, projectName, repoName, prId, prAuthor,
                     "review_triggered", hookResult.hookNames(), rawPayload);
-            return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha);
+            return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha, projectName, repoName, prAuthor);
 
         } catch (Exception e) {
             LOG.errorf("Azure DevOps webhook processing error: %s", e.getMessage());
@@ -160,15 +160,18 @@ public class AzureDevOpsWebhookResource {
     }
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
-                                     String headCommitSha) {
+                                     String headCommitSha, String workspace, String repoSlug, String prAuthor) {
         String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl, prId, targetBranch, jiraKey,
                 rulesRepoUrl.isBlank() ? null : rulesRepoUrl,
-                null, null, null, headCommitSha);
+                null, null, null, headCommitSha, prAuthor);
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
+        job.setWorkspace(workspace);
+        job.setRepoSlug(repoSlug);
+        job.setPrAuthor(prAuthor);
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {

@@ -42,6 +42,11 @@ public record ReviewPrRequest(
         @Schema(description = "Current HEAD commit SHA of the source branch at the time the webhook fired. "
                 + "Used to skip reviews when this commit has already been reviewed.",
                 example = "a1b2c3d4e5f6")
-        String headCommitSha
+        String headCommitSha,
+
+        @Schema(description = "Author (login or display name) of the pull request. "
+                + "Used to attribute review quality metrics to the developer.",
+                example = "alice")
+        String prAuthor
 ) {
 }

@@ -359,10 +359,12 @@ public class AwsRdsTool implements ToolExecutor {
             throw new IllegalArgumentException("Customer '" + customerId + "' has no environments configured");
         }
         EnvironmentConfig env = cfg.environments().stream()
-                .filter(e -> environmentName.equalsIgnoreCase(e.name()))
+                .filter(e -> matchesEnvironment(e, environmentName))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
-                        "Environment '" + environmentName + "' not found for customer '" + customerId + "'"));
+                        "Environment '" + environmentName + "' not found for customer '" + customerId + "'. "
+                        + "Available: " + cfg.environments().stream()
+                                .map(AwsRdsTool::effectiveEnvName).toList()));
 
         if (env.aws() == null) {
             throw new IllegalArgumentException(
@@ -380,4 +382,20 @@ public class AwsRdsTool implements ToolExecutor {
     }
 
     record AwsEnvConfig(String roleArn, String region, String label, CloudAccount cloudAccount) {}
+
+    /**
+     * Returns the effective display name for an environment.
+     * Falls back to {@code type} when {@code name} is null or blank (common for legacy data).
+     */
+    static String effectiveEnvName(EnvironmentConfig e) {
+        return (e.name() != null && !e.name().isBlank()) ? e.name() : e.type();
+    }
+
+    /**
+     * Matches an environment by name (case-insensitive), falling back to type when name is blank.
+     * This handles environments that were stored without an explicit name field.
+     */
+    private static boolean matchesEnvironment(EnvironmentConfig e, String environmentName) {
+        return environmentName.equalsIgnoreCase(effectiveEnvName(e));
+    }
 }

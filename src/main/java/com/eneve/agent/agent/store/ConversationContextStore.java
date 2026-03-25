@@ -101,6 +101,46 @@ public class ConversationContextStore {
         }
     }
 
+    /**
+     * Additive upsert: adds {@code newCustomerIds} and {@code newProductIds} to any existing
+     * lists for the conversation without touching aikido, jira, or confluence fields.
+     * Creates a new row if none exists yet.
+     *
+     * <p>This is called by tools like {@code lookup_customer_context} to persist AI-resolved
+     * context so it survives across sessions.
+     */
+    public ConversationContext mergeContext(String conversationId,
+                                           List<String> newCustomerIds,
+                                           List<String> newProductIds) {
+        ConversationContext existing = getContext(conversationId).orElse(null);
+
+        List<String> mergedCustomers = mergeLists(
+                existing != null ? existing.customerIds() : List.of(), newCustomerIds);
+        List<String> mergedProducts = mergeLists(
+                existing != null ? existing.productIds() : List.of(), newProductIds);
+
+        return updateContext(
+                conversationId,
+                mergedCustomers,
+                mergedProducts,
+                existing != null ? existing.aikidoIssueIds() : List.of(),
+                existing != null ? existing.jiraIssueKeys() : List.of(),
+                existing != null ? existing.confluenceDocIds() : List.of()
+        );
+    }
+
+    /** Returns a deduplicated union of two lists, preserving insertion order. */
+    private static <T> List<T> mergeLists(List<T> existing, List<T> additions) {
+        if (additions == null || additions.isEmpty()) return existing != null ? existing : List.of();
+        List<T> result = new ArrayList<>(existing != null ? existing : List.of());
+        for (T item : additions) {
+            if (item != null && !result.contains(item)) {
+                result.add(item);
+            }
+        }
+        return result;
+    }
+
     public boolean deleteContext(String conversationId) {
         String sql = "DELETE FROM conversation_context WHERE conversation_id = ?";
         try (Connection conn = dataSource.getConnection();

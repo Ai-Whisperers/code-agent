@@ -37,8 +37,9 @@ public class JobStore {
         String sql = """
                 INSERT INTO jobs
                     (job_id, job_type, status, request_payload, created_at, updated_at,
-                     summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
+                     pr_author, workspace, repo_slug)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -56,6 +57,9 @@ public class JobStore {
             ps.setInt(11, job.getFilesChanged());
             ps.setInt(12, job.getLinesChanged());
             setNullable(ps, 13, extractJiraKey(job));
+            setNullable(ps, 14, job.getPrAuthor());
+            setNullable(ps, 15, job.getWorkspace());
+            setNullable(ps, 16, job.getRepoSlug());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to insert job %s: %s", job.getJobId(), e.getMessage());
@@ -72,8 +76,9 @@ public class JobStore {
         String insert = """
                 INSERT INTO job_history
                     (job_id, job_type, status, request_payload, created_at, updated_at, archived_at,
-                     summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?)
+                     summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
+                     pr_author, workspace, repo_slug)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -93,6 +98,9 @@ public class JobStore {
                 ins.setInt(11, job.getFilesChanged());
                 ins.setInt(12, job.getLinesChanged());
                 setNullable(ins, 13, extractJiraKey(job));
+                setNullable(ins, 14, job.getPrAuthor());
+                setNullable(ins, 15, job.getWorkspace());
+                setNullable(ins, 16, job.getRepoSlug());
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -163,7 +171,8 @@ public class JobStore {
     public List<JobRecord> findByStatus(JobStatus status) {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -352,7 +361,8 @@ public class JobStore {
 
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
-                + " summary, error_message, pr_url, pr_id, files_changed, lines_changed"
+                + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
+                + " pr_author, workspace, repo_slug"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -412,6 +422,9 @@ public class JobStore {
         job.setPrId(rs.getString("pr_id"));
         job.setFilesChanged(rs.getInt("files_changed"));
         job.setLinesChanged(rs.getInt("lines_changed"));
+        job.setPrAuthor(rs.getString("pr_author"));
+        job.setWorkspace(rs.getString("workspace"));
+        job.setRepoSlug(rs.getString("repo_slug"));
         return job;
     }
 
