@@ -3,7 +3,9 @@ package com.eneve.agent.tools;
 import java.util.List;
 import java.util.Map;
 
+import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.TeamMember;
@@ -14,14 +16,17 @@ import jakarta.inject.Inject;
 
 /**
  * Claude tool that resolves customer/product context from the registry —
- * team members by role, environments with AWS account IDs, Jira projects,
- * and Confluence spaces.
+ * team members by role, environments with AWS account IDs, cloud account
+ * (provider credentials), Jira projects, and Confluence spaces.
  */
 @ApplicationScoped
 public class LookupCustomerTool implements ToolExecutor {
 
     @Inject
     CustomerRegistryStore registryStore;
+
+    @Inject
+    CloudAccountStore cloudAccountStore;
 
     @Override
     public String name() {
@@ -130,9 +135,25 @@ public class LookupCustomerTool implements ToolExecutor {
             sb.append("\n");
         }
 
-        // Environments (from customer)
+        // Cloud account + environments (from customer)
         if (p.customerId() != null) {
             registryStore.getCustomer(p.customerId()).ifPresent(customer -> {
+                if (customer.cloudAccountId() != null) {
+                    sb.append("### Cloud Account\n");
+                    CloudAccount ca = cloudAccountStore.getCloudAccount(customer.cloudAccountId()).orElse(null);
+                    if (ca != null) {
+                        sb.append("  - ID: ").append(ca.id()).append("\n");
+                        sb.append("  - Name: ").append(ca.name()).append("\n");
+                        sb.append("  - Type: ").append(ca.type()).append("\n");
+                        if (ca.description() != null) {
+                            sb.append("  - Description: ").append(ca.description()).append("\n");
+                        }
+                    } else {
+                        sb.append("  - ID: ").append(customer.cloudAccountId()).append(" (details unavailable)\n");
+                    }
+                    sb.append("\n");
+                }
+
                 if (customer.environments() != null && !customer.environments().isEmpty()) {
                     sb.append("### Environments\n");
                     for (EnvironmentConfig env : customer.environments()) {
