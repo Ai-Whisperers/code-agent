@@ -12,7 +12,8 @@ import jakarta.inject.Inject;
 
 /**
  * Claude tool that searches the unified knowledge base (Jira issues,
- * Confluence pages, Jira attachments, and web documentation) by semantic similarity.
+ * Confluence pages, Jira attachments, web documentation, and admin-uploaded
+ * static files) by semantic similarity.
  */
 @ApplicationScoped
 public class SearchKnowledgeTool implements ToolExecutor {

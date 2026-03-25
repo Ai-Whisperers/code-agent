@@ -10,6 +10,9 @@ import java.util.List;
 /**
  * Thin search facade: embeds the user query via Voyage AI and executes
  * a pgvector cosine-similarity search over the {@code knowledge_embeddings} table.
+ *
+ * <p>Supported source types: {@code jira}, {@code confluence},
+ * {@code jira-attachment}, {@code web-docs}, {@code static-file}.
  */
 @ApplicationScoped
 public class KnowledgeSearchService {
@@ -28,8 +31,8 @@ public class KnowledgeSearchService {
      * Search the knowledge base by semantic similarity.
      *
      * @param query       natural-language question or keywords
-     * @param sourceTypes optional whitelist of source types ('jira', 'confluence', 'jira-attachment', 'web-docs');
-     *                    null or empty means all sources
+     * @param sourceTypes optional whitelist of source types ('jira', 'confluence', 'jira-attachment',
+     *                    'web-docs', 'static-file'); null or empty means all sources
      * @param topK        number of results (clamped to 1–25)
      * @return ranked list of matching knowledge chunks
      */

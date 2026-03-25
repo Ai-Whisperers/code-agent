@@ -1,14 +1,18 @@
 package com.eneve.agent;
 
+import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.store.StaticFileSourceStore;
 import com.eneve.agent.agent.store.WebDocSourceStore;
 import com.eneve.agent.agent.service.KnowledgeIndexerService;
 import com.eneve.agent.agent.service.KnowledgeSearchService;
 
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -17,6 +21,9 @@ import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
+import org.jboss.logging.Logger;
+import org.jboss.resteasy.reactive.PartType;
+import org.jboss.resteasy.reactive.RestForm;
 
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
@@ -30,6 +37,9 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
+import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 @Path("/knowledge")
 @Produces(MediaType.APPLICATION_JSON)
@@ -37,11 +47,21 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Knowledge Base", description = "Index and search Jira/Confluence knowledge")
 public class KnowledgeResource {
 
+    private static final Logger LOG = Logger.getLogger(KnowledgeResource.class);
+
+    private static final long MAX_STATIC_FILE_BYTES = 10 * 1024 * 1024L; // 10 MB hard cap
+    private static final java.util.Set<String> ALLOWED_EXTENSIONS = java.util.Set.of(".txt", ".md", ".pdf");
+
     @Inject KnowledgeIndexerService indexer;
     @Inject KnowledgeSearchService searcher;
     @Inject KnowledgeEmbeddingStore store;
     @Inject CustomerRegistryStore registryStore;
     @Inject WebDocSourceStore webDocSourceStore;
+    @Inject StaticFileSourceStore staticFileStore;
+    @Inject S3Client s3Client;
+
+    @ConfigProperty(name = "attachment.s3.bucket", defaultValue = "code-agent-attachments")
+    String s3Bucket;
 
     // ──────────────────────────────────────────────────────────────────────
     // Indexing endpoints
@@ -184,7 +204,8 @@ public class KnowledgeResource {
                 "jira", store.countBySource("jira"),
                 "confluence", store.countBySource("confluence"),
                 "jiraAttachment", store.countBySource("jira-attachment"),
-                "webDocs", store.countBySource("web-docs")
+                "webDocs", store.countBySource("web-docs"),
+                "staticFiles", store.countBySource("static-file")
         )).build();
     }
 
@@ -280,6 +301,120 @@ public class KnowledgeResource {
     }
 
     // ──────────────────────────────────────────────────────────────────────
+    // Static file sources — management
+    // ──────────────────────────────────────────────────────────────────────
+
+    @POST
+    @Path("/static-files")
+    @Consumes(MediaType.MULTIPART_FORM_DATA)
+    @Operation(operationId = "uploadStaticFile", summary = "Upload a static file to the knowledge base",
+               description = "Accepts .txt, .md, or .pdf files. The file is stored in S3 and indexed immediately.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "File uploaded and indexed"),
+            @APIResponse(responseCode = "400", description = "Missing file, unsupported type, or file too large"),
+            @APIResponse(responseCode = "500", description = "Upload or indexing failed")
+    })
+    public Response uploadStaticFile(StaticFileUploadForm form) {
+        if (form.file == null) {
+            return Response.status(400).entity(Map.of("error", "No file provided")).build();
+        }
+        if (form.filename == null || form.filename.isBlank()) {
+            return Response.status(400).entity(Map.of("error", "filename is required")).build();
+        }
+
+        String lower = form.filename.toLowerCase();
+        boolean allowed = ALLOWED_EXTENSIONS.stream().anyMatch(lower::endsWith);
+        if (!allowed) {
+            return Response.status(400).entity(Map.of("error",
+                    "Unsupported file type. Allowed extensions: .txt, .md, .pdf")).build();
+        }
+
+        long fileSize = form.fileSize != null ? form.fileSize : 0;
+        if (fileSize > MAX_STATIC_FILE_BYTES) {
+            return Response.status(400).entity(Map.of("error",
+                    "File too large. Maximum size is 10 MB")).build();
+        }
+
+        String contentType = form.contentType != null && !form.contentType.isBlank()
+                ? form.contentType : "application/octet-stream";
+        String displayName = (form.name != null && !form.name.isBlank())
+                ? form.name.trim()
+                : form.filename.replaceAll("\\.[^.]+$", "");
+
+        String fileId = UUID.randomUUID().toString();
+        String s3Key = "knowledge/static-files/" + fileId + "/" + form.filename;
+
+        try {
+            byte[] data = form.file.readAllBytes();
+            if (fileSize == 0) fileSize = data.length;
+
+            s3Client.putObject(
+                    PutObjectRequest.builder()
+                            .bucket(s3Bucket)
+                            .key(s3Key)
+                            .contentType(contentType)
+                            .contentLength((long) data.length)
+                            .build(),
+                    software.amazon.awssdk.core.sync.RequestBody.fromBytes(data));
+            LOG.infof("Uploaded static file to S3: %s", s3Key);
+
+            var source = staticFileStore.insert(displayName, form.filename, contentType, s3Key, data.length)
+                    .orElseThrow(() -> new RuntimeException("Failed to persist static file metadata"));
+
+            var result = indexer.indexStaticFile(source);
+            LOG.infof("Static file indexed: %s chunks=%d", source.id(), result.chunksIndexed());
+
+            return Response.ok(staticFileStore.findById(source.id()).orElse(source)).build();
+
+        } catch (Exception e) {
+            LOG.errorf("Failed to upload or index static file %s: %s", form.filename, e.getMessage());
+            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(s3Bucket).key(s3Key).build());
+            return Response.status(500).entity(Map.of("error", "Upload failed: " + e.getMessage())).build();
+        }
+    }
+
+    @GET
+    @Path("/static-files")
+    @Operation(operationId = "listStaticFiles", summary = "List uploaded static files")
+    @APIResponse(responseCode = "200", description = "List of static file sources")
+    public Response listStaticFiles() {
+        return Response.ok(staticFileStore.listAll()).build();
+    }
+
+    @DELETE
+    @Path("/static-files/{id}")
+    @Operation(operationId = "deleteStaticFile", summary = "Delete a static file and its indexed content",
+               description = "Removes the file from S3, deletes all embeddings, and removes the metadata row.")
+    @APIResponses({
+            @APIResponse(responseCode = "204", description = "Deleted"),
+            @APIResponse(responseCode = "404", description = "File not found")
+    })
+    public Response deleteStaticFile(@Parameter(required = true) @PathParam("id") String id) {
+        return staticFileStore.findById(id).map(source -> {
+            s3Client.deleteObject(DeleteObjectRequest.builder()
+                    .bucket(s3Bucket).key(source.s3Key()).build());
+            store.deleteBySource("static-file", source.id());
+            staticFileStore.delete(id);
+            return Response.noContent().build();
+        }).orElse(Response.status(404).entity(Map.of("error", "Static file not found: " + id)).build());
+    }
+
+    @POST
+    @Path("/static-files/{id}/reindex")
+    @Operation(operationId = "reindexStaticFile", summary = "Re-index a static file",
+               description = "Downloads the file from S3 and re-runs the indexing pipeline.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Reindexing completed"),
+            @APIResponse(responseCode = "404", description = "File not found")
+    })
+    public Response reindexStaticFile(@Parameter(required = true) @PathParam("id") String id) {
+        return staticFileStore.findById(id).map(source -> {
+            var result = indexer.indexStaticFile(source);
+            return Response.ok(result).build();
+        }).orElse(Response.status(404).entity(Map.of("error", "Static file not found: " + id)).build());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
     // Request body records
     // ──────────────────────────────────────────────────────────────────────
 
@@ -305,4 +440,29 @@ public class KnowledgeResource {
             @Schema(description = "Delay between HTTP requests in milliseconds (default 500)")
             Integer crawlDelayMs
     ) {}
+
+    /** Multipart form for static file uploads. */
+    public static class StaticFileUploadForm {
+
+        @RestForm("file")
+        @PartType(MediaType.APPLICATION_OCTET_STREAM)
+        public InputStream file;
+
+        @RestForm("filename")
+        @PartType(MediaType.TEXT_PLAIN)
+        public String filename;
+
+        @RestForm("contentType")
+        @PartType(MediaType.TEXT_PLAIN)
+        public String contentType;
+
+        @RestForm("fileSize")
+        @PartType(MediaType.TEXT_PLAIN)
+        public Long fileSize;
+
+        /** Optional display name; defaults to the filename without extension. */
+        @RestForm("name")
+        @PartType(MediaType.TEXT_PLAIN)
+        public String name;
+    }
 }

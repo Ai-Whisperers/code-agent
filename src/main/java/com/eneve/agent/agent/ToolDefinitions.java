@@ -344,9 +344,11 @@ public final class ToolDefinitions {
         return Tool.builder()
                 .name("search_knowledge_base")
                 .description("Search previously indexed Jira tickets, Confluence documentation pages, "
-                        + "Jira file attachments, and web documentation by meaning. "
+                        + "Jira file attachments, web documentation, and admin-uploaded static files "
+                        + "(.txt, .md, .pdf) by meaning. "
                         + "Use this BEFORE answering questions about past issues, known bugs, "
-                        + "architecture decisions, runbooks, team knowledge, or external library docs. "
+                        + "architecture decisions, runbooks, team knowledge, external library docs, "
+                        + "or any internal documents uploaded by the team. "
                         + "Returns ranked excerpts with source references.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
@@ -357,7 +359,8 @@ public final class ToolDefinitions {
                                 .putAdditionalProperty("sourceTypes", JsonValue.from(Map.of(
                                         "type", "array",
                                         "items", Map.of("type", "string",
-                                                "enum", List.of("jira", "confluence", "jira-attachment", "web-docs")),
+                                                "enum", List.of("jira", "confluence", "jira-attachment",
+                                                        "web-docs", "static-file")),
                                         "description", "Restrict search to these source types (omit for all sources)"
                                 )))
                                 .putAdditionalProperty("topK", JsonValue.from(Map.of(

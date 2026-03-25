@@ -1,9 +1,11 @@
 package com.eneve.agent.agent.service;
 
 import com.eneve.agent.agent.SecretRedactor;
+import com.eneve.agent.agent.model.StaticFileSource;
 import com.eneve.agent.agent.model.WebDocSource;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.store.StaticFileSourceStore;
 import com.eneve.agent.agent.store.WebDocSourceStore;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.jira.JiraService;
@@ -14,7 +16,12 @@ import jakarta.inject.Inject;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import software.amazon.awssdk.core.ResponseBytes;
+import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.GetObjectResponse;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -55,6 +62,11 @@ public class KnowledgeIndexerService {
     @Inject SettingsService settingsService;
     @Inject WebDocsCrawlerService crawlerService;
     @Inject WebDocSourceStore webDocSourceStore;
+    @Inject StaticFileSourceStore staticFileStore;
+    @Inject S3Client s3Client;
+
+    @ConfigProperty(name = "attachment.s3.bucket", defaultValue = "code-agent-attachments")
+    String s3Bucket;
 
     public record IndexResult(
             String sourceType,
@@ -287,6 +299,89 @@ public class KnowledgeIndexerService {
         return results;
     }
 
+    /**
+     * Index a single admin-uploaded static file.
+     *
+     * <p>Downloads the raw bytes from S3, extracts text via
+     * {@link #extractStaticFileText(String, String, byte[])}, chunks and embeds
+     * the result, then updates the {@code static_file_sources} row with the outcome.
+     *
+     * @param source the {@link StaticFileSource} to index
+     * @return indexing result with chunk counts and any errors
+     */
+    public IndexResult indexStaticFile(StaticFileSource source) {
+        LOG.infof("Indexing static file: %s (%s)", source.originalFilename(), source.id());
+        List<String> errors = new ArrayList<>();
+
+        // Delete stale embeddings before re-indexing
+        int deleted = store.deleteBySource("static-file", source.id());
+        LOG.debugf("Deleted %d stale static-file chunks for %s", deleted, source.id());
+
+        byte[] data;
+        try {
+            ResponseBytes<GetObjectResponse> response = s3Client.getObjectAsBytes(
+                    GetObjectRequest.builder().bucket(s3Bucket).key(source.s3Key()).build());
+            data = response.asByteArray();
+        } catch (Exception e) {
+            String msg = "Failed to download static file from S3 (" + source.s3Key() + "): " + e.getMessage();
+            LOG.warnf(msg);
+            staticFileStore.updateIndexResult(source.id(), 0, msg);
+            return new IndexResult("static-file", source.id(), 0, 0, List.of(msg));
+        }
+
+        String text = SecretRedactor.redact(extractStaticFileText(
+                source.originalFilename(), source.contentType(), data));
+
+        if (text == null || text.isBlank()) {
+            String msg = "No text extracted from file: " + source.originalFilename();
+            LOG.warnf(msg);
+            staticFileStore.updateIndexResult(source.id(), 0, msg);
+            return new IndexResult("static-file", source.id(), 0, 1, List.of(msg));
+        }
+
+        List<String> chunks = splitIntoChunks(text, CONFLUENCE_CHUNK_CHARS);
+        int indexed = 0;
+        int skipped = 0;
+
+        for (int i = 0; i < chunks.size(); i++) {
+            String chunkId = chunks.size() > 1
+                    ? source.id() + "/chunk/" + i
+                    : source.id();
+            var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
+                    "static-file",
+                    chunkId,
+                    source.name(),
+                    chunks.get(i),
+                    Map.of(
+                            "originalFilename", source.originalFilename(),
+                            "contentType", source.contentType()
+                    )
+            );
+            if (embedAndStore(chunk)) indexed++; else skipped++;
+        }
+
+        String errorSummary = errors.isEmpty() ? null : errors.size() + " error(s)";
+        staticFileStore.updateIndexResult(source.id(), indexed, errorSummary);
+
+        LOG.infof("Static file indexing complete for %s: indexed=%d, skipped=%d",
+                source.originalFilename(), indexed, skipped);
+        return new IndexResult("static-file", source.id(), indexed, skipped, errors);
+    }
+
+    /**
+     * Index all registered static file sources.
+     *
+     * @return list of results, one per source
+     */
+    public List<IndexResult> indexAllStaticFiles() {
+        List<StaticFileSource> sources = staticFileStore.listAll();
+        List<IndexResult> results = new ArrayList<>();
+        for (StaticFileSource source : sources) {
+            results.add(indexStaticFile(source));
+        }
+        return results;
+    }
+
     // ──────────────────────────────────────────────────────────────────────
     // Private helpers
     // ──────────────────────────────────────────────────────────────────────
@@ -401,6 +496,46 @@ public class KnowledgeIndexerService {
             }
         }
         return sb.toString().trim();
+    }
+
+    /**
+     * Extracts plain text from a static-file upload.
+     *
+     * <p>Supported types:
+     * <ul>
+     *   <li>{@code .pdf} / {@code application/pdf} — text extracted via PDFBox</li>
+     *   <li>{@code .txt}, {@code .md}, and any MIME type in {@link #TEXT_MIME_TYPES} — decoded as UTF-8</li>
+     * </ul>
+     *
+     * <p>Package-visible so it can be exercised by unit tests without a CDI container.
+     *
+     * @param filename    original filename (used for extension detection)
+     * @param contentType MIME content-type reported by the multipart upload
+     * @param data        raw file bytes
+     * @return extracted plain text, or {@code null} if the type is unsupported or extraction fails
+     */
+    static String extractStaticFileText(String filename, String contentType, byte[] data) {
+        if (data == null || data.length == 0) return null;
+
+        String lower = filename != null ? filename.toLowerCase() : "";
+        String mime  = contentType != null ? contentType.toLowerCase() : "";
+
+        boolean isPdf  = mime.contains("pdf") || lower.endsWith(".pdf");
+        boolean isText = lower.endsWith(".txt") || lower.endsWith(".md")
+                || TEXT_MIME_TYPES.contains(mime);
+
+        if (isPdf) {
+            try (PDDocument doc = Loader.loadPDF(data)) {
+                return new PDFTextStripper().getText(doc);
+            } catch (Exception e) {
+                LOG.warnf("Failed to extract PDF text from %s: %s", filename, e.getMessage());
+                return null;
+            }
+        }
+        if (isText) {
+            return new String(data, StandardCharsets.UTF_8);
+        }
+        return null;
     }
 
     /**
