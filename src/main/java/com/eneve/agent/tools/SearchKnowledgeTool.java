@@ -43,8 +43,6 @@ public class SearchKnowledgeTool implements ToolExecutor {
         List<String> sourceTypes = input.get("sourceTypes") instanceof List<?>
                 ? (List<String>) input.get("sourceTypes") : null;
 
-        String productId = (String) input.get("productId");
-
         int topK = 10;
         Object topKObj = input.get("topK");
         if (topKObj instanceof Number n) {
@@ -52,7 +50,7 @@ public class SearchKnowledgeTool implements ToolExecutor {
         }
 
         List<KnowledgeEmbeddingStore.KnowledgeSearchResult> results =
-                searchService.search(query, sourceTypes, productId, topK);
+                searchService.search(query, sourceTypes, topK);
 
         if (results.isEmpty()) {
             return "No results found in the knowledge base for: " + query;
@@ -60,9 +58,7 @@ public class SearchKnowledgeTool implements ToolExecutor {
 
         StringBuilder sb = new StringBuilder();
         sb.append("Knowledge base search results for: ").append(query).append("\n");
-        sb.append("Found ").append(results.size()).append(" result(s)");
-        if (productId != null) sb.append(" (product: ").append(productId).append(")");
-        sb.append(":\n\n");
+        sb.append("Found ").append(results.size()).append(" result(s):\n\n");
 
         for (int i = 0; i < results.size(); i++) {
             KnowledgeEmbeddingStore.KnowledgeSearchResult r = results.get(i);

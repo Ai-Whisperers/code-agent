@@ -1,8 +1,10 @@
 package com.eneve.agent.agent.service;
 
 import com.eneve.agent.agent.SecretRedactor;
+import com.eneve.agent.agent.model.WebDocSource;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.store.WebDocSourceStore;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.ProductConfig;
@@ -51,6 +53,8 @@ public class KnowledgeIndexerService {
     @Inject KnowledgeEmbeddingStore store;
     @Inject CustomerRegistryStore registryStore;
     @Inject SettingsService settingsService;
+    @Inject WebDocsCrawlerService crawlerService;
+    @Inject WebDocSourceStore webDocSourceStore;
 
     public record IndexResult(
             String sourceType,
@@ -69,11 +73,9 @@ public class KnowledgeIndexerService {
      * Confluence pages.
      *
      * @param projectKey Jira project key (e.g. "ENG")
-     * @param productId  product registry ID for scoping
-     * @param customerId customer registry ID for scoping
      */
-    public IndexResult indexJiraProject(String projectKey, String productId, String customerId) {
-        LOG.infof("Starting Jira indexing for project %s (product=%s)", projectKey, productId);
+    public IndexResult indexJiraProject(String projectKey) {
+        LOG.infof("Starting Jira indexing for project %s", projectKey);
         int indexed = 0;
         int skipped = 0;
         List<String> errors = new ArrayList<>();
@@ -93,8 +95,6 @@ public class KnowledgeIndexerService {
                     var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
                             "jira",
                             issue.key(),
-                            productId,
-                            customerId,
                             issue.summary(),
                             issueText,
                             Map.of(
@@ -113,7 +113,7 @@ public class KnowledgeIndexerService {
                 if (issue.attachments() != null) {
                     for (JiraService.JiraAttachment att : issue.attachments()) {
                         try {
-                            int attResult = indexAttachment(att, issue.key(), productId, customerId);
+                            int attResult = indexAttachment(att, issue.key());
                             if (attResult > 0) indexed += attResult;
                             else if (attResult == 0) skipped++;
                         } catch (Exception e) {
@@ -129,7 +129,7 @@ public class KnowledgeIndexerService {
                     if (pageId == null || scheduledConfluencePageIds.contains(pageId)) continue;
                     scheduledConfluencePageIds.add(pageId);
                     try {
-                        int pageResult = indexConfluencePage(pageId, link.title(), productId, customerId);
+                        int pageResult = indexConfluencePage(pageId, link.title());
                         indexed += pageResult;
                     } catch (Exception e) {
                         errors.add("Confluence page " + pageId + " linked from " + issue.key() + ": " + e.getMessage());
@@ -149,12 +149,10 @@ public class KnowledgeIndexerService {
     /**
      * Index all pages in a Confluence space, chunked by heading section.
      *
-     * @param spaceKey   Confluence space key
-     * @param productId  product registry ID for scoping
-     * @param customerId customer registry ID for scoping
+     * @param spaceKey Confluence space key
      */
-    public IndexResult indexConfluenceSpace(String spaceKey, String productId, String customerId) {
-        LOG.infof("Starting Confluence indexing for space %s (product=%s)", spaceKey, productId);
+    public IndexResult indexConfluenceSpace(String spaceKey) {
+        LOG.infof("Starting Confluence indexing for space %s", spaceKey);
         int indexed = 0;
         int skipped = 0;
         List<String> errors = new ArrayList<>();
@@ -162,7 +160,7 @@ public class KnowledgeIndexerService {
         List<ConfluenceService.ConfluencePage> pages = confluenceService.listPagesInSpace(spaceKey);
         for (ConfluenceService.ConfluencePage page : pages) {
             try {
-                int result = indexConfluencePage(page.pageId(), page.title(), productId, customerId);
+                int result = indexConfluencePage(page.pageId(), page.title());
                 indexed += result;
             } catch (Exception e) {
                 errors.add("Page " + page.pageId() + " (" + page.title() + "): " + e.getMessage());
@@ -195,20 +193,96 @@ public class KnowledgeIndexerService {
      */
     public List<IndexResult> indexProduct(ProductConfig product) {
         List<IndexResult> results = new ArrayList<>();
-        String pid = product.productId();
-        String cid = product.customerId();
 
         if (product.jira() != null && product.jira().projects() != null) {
             for (String projectKey : product.jira().projects().values()) {
                 if (projectKey != null && !projectKey.isBlank()) {
-                    results.add(indexJiraProject(projectKey, pid, cid));
+                    results.add(indexJiraProject(projectKey));
                 }
             }
         }
         if (product.confluence() != null
                 && product.confluence().spaceKey() != null
                 && !product.confluence().spaceKey().isBlank()) {
-            results.add(indexConfluenceSpace(product.confluence().spaceKey(), pid, cid));
+            results.add(indexConfluenceSpace(product.confluence().spaceKey()));
+        }
+        return results;
+    }
+
+    /**
+     * Crawl and index a single web documentation source.
+     * Deletes all previously indexed chunks for this source before crawling (delete-before-crawl),
+     * then embeds and stores the fresh content.
+     *
+     * @param source the {@link WebDocSource} to crawl
+     * @return indexing result with chunk counts and any errors
+     */
+    public IndexResult indexWebDocSource(WebDocSource source) {
+        LOG.infof("Starting web-docs crawl for %s (maxPages=%d)", source.baseUrl(), source.maxPages());
+        List<String> errors = new ArrayList<>();
+
+        // Delete stale chunks before re-crawling
+        int deleted = store.deleteBySourceIdPrefix("web-docs", source.baseUrl());
+        LOG.debugf("Deleted %d stale web-docs chunks for %s", deleted, source.baseUrl());
+
+        List<WebDocsCrawlerService.WebPage> pages;
+        try {
+            pages = crawlerService.crawl(source);
+        } catch (Exception e) {
+            String msg = "Crawl failed for " + source.baseUrl() + ": " + e.getMessage();
+            LOG.warnf(msg);
+            webDocSourceStore.updateCrawlResult(source.id(), 0, msg);
+            return new IndexResult("web-docs", source.baseUrl(), 0, 0, List.of(msg));
+        }
+
+        int indexed = 0;
+        int skipped = 0;
+
+        for (WebDocsCrawlerService.WebPage page : pages) {
+            try {
+                String text = SecretRedactor.redact(page.textContent());
+                if (text == null || text.isBlank()) {
+                    skipped++;
+                    continue;
+                }
+                List<String> chunks = splitIntoChunks(text, CONFLUENCE_CHUNK_CHARS);
+                for (int i = 0; i < chunks.size(); i++) {
+                    String chunkId = chunks.size() > 1
+                            ? page.url() + "#chunk/" + i
+                            : page.url();
+                    var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
+                            "web-docs",
+                            chunkId,
+                            page.title(),
+                            chunks.get(i),
+                            Map.of("url", page.url())
+                    );
+                    if (embedAndStore(chunk)) indexed++; else skipped++;
+                }
+            } catch (Exception e) {
+                errors.add("Page " + page.url() + ": " + e.getMessage());
+                LOG.warnf("Failed to index web page %s: %s", page.url(), e.getMessage());
+            }
+        }
+
+        String errorSummary = errors.isEmpty() ? null : errors.size() + " page error(s)";
+        webDocSourceStore.updateCrawlResult(source.id(), indexed, errorSummary);
+
+        LOG.infof("Web-docs crawl complete for %s: indexed=%d, skipped=%d, errors=%d",
+                source.baseUrl(), indexed, skipped, errors.size());
+        return new IndexResult("web-docs", source.baseUrl(), indexed, skipped, errors);
+    }
+
+    /**
+     * Crawl and index all registered web documentation sources.
+     *
+     * @return list of results, one per source
+     */
+    public List<IndexResult> indexAllWebDocSources() {
+        List<WebDocSource> sources = webDocSourceStore.listAll();
+        List<IndexResult> results = new ArrayList<>();
+        for (WebDocSource source : sources) {
+            results.add(indexWebDocSource(source));
         }
         return results;
     }
@@ -217,7 +291,7 @@ public class KnowledgeIndexerService {
     // Private helpers
     // ──────────────────────────────────────────────────────────────────────
 
-    private int indexConfluencePage(String pageId, String title, String productId, String customerId) {
+    private int indexConfluencePage(String pageId, String title) {
         String body = SecretRedactor.redact(confluenceService.getPageBody(pageId));
         if (body == null || body.isBlank()) return 0;
 
@@ -229,8 +303,6 @@ public class KnowledgeIndexerService {
             var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
                     "confluence",
                     chunkId,
-                    productId,
-                    customerId,
                     title,
                     chunkText,
                     Map.of("pageId", pageId, "chunkIndex", i)
@@ -240,8 +312,7 @@ public class KnowledgeIndexerService {
         return indexed;
     }
 
-    private int indexAttachment(JiraService.JiraAttachment att, String issueKey,
-                                 String productId, String customerId) {
+    private int indexAttachment(JiraService.JiraAttachment att, String issueKey) {
         long maxAttachmentBytes = Long.parseLong(settingsService.get("knowledge.indexer.max-attachment-bytes", "5242880"));
         if (att.size() > maxAttachmentBytes) {
             LOG.debugf("Skipping large attachment %s (%d bytes) on %s", att.filename(), att.size(), issueKey);
@@ -260,8 +331,6 @@ public class KnowledgeIndexerService {
             var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
                     "jira-attachment",
                     chunkId,
-                    productId,
-                    customerId,
                     issueKey + " – " + att.filename(),
                     chunks.get(i),
                     Map.of("issueKey", issueKey, "filename", att.filename(), "mimeType", att.mimeType())
@@ -338,7 +407,7 @@ public class KnowledgeIndexerService {
      * Splits text into chunks of at most {@code maxChars} characters,
      * trying to break on paragraph boundaries first.
      */
-    private static List<String> splitIntoChunks(String text, int maxChars) {
+    static List<String> splitIntoChunks(String text, int maxChars) {
         List<String> chunks = new ArrayList<>();
         if (text.length() <= maxChars) {
             chunks.add(text);

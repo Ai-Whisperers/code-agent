@@ -28,16 +28,14 @@ public class KnowledgeSearchService {
      * Search the knowledge base by semantic similarity.
      *
      * @param query       natural-language question or keywords
-     * @param sourceTypes optional whitelist of source types ('jira', 'confluence', 'jira-attachment');
+     * @param sourceTypes optional whitelist of source types ('jira', 'confluence', 'jira-attachment', 'web-docs');
      *                    null or empty means all sources
-     * @param productId   optional product scope; null means search across all products
      * @param topK        number of results (clamped to 1–25)
      * @return ranked list of matching knowledge chunks
      */
     public List<KnowledgeEmbeddingStore.KnowledgeSearchResult> search(
             String query,
             List<String> sourceTypes,
-            String productId,
             int topK) {
 
         LOG.infof("Searching for query: %s", query);
@@ -55,10 +53,9 @@ public class KnowledgeSearchService {
         }
 
         List<KnowledgeEmbeddingStore.KnowledgeSearchResult> results =
-                store.searchSimilar(vector, k, sourceTypes, productId);
+                store.searchSimilar(vector, k, sourceTypes);
 
-        LOG.debugf("Knowledge search '%s': %d results (sources=%s, product=%s)",
-                query, results.size(), sourceTypes, productId);
+        LOG.debugf("Knowledge search '%s': %d results (sources=%s)", query, results.size(), sourceTypes);
         return results;
     }
 
@@ -66,7 +63,7 @@ public class KnowledgeSearchService {
      * Convenience overload with default topK.
      */
     public List<KnowledgeEmbeddingStore.KnowledgeSearchResult> search(
-            String query, List<String> sourceTypes, String productId) {
-        return search(query, sourceTypes, productId, DEFAULT_TOP_K);
+            String query, List<String> sourceTypes) {
+        return search(query, sourceTypes, DEFAULT_TOP_K);
     }
 }

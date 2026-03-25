@@ -1,20 +1,13 @@
 package com.eneve.agent.tools;
 
-import java.net.InetAddress;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
 
 import com.eneve.agent.settings.SettingsService;
-import org.jsoup.Jsoup;
-import org.jsoup.nodes.Document;
-import org.jsoup.select.Elements;
 
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -123,80 +116,13 @@ public class FetchUrlTool implements ToolExecutor {
     }
 
     private String extractTextFromHtml(String html, String baseUrl) {
-        Document doc = Jsoup.parse(html, baseUrl);
-
-        // Remove non-content elements
-        Elements unwanted = doc.select("script, style, nav, footer, header, aside, "
-                + ".nav, .navigation, .sidebar, .menu, .cookie-banner, .ads, .advertisement");
-        unwanted.remove();
-
-        // Prefer main content areas when present
-        org.jsoup.nodes.Element mainContent = doc.selectFirst("main, article, [role=main], .content, #content, .main");
-        String text;
-        if (mainContent != null) {
-            text = mainContent.wholeText();
-        } else {
-            org.jsoup.nodes.Element body = doc.body();
-            text = body != null ? body.wholeText() : doc.wholeText();
-        }
-
-        // Collapse excessive blank lines produced by wholeText()
-        text = text.replaceAll("(?m)^[ \\t]+$", "")
-                   .replaceAll("\\n{3,}", "\n\n")
-                   .strip();
-
-        return text;
+        return HtmlTextExtractor.extractText(html, baseUrl);
     }
 
     /**
      * Returns an error message if the URL is invalid or disallowed, null if it is safe.
      */
     private String validateUrl(String url) {
-        URI uri;
-        try {
-            uri = URI.create(url);
-        } catch (IllegalArgumentException e) {
-            return "Invalid URL: " + e.getMessage();
-        }
-
-        String scheme = uri.getScheme();
-        if (!"https".equalsIgnoreCase(scheme)) {
-            return "Only HTTPS URLs are allowed (got scheme '" + scheme + "')";
-        }
-
-        String host = uri.getHost();
-        if (host == null || host.isBlank()) {
-            return "URL has no host";
-        }
-
-        // Block private/loopback IP ranges to prevent SSRF
-        try {
-            InetAddress addr = InetAddress.getByName(host);
-            if (addr.isLoopbackAddress() || addr.isSiteLocalAddress()
-                    || addr.isLinkLocalAddress() || addr.isAnyLocalAddress()) {
-                return "Requests to private/internal addresses are not allowed";
-            }
-        } catch (java.net.UnknownHostException e) {
-            // Unknown hosts are allowed — DNS resolution will fail at fetch time
-        }
-
-        // Enforce domain allowlist when configured
-        String allowedDomainsRaw = settings.get("tools.fetch-url.allowed-domains", "");
-        List<String> domains = allowedDomainsRaw.isBlank() ? List.of()
-                : Arrays.stream(allowedDomainsRaw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toList());
-        if (!domains.isEmpty()) {
-            String normalizedHost = host.toLowerCase();
-            boolean permitted = domains.stream()
-                    .map(String::toLowerCase)
-                    .map(String::strip)
-                    .filter(d -> !d.isBlank())
-                    .anyMatch(d -> normalizedHost.equals(d) || normalizedHost.endsWith("." + d));
-            if (!permitted) {
-                return "Domain '" + host + "' is not in the allowed-domains list. "
-                        + "Add it to tools.fetch-url.allowed-domains to permit fetches from this host.";
-            }
-        }
-
-        return null;
+        return HtmlTextExtractor.validateUrl(url, settings);
     }
 }

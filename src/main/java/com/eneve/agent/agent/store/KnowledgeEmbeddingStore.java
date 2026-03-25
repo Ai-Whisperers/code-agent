@@ -29,8 +29,6 @@ public class KnowledgeEmbeddingStore {
     public record KnowledgeChunk(
             String sourceType,
             String sourceId,
-            String productId,
-            String customerId,
             String title,
             String contentChunk,
             Map<String, Object> metadata
@@ -39,8 +37,6 @@ public class KnowledgeEmbeddingStore {
     public record KnowledgeSearchResult(
             String sourceType,
             String sourceId,
-            String productId,
-            String customerId,
             String title,
             String contentChunk,
             Map<String, Object> metadata,
@@ -54,13 +50,11 @@ public class KnowledgeEmbeddingStore {
     public void upsert(KnowledgeChunk chunk, float[] embedding) {
         String sql = """
                 INSERT INTO knowledge_embeddings
-                    (source_type, source_id, product_id, customer_id, title,
+                    (source_type, source_id, title,
                      content_chunk, metadata, embedding, indexed_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?::jsonb, ?::vector, now())
+                VALUES (?, ?, ?, ?, ?::jsonb, ?::vector, now())
                 ON CONFLICT (source_type, source_id, md5(content_chunk)) DO UPDATE
-                    SET product_id    = EXCLUDED.product_id,
-                        customer_id   = EXCLUDED.customer_id,
-                        title         = EXCLUDED.title,
+                    SET title         = EXCLUDED.title,
                         metadata      = EXCLUDED.metadata,
                         embedding     = EXCLUDED.embedding,
                         indexed_at    = now()
@@ -69,12 +63,10 @@ public class KnowledgeEmbeddingStore {
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, chunk.sourceType());
             ps.setString(2, chunk.sourceId());
-            setNullable(ps, 3, chunk.productId());
-            setNullable(ps, 4, chunk.customerId());
-            setNullable(ps, 5, chunk.title());
-            ps.setString(6, chunk.contentChunk());
-            ps.setString(7, toJson(chunk.metadata()));
-            ps.setString(8, toVectorLiteral(embedding));
+            setNullable(ps, 3, chunk.title());
+            ps.setString(4, chunk.contentChunk());
+            ps.setString(5, toJson(chunk.metadata()));
+            ps.setString(6, toVectorLiteral(embedding));
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to upsert knowledge chunk %s/%s: %s",
@@ -99,16 +91,22 @@ public class KnowledgeEmbeddingStore {
     }
 
     /**
-     * Delete all chunks for a product (used before a full reindex).
+     * Delete all chunks whose {@code source_id} starts with {@code prefix} for a given
+     * source type. Used for delete-before-crawl stale cleanup of web-docs sources.
+     *
+     * @param sourceType e.g. {@code "web-docs"}
+     * @param prefix     base URL of the crawled site (e.g. {@code "https://quarkus.io/guides/"})
      */
-    public int deleteByProduct(String productId) {
-        String sql = "DELETE FROM knowledge_embeddings WHERE product_id = ?";
+    public int deleteBySourceIdPrefix(String sourceType, String prefix) {
+        String sql = "DELETE FROM knowledge_embeddings WHERE source_type = ? AND source_id LIKE ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, productId);
+            ps.setString(1, sourceType);
+            ps.setString(2, prefix + "%");
             return ps.executeUpdate();
         } catch (SQLException e) {
-            LOG.errorf("Failed to delete knowledge chunks for product %s: %s", productId, e.getMessage());
+            LOG.errorf("Failed to delete knowledge chunks for source_type=%s prefix=%s: %s",
+                    sourceType, prefix, e.getMessage());
             return 0;
         }
     }
@@ -137,12 +135,11 @@ public class KnowledgeEmbeddingStore {
      * @param queryVector  the embedded query vector
      * @param topK         maximum results to return
      * @param sourceTypes  whitelist of source_type values; empty means all sources
-     * @param productId    optional product scoping; null means all products
      */
     public List<KnowledgeSearchResult> searchSimilar(float[] queryVector, int topK,
-                                                      List<String> sourceTypes, String productId) {
+                                                      List<String> sourceTypes) {
         StringBuilder sql = new StringBuilder("""
-                SELECT source_type, source_id, product_id, customer_id, title,
+                SELECT source_type, source_id, title,
                        content_chunk, metadata,
                        1 - (embedding <=> ?::vector) AS score
                 FROM knowledge_embeddings
@@ -151,9 +148,6 @@ public class KnowledgeEmbeddingStore {
 
         if (sourceTypes != null && !sourceTypes.isEmpty()) {
             sql.append(" AND source_type = ANY(?) ");
-        }
-        if (productId != null && !productId.isBlank()) {
-            sql.append(" AND product_id = ? ");
         }
         sql.append(" ORDER BY embedding <=> ?::vector LIMIT ?");
 
@@ -167,9 +161,6 @@ public class KnowledgeEmbeddingStore {
             if (sourceTypes != null && !sourceTypes.isEmpty()) {
                 ps.setArray(idx++, conn.createArrayOf("TEXT", sourceTypes.toArray()));
             }
-            if (productId != null && !productId.isBlank()) {
-                ps.setString(idx++, productId);
-            }
             ps.setString(idx++, vecLiteral);
             ps.setInt(idx, topK);
 
@@ -178,8 +169,6 @@ public class KnowledgeEmbeddingStore {
                     results.add(new KnowledgeSearchResult(
                             rs.getString("source_type"),
                             rs.getString("source_id"),
-                            rs.getString("product_id"),
-                            rs.getString("customer_id"),
                             rs.getString("title"),
                             rs.getString("content_chunk"),
                             fromJson(rs.getString("metadata")),
@@ -194,16 +183,13 @@ public class KnowledgeEmbeddingStore {
     }
 
     /**
-     * Count of indexed chunks by source type, optionally scoped to a product.
+     * Count of indexed chunks by source type.
      */
-    public int countBySource(String sourceType, String productId) {
-        String sql = productId != null
-                ? "SELECT COUNT(*) FROM knowledge_embeddings WHERE source_type = ? AND product_id = ?"
-                : "SELECT COUNT(*) FROM knowledge_embeddings WHERE source_type = ?";
+    public int countBySource(String sourceType) {
+        String sql = "SELECT COUNT(*) FROM knowledge_embeddings WHERE source_type = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, sourceType);
-            if (productId != null) ps.setString(2, productId);
             try (ResultSet rs = ps.executeQuery()) {
                 return rs.next() ? rs.getInt(1) : 0;
             }
