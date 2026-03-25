@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
@@ -91,7 +93,18 @@ public final class ToolDefinitions {
     }
 
     public static List<ToolUnion> chat() {
-        return List.of(
+        return chat(true);
+    }
+
+    /**
+     * Returns the tool set for the chat loop, filtered by the caller's permissions.
+     *
+     * @param canExecuteJobs {@code true} for DEVELOPER / ADMINISTRATOR roles;
+     *                       {@code false} for USER / STAFF (read-only + Jira/Confluence reads only)
+     */
+    public static List<ToolUnion> chat(boolean canExecuteJobs) {
+        List<ToolUnion> tools = new ArrayList<>(List.of(
+                // ── Read-only / analysis tools (all roles) ────────────────
                 ToolUnion.ofTool(searchKnowledgeBase()),
                 ToolUnion.ofTool(lookupCustomerContext()),
                 ToolUnion.ofTool(setProductContext()),
@@ -102,26 +115,36 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(awsCloudWatchLogs()),
                 ToolUnion.ofTool(awsEcs()),
                 ToolUnion.ofTool(awsCloudWatchMetrics()),
-                // Jira MCP tools
+                // Jira read tools (all roles)
                 ToolUnion.ofTool(jiraSearchIssues()),
                 ToolUnion.ofTool(jiraGetIssue()),
                 ToolUnion.ofTool(jiraGetComments()),
-                ToolUnion.ofTool(jiraCreateIssue()),
-                ToolUnion.ofTool(jiraUpdateIssue()),
-                ToolUnion.ofTool(jiraAddComment()),
-                ToolUnion.ofTool(jiraTransitionIssue()),
                 ToolUnion.ofTool(jiraGetWorklogs()),
-                ToolUnion.ofTool(jiraAddWorklog()),
-                // Confluence MCP tools
+                // Confluence read tools (all roles)
                 ToolUnion.ofTool(confluenceSearch()),
-                ToolUnion.ofTool(confluenceGetPage()),
-                ToolUnion.ofTool(confluenceCreatePage()),
-                ToolUnion.ofTool(confluenceUpdatePage()),
-                // Agent action tools
-                ToolUnion.ofTool(agentRunFix()),
-                ToolUnion.ofTool(agentGetJobStatus()),
-                ToolUnion.ofTool(agentSubmitReviewJob())
-        );
+                ToolUnion.ofTool(confluenceGetPage())
+        ));
+
+        if (canExecuteJobs) {
+            // ── Write / action tools (DEVELOPER / ADMINISTRATOR only) ────
+            tools.addAll(List.of(
+                    // Jira write tools
+                    ToolUnion.ofTool(jiraCreateIssue()),
+                    ToolUnion.ofTool(jiraUpdateIssue()),
+                    ToolUnion.ofTool(jiraAddComment()),
+                    ToolUnion.ofTool(jiraTransitionIssue()),
+                    ToolUnion.ofTool(jiraAddWorklog()),
+                    // Confluence write tools
+                    ToolUnion.ofTool(confluenceCreatePage()),
+                    ToolUnion.ofTool(confluenceUpdatePage()),
+                    // Agent action tools
+                    ToolUnion.ofTool(agentRunFix()),
+                    ToolUnion.ofTool(agentGetJobStatus()),
+                    ToolUnion.ofTool(agentSubmitReviewJob())
+            ));
+        }
+
+        return Collections.unmodifiableList(tools);
     }
 
     // ─── Plan MCP tool schemas ────────────────────────────────────────────────────

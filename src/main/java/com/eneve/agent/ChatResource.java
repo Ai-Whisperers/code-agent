@@ -5,6 +5,8 @@ import java.util.Map;
 import com.eneve.agent.agent.model.ChatEvent;
 import com.eneve.agent.agent.service.ChatService;
 import com.eneve.agent.model.ChatRequest;
+import com.eneve.agent.security.AppPermission;
+import com.eneve.agent.security.PermissionService;
 
 import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.Blocking;
@@ -57,6 +59,9 @@ public class ChatResource {
     @Inject
     JsonWebToken jwt;
 
+    @Inject
+    PermissionService permissionService;
+
     @POST
     @Blocking
     @Consumes(MediaType.APPLICATION_JSON)
@@ -88,7 +93,8 @@ public class ChatResource {
                             .build()
             );
         }
-        return chatService.chatStream(request, resolveUserId());
+        boolean canExecuteJobs = permissionService.getPermissions().contains(AppPermission.EXECUTE_FIX_JOBS);
+        return chatService.chatStream(request, resolveUserId(), canExecuteJobs);
     }
 
     private String resolveUserId() {

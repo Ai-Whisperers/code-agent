@@ -71,7 +71,7 @@ public class ChatService {
      * @param userId  stable user identifier (Keycloak JWT {@code sub} claim)
      * @return a stream of {@link ChatEvent} items (text deltas, tool events, done/error)
      */
-    public Multi<ChatEvent> chatStream(ChatRequest request, String userId) {
+    public Multi<ChatEvent> chatStream(ChatRequest request, String userId, boolean canExecuteJobs) {
         return Multi.createFrom().<ChatEvent>emitter(emitter -> {
             WorkspaceContext workspace = null;
             try {
@@ -116,7 +116,7 @@ public class ChatService {
 
                 // ── Run the streaming loop ─────────────────────────────
                 String systemPrompt = buildSystemPrompt(request.productId(), request.conversationContext(), userId);
-                List<ToolUnion> tools = ToolDefinitions.chat();
+                List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs);
                 
                 // Create final reference for lambda
                 final WorkspaceContext finalWorkspace = workspace;
