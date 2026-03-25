@@ -8,6 +8,7 @@ import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -35,6 +36,9 @@ public class WebhookSyncService {
     private static final List<String> COMMENT_EVENTS =
             List.of("pullrequest:comment_created");
 
+    @ConfigProperty(name = "bitbucket.webhook.sync.enabled", defaultValue = "true")
+    boolean webhookSyncEnabled;
+
     @Inject
     BitbucketPlatformService bitbucketPlatformService;
 
@@ -51,6 +55,10 @@ public class WebhookSyncService {
     }
 
     void onStartup(@Observes StartupEvent event) {
+        if (!webhookSyncEnabled) {
+            LOG.info("Webhook sync skipped — bitbucket.webhook.sync.enabled=false");
+            return;
+        }
         if (!isConfigured()) {
             LOG.info("Webhook sync skipped — agent.base.url or webhook.secret.bitbucket not configured");
             return;
@@ -94,7 +102,7 @@ public class WebhookSyncService {
      * This method is a no-op if the service is not fully configured.
      */
     public void ensureWebhooks(String repoWorkspace, String repoSlug) {
-        if (!isConfigured()) {
+        if (!webhookSyncEnabled || !isConfigured()) {
             return;
         }
 
@@ -141,7 +149,7 @@ public class WebhookSyncService {
      * <p>This method is a no-op if the service is not fully configured.
      */
     public void removeWebhooks(String repoWorkspace, String repoSlug) {
-        if (!isConfigured()) {
+        if (!webhookSyncEnabled || !isConfigured()) {
             return;
         }
 
