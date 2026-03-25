@@ -10,6 +10,7 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -144,7 +145,44 @@ class StaticFileTextExtractionTest {
         assertNotNull(KnowledgeIndexerService.extractStaticFileText("README.MD", "application/octet-stream", data));
     }
 
+    // ── Real-world PDF (api-manual-etpa.pdf) ───────────────────────────────────
+
+    @Test
+    void realPdf_extractsNonEmptyText() throws Exception {
+        byte[] data = loadTestResource("api-manual-etpa.pdf");
+        String result = KnowledgeIndexerService.extractStaticFileText(
+                "API Manual ETPA 08-09-2023.pdf", "application/pdf", data);
+        assertNotNull(result, "extractStaticFileText must return non-null for a valid PDF");
+        assertFalse(result.isBlank(), "extracted text must not be blank");
+    }
+
+    @Test
+    void realPdf_extensionAloneIsEnough() throws Exception {
+        byte[] data = loadTestResource("api-manual-etpa.pdf");
+        String result = KnowledgeIndexerService.extractStaticFileText(
+                "API Manual ETPA 08-09-2023.pdf", "application/octet-stream", data);
+        assertNotNull(result, "extension .pdf must trigger extraction even when MIME is octet-stream");
+        assertFalse(result.isBlank());
+    }
+
+    @Test
+    void realPdf_mimeTypeAloneIsEnough() throws Exception {
+        byte[] data = loadTestResource("api-manual-etpa.pdf");
+        String result = KnowledgeIndexerService.extractStaticFileText(
+                "upload", "application/pdf", data);
+        assertNotNull(result, "MIME application/pdf must trigger extraction even without .pdf extension");
+        assertFalse(result.isBlank());
+    }
+
     // ── Helpers ────────────────────────────────────────────────────────────────
+
+    private static byte[] loadTestResource(String name) throws Exception {
+        try (InputStream is = StaticFileTextExtractionTest.class
+                .getClassLoader().getResourceAsStream(name)) {
+            assertNotNull(is, "Test resource not found on classpath: " + name);
+            return is.readAllBytes();
+        }
+    }
 
     /**
      * Creates a single-page PDF containing {@code text} using PDFBox.

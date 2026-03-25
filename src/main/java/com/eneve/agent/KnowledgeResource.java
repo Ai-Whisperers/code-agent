@@ -445,7 +445,7 @@ public class KnowledgeResource {
     public static class StaticFileUploadForm {
 
         @RestForm("file")
-        @PartType(MediaType.APPLICATION_OCTET_STREAM)
+        @PartType(MediaType.WILDCARD)
         public InputStream file;
 
         @RestForm("filename")
