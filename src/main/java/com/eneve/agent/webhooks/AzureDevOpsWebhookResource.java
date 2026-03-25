@@ -11,6 +11,7 @@ import com.eneve.agent.agent.model.HookEvalResult;
 import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.settings.SettingsService;
 
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.store.JobStore;
@@ -19,7 +20,6 @@ import com.eneve.agent.model.ReviewPrRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -52,18 +52,7 @@ public class AzureDevOpsWebhookResource {
     @Inject HookEvaluator hookEvaluator;
     @Inject JobStore jobStore;
     @Inject WebhookAuditStore webhookAuditStore;
-
-    @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
-    String skipAuthors;
-
-    @ConfigProperty(name = "review.webhook.require-title-keyword", defaultValue = "")
-    String requireTitleKeyword;
-
-    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
-    String defaultRulesRepoUrl;
-
-    @ConfigProperty(name = "azuredevops.base.url", defaultValue = "https://dev.azure.com")
-    String adoBaseUrl;
+    @Inject SettingsService settingsService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -107,6 +96,7 @@ public class AzureDevOpsWebhookResource {
             JsonNode remoteUrl = repoNode.path("remoteUrl");
             String repoUrl = remoteUrl.isTextual() ? remoteUrl.asText("") : "";
             if (repoUrl.isBlank()) {
+                String adoBaseUrl = settingsService.get("azuredevops.base.url", "https://dev.azure.com");
                 String collectionUrl = payload.path("resourceContainers")
                         .path("collection").path("baseUrl").asText(adoBaseUrl);
                 collectionUrl = collectionUrl.endsWith("/")
@@ -123,14 +113,6 @@ public class AzureDevOpsWebhookResource {
                 LOG.infof("Azure DevOps webhook: skipping PR #%s by '%s' (matches skip-authors)", prId, prAuthor);
                 audit("azuredevops", eventType, projectName, repoName, prId, prAuthor, "skipped", List.of(), rawPayload);
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
-            }
-
-            if (!requireTitleKeyword.isBlank()
-                    && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
-                LOG.infof("Azure DevOps webhook: skipping PR #%s — title does not contain '%s'",
-                        prId, requireTitleKeyword);
-                audit("azuredevops", eventType, projectName, repoName, prId, prAuthor, "skipped", List.of(), rawPayload);
-                return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
             }
 
             String jiraKey = extractJiraKey(prTitle);
@@ -179,9 +161,10 @@ public class AzureDevOpsWebhookResource {
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
                                      String headCommitSha) {
+        String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl, prId, targetBranch, jiraKey,
-                defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
+                rulesRepoUrl.isBlank() ? null : rulesRepoUrl,
                 null, null, null, headCommitSha);
 
         String jobId = UUID.randomUUID().toString();
@@ -204,6 +187,7 @@ public class AzureDevOpsWebhookResource {
     }
 
     private boolean shouldSkipAuthor(String author) {
+        String skipAuthors = settingsService.get("review.webhook.skip-authors", "code-agent");
         if (skipAuthors.isBlank() || author.isBlank()) return false;
         for (String skip : skipAuthors.split(",")) {
             if (skip.trim().equalsIgnoreCase(author)) return true;

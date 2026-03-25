@@ -16,10 +16,10 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -54,15 +54,7 @@ public class GitLabWebhookResource {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject HookEvaluator hookEvaluator;
     @Inject WebhookAuditStore webhookAuditStore;
-
-    @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
-    String skipAuthors;
-
-    @ConfigProperty(name = "review.webhook.require-title-keyword", defaultValue = "")
-    String requireTitleKeyword;
-
-    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
-    String defaultRulesRepoUrl;
+    @Inject SettingsService settingsService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -74,8 +66,7 @@ public class GitLabWebhookResource {
             description = "Receives GitLab webhook payloads for Merge Request Hook events. "
                     + "Automatically triggers an AI code review job when an MR is opened or updated. "
                     + "Evaluates automation hooks when an MR is merged. "
-                    + "Skips MRs authored by the agent itself (configurable via review.webhook.skip-authors). "
-                    + "Optionally requires a keyword in the MR title (review.webhook.require-title-keyword)."
+                    + "Skips MRs authored by the agent itself (configurable via review.webhook.skip-authors)."
     )
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Webhook processed"),
@@ -177,14 +168,6 @@ public class GitLabWebhookResource {
                 return ok("skipped", "MR author '" + mrAuthor + "' is in skip list");
             }
 
-            if (!requireTitleKeyword.isBlank()
-                    && !mrTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
-                LOG.infof("GitLab webhook: skipping MR !%s — title does not contain '%s'",
-                        mrIid, requireTitleKeyword);
-                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor, "skipped", List.of(), rawPayload);
-                return ok("skipped", "MR title does not contain required keyword: " + requireTitleKeyword);
-            }
-
             String jiraKey = extractJiraKey(mrTitle);
             String headCommitSha = attrs.path("last_commit").path("id").asText(null);
             if (headCommitSha != null && headCommitSha.isBlank()) headCommitSha = null;
@@ -224,12 +207,13 @@ public class GitLabWebhookResource {
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
                                      String headCommitSha) {
+        String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
                 prId,
                 targetBranch,
                 jiraKey,
-                defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
+                rulesRepoUrl.isBlank() ? null : rulesRepoUrl,
                 null,
                 null,
                 null,
@@ -256,6 +240,7 @@ public class GitLabWebhookResource {
     }
 
     private boolean shouldSkipAuthor(String author) {
+        String skipAuthors = settingsService.get("review.webhook.skip-authors", "code-agent");
         if (skipAuthors.isBlank() || author.isBlank()) return false;
         for (String skip : skipAuthors.split(",")) {
             if (skip.trim().equalsIgnoreCase(author)) return true;

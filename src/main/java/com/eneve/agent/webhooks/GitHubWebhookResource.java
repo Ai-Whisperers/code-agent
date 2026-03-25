@@ -16,10 +16,10 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -54,15 +54,7 @@ public class GitHubWebhookResource {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject HookEvaluator hookEvaluator;
     @Inject WebhookAuditStore webhookAuditStore;
-
-    @ConfigProperty(name = "review.webhook.skip-authors", defaultValue = "code-agent")
-    String skipAuthors;
-
-    @ConfigProperty(name = "review.webhook.require-title-keyword", defaultValue = "")
-    String requireTitleKeyword;
-
-    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
-    String defaultRulesRepoUrl;
+    @Inject SettingsService settingsService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -74,8 +66,7 @@ public class GitHubWebhookResource {
             description = "Receives GitHub webhook payloads for pull_request events. "
                     + "Automatically triggers an AI code review job when a PR is opened, synchronised, or reopened. "
                     + "Evaluates automation hooks when a PR is merged. "
-                    + "Skips PRs authored by the agent itself (configurable via review.webhook.skip-authors). "
-                    + "Optionally requires a keyword in the PR title (review.webhook.require-title-keyword)."
+                    + "Skips PRs authored by the agent itself (configurable via review.webhook.skip-authors)."
     )
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Webhook processed"),
@@ -177,14 +168,6 @@ public class GitHubWebhookResource {
                 return ok("skipped", "PR author '" + prAuthor + "' is in skip list");
             }
 
-            if (!requireTitleKeyword.isBlank()
-                    && !prTitle.toLowerCase().contains(requireTitleKeyword.toLowerCase())) {
-                LOG.infof("GitHub webhook: skipping PR #%s — title does not contain '%s'",
-                        prNumber, requireTitleKeyword);
-                audit("github", event, org, repo, prNumber, prAuthor, "skipped", List.of(), rawPayload);
-                return ok("skipped", "PR title does not contain required keyword: " + requireTitleKeyword);
-            }
-
             String jiraKey = extractJiraKey(prTitle);
 
             LOG.infof("GitHub webhook: triggering review for PR #%s (%s -> %s) on %s (head: %s)",
@@ -222,12 +205,13 @@ public class GitHubWebhookResource {
 
     private Response submitReviewJob(String repoUrl, String prId, String targetBranch, String jiraKey,
                                      String headCommitSha) {
+        String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl,
                 prId,
                 targetBranch,
                 jiraKey,
-                defaultRulesRepoUrl.isBlank() ? null : defaultRulesRepoUrl,
+                rulesRepoUrl.isBlank() ? null : rulesRepoUrl,
                 null,
                 null,
                 null,
@@ -254,6 +238,7 @@ public class GitHubWebhookResource {
     }
 
     private boolean shouldSkipAuthor(String author) {
+        String skipAuthors = settingsService.get("review.webhook.skip-authors", "code-agent");
         if (skipAuthors.isBlank() || author.isBlank()) return false;
         for (String skip : skipAuthors.split(",")) {
             if (skip.trim().equalsIgnoreCase(author)) return true;
