@@ -84,6 +84,9 @@ public class PrSummaryGenerator {
     @Inject
     PromptTemplateService promptTemplates;
 
+    /** Overrides the settings lookup when set directly (e.g. in tests). */
+    Boolean diagramUploadEnabled;
+
     /**
      * Generate a PR summary from the diff.
      * <p>
@@ -275,7 +278,9 @@ public class PrSummaryGenerator {
             }
         }
 
-        boolean usePlaceholders = Boolean.parseBoolean(settings.get("pr.summary.diagram.upload.enabled", "true"))
+        boolean uploadEnabled = (diagramUploadEnabled != null) ? diagramUploadEnabled
+                : Boolean.parseBoolean(settings.get("pr.summary.diagram.upload.enabled", "true"));
+        boolean usePlaceholders = uploadEnabled
                 && "bitbucket".equalsIgnoreCase(mermaidRenderer.platform().trim());
 
         StringBuilder comment = new StringBuilder();

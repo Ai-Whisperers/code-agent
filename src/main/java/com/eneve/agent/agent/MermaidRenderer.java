@@ -21,7 +21,11 @@ public class MermaidRenderer {
 
     @Inject SettingsService settings;
 
+    /** Overrides the settings lookup when set directly (e.g. in tests). */
+    String platform;
+
     public String platform() {
+        if (platform != null) return platform;
         return settings.get("git.platform", "bitbucket");
     }
 
