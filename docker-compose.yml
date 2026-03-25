@@ -1,0 +1,39 @@
+services:
+  app:
+    build: .
+    env_file: .env
+    environment:
+      # Override the DB URL so the app reaches the postgres service by name
+      DATABASE_URL: jdbc:postgresql://postgres:5432/code_agent
+    ports:
+      - "8080:8080"
+    volumes:
+      # Persist the Maven local repository across container restarts / rebuilds.
+      # settings.xml is intentionally NOT stored here — the entrypoint script
+      # always copies the image's /opt/maven-settings/settings.xml into this
+      # volume at startup so that credential / mirror changes are picked up
+      # automatically after an image rebuild.
+      - appuser-m2:/home/appuser/.m2
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: code_agent
+      POSTGRES_USER: ${DATABASE_USER:-code_agent}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-code_agent}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-code_agent} -d code_agent"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  appuser-m2:
+  postgres-data:

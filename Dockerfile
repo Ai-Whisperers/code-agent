@@ -62,7 +62,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
-    mkdir -p /home/appuser/.m2 && \
+    mkdir -p /home/appuser/.m2 /opt/maven-settings && \
     chown -R appuser:appuser /home/appuser/.m2
 
 # Tell Puppeteer to use the system-installed Chromium
@@ -71,7 +71,11 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
 
-COPY --chown=appuser:appuser settings.xml /home/appuser/.m2/settings.xml
+# Store settings.xml outside of .m2 so it is always available even when a
+# named volume is mounted over /home/appuser/.m2.  The entrypoint script
+# copies it into place on every container start, ensuring image updates are
+# picked up without recreating the volume.
+COPY settings.xml /opt/maven-settings/settings.xml
 
 WORKDIR /app
 
@@ -80,7 +84,9 @@ COPY --from=build /build/target/quarkus-app/*.jar .
 COPY --from=build /build/target/quarkus-app/app/ app/
 COPY --from=build /build/target/quarkus-app/quarkus/ quarkus/
 
-RUN chown -R appuser:appuser /app
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && \
+    chown -R appuser:appuser /app /opt/maven-settings
 
 ENV JAVA_OPTS="-Djava.util.logging.manager=org.jboss.logmanager.LogManager"
 
@@ -88,4 +94,4 @@ USER appuser
 
 EXPOSE 8080
 
-ENTRYPOINT ["java", "-jar", "quarkus-run.jar"]
+ENTRYPOINT ["/entrypoint.sh"]
