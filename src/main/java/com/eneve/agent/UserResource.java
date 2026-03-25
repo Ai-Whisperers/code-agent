@@ -13,6 +13,7 @@ import com.eneve.agent.security.PermissionService;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.logging.Logger;
 
+import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
@@ -26,6 +27,7 @@ import jakarta.ws.rs.core.Response;
  * Used by the React UI to display user info (name, email, roles, permissions).
  */
 @Path("/me")
+@Authenticated
 @Produces(MediaType.APPLICATION_JSON)
 public class UserResource {
 
