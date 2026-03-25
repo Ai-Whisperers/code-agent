@@ -6,9 +6,9 @@ import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -23,9 +23,7 @@ public class HookHandler implements JobHandler {
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
     @Inject TeamsNotifier teamsNotifier;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -34,6 +32,7 @@ public class HookHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         HookJobRequest request = job.getHookRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

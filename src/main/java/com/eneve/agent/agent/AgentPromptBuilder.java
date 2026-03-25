@@ -31,7 +31,7 @@ import com.eneve.agent.rules.CursorRulesLoader;
 import com.eneve.agent.tools.GuardrailConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -49,9 +49,7 @@ public class AgentPromptBuilder {
     @Inject CommentFeedbackStore feedbackStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject PromptTemplateService promptTemplates;
-
-    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
-    String defaultRulesRepoUrl;
+    @Inject SettingsService settings;
 
     public String buildRunFixPrompt(RunFixRequest request, String effectivePrompt,
                                     WorkspaceContext workspace, String baselineLinterSummary) {
@@ -467,7 +465,7 @@ public class AgentPromptBuilder {
     }
 
     private String resolveRulesRepoUrl(String requestUrl) {
-        return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultRulesRepoUrl;
+        return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : settings.get("rules.repo.url", "");
     }
 
     private static String formatThreadSection(List<ThreadComment> thread) {

@@ -10,7 +10,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.scm.AgentComment;
@@ -19,6 +19,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Bitbucket Cloud REST API 2.0 client.
@@ -29,14 +30,11 @@ public class BitbucketCloudService {
 
     private static final Logger LOG = Logger.getLogger(BitbucketCloudService.class);
 
-    @ConfigProperty(name = "bitbucket.base.url", defaultValue = "https://api.bitbucket.org/2.0")
-    String baseUrl;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "bitbucket.user")
-    String bbUser;
-
-    @ConfigProperty(name = "bitbucket.app.password")
-    String appPassword;
+    private String baseUrl() { return settings.get("bitbucket.base.url", "https://api.bitbucket.org/2.0"); }
+    private String bbUser() { return settings.get("bitbucket.user", ""); }
+    private String appPassword() { return settings.getSecret("bitbucket.app.password"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -212,14 +210,14 @@ public class BitbucketCloudService {
                             String raw = comment.path("content").path("raw").asText("").trim();
                             String createdOn = comment.path("created_on").asText("");
                             boolean isAgent = comment.path("user").path("username").asText(
-                                    comment.path("user").path("nickname").asText("")).equals(bbUser);
+                                    comment.path("user").path("nickname").asText("")).equals(bbUser());
                             thread.add(new ThreadComment(id, parentId, author, raw, createdOn, isAgent));
                         }
                     }
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse comment thread response: %s", e.getMessage());
                 break;
@@ -251,7 +249,7 @@ public class BitbucketCloudService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (author.equals(bbUser)) {
+                        if (author.equals(bbUser())) {
                             continue;
                         }
 
@@ -278,7 +276,7 @@ public class BitbucketCloudService {
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse PR comments response: %s", e.getMessage());
                 break;
@@ -308,7 +306,7 @@ public class BitbucketCloudService {
                     for (JsonNode comment : values) {
                         String author = comment.path("user").path("username").asText(
                                 comment.path("user").path("nickname").asText(""));
-                        if (!author.equals(bbUser)) {
+                        if (!author.equals(bbUser())) {
                             continue;
                         }
 
@@ -329,7 +327,7 @@ public class BitbucketCloudService {
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse agent PR comments response: %s", e.getMessage());
                 break;
@@ -361,7 +359,7 @@ public class BitbucketCloudService {
                     }
                 }
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse repository list response: %s", e.getMessage());
                 break;
@@ -385,7 +383,7 @@ public class BitbucketCloudService {
     private String getAndReturn(String path, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
                     .GET()
@@ -413,7 +411,7 @@ public class BitbucketCloudService {
     private String postAndReturn(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -427,7 +425,7 @@ public class BitbucketCloudService {
                 return response.body();
             } else {
                 LOG.errorf("Bitbucket %s failed (HTTP %d) for user '%s': %s",
-                        operation, response.statusCode(), bbUser, response.body());
+                        operation, response.statusCode(), bbUser(), response.body());
                 throw new RuntimeException("Bitbucket " + operation + " failed: HTTP "
                         + response.statusCode() + " — " + response.body());
             }
@@ -444,11 +442,11 @@ public class BitbucketCloudService {
      * App Passwords use Basic auth with username:password.
      */
     private String authHeader() {
-        if ("x-token-auth".equals(bbUser)) {
-            return "Bearer " + appPassword;
+        if ("x-token-auth".equals(bbUser())) {
+            return "Bearer " + appPassword();
         }
         return "Basic " + Base64.getEncoder()
-                .encodeToString((bbUser + ":" + appPassword).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((bbUser() + ":" + appPassword()).getBytes(StandardCharsets.UTF_8));
     }
 
     private long parseCommentId(String responseBody) {

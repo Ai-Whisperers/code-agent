@@ -23,7 +23,7 @@ import com.github.javaparser.ast.body.EnumDeclaration;
 import com.github.javaparser.ast.body.MethodDeclaration;
 import com.eneve.agent.workspace.WorkspaceContext;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -109,9 +109,7 @@ public class EmbeddingIndexer {
 
     @Inject VoyageEmbeddingService voyageService;
     @Inject EmbeddingStore embeddingStore;
-
-    @ConfigProperty(name = "embedding.max-source-chars", defaultValue = "16000")
-    int maxSourceChars;
+    @Inject com.eneve.agent.settings.SettingsService settings;
 
     record SymbolChunk(String filePath, String symbolName, String symbolType,
                        Integer lineStart, Integer lineEnd, String sourceText) {}
@@ -415,10 +413,11 @@ public class EmbeddingIndexer {
     }
 
     private String truncateSource(String source) {
-        if (source.length() <= maxSourceChars) {
+        int maxChars = Integer.parseInt(settings.get("embedding.max-source-chars", "16000"));
+        if (source.length() <= maxChars) {
             return source;
         }
-        return source.substring(0, maxSourceChars) + "\n// ... truncated";
+        return source.substring(0, maxChars) + "\n// ... truncated";
     }
 
     private static int lineNumberAt(String source, int charOffset) {

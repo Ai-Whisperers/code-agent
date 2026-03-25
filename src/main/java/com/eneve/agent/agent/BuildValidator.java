@@ -1,13 +1,13 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
-import java.util.Optional;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -18,13 +18,12 @@ public class BuildValidator {
 
     private static final Logger LOG = Logger.getLogger(BuildValidator.class);
 
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long timeoutMinutes;
-
-    @ConfigProperty(name = "build.java-home")
-    Optional<String> javaHome;
+    @Inject
+    SettingsService settings;
 
     public void validate(WorkspaceContext workspace) throws Exception {
+        long timeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
+        String effectiveJavaHome = settings.get("build.java-home", "").isBlank() ? null : settings.get("build.java-home", "");
         String command = detectTestCommand(workspace.getRoot());
         if (command == null) {
             LOG.info("No recognized test command found, skipping build validation");
@@ -32,7 +31,6 @@ public class BuildValidator {
         }
 
         LOG.infof("Build validation using: %s", command);
-        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
         ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);

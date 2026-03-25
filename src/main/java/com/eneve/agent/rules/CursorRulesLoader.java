@@ -9,27 +9,18 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class CursorRulesLoader {
 
     private static final Logger LOG = Logger.getLogger(CursorRulesLoader.class);
 
-    @ConfigProperty(name = "rules.repo.cache.dir", defaultValue = "/tmp/cursor-rules-cache")
-    String cacheDir;
-
-    @ConfigProperty(name = "rules.auto-read-target-repo", defaultValue = "true")
-    boolean autoReadTargetRepo;
-
-    @ConfigProperty(name = "git.username", defaultValue = "")
-    String gitUsername;
-
-    @ConfigProperty(name = "git.password", defaultValue = "")
-    String gitPassword;
+    @Inject SettingsService settings;
 
     /**
      * Load rules from an external shared rules repo by name.
@@ -52,7 +43,7 @@ public class CursorRulesLoader {
      * Scan the target (cloned) repo for Cursor rules.
      */
     public List<String> loadFromTargetRepo(Path workspaceRoot) {
-        if (!autoReadTargetRepo) {
+        if (!Boolean.parseBoolean(settings.get("rules.auto-read-target-repo", "true"))) {
             return Collections.emptyList();
         }
 
@@ -131,7 +122,7 @@ public class CursorRulesLoader {
     }
 
     private Path ensureRulesRepoCloned(String repoUrl) throws IOException, InterruptedException {
-        Path cachePath = Path.of(cacheDir);
+        Path cachePath = Path.of(settings.get("rules.repo.cache.dir", "/tmp/cursor-rules-cache"));
         String dirName = repoUrl.replaceAll("[^a-zA-Z0-9]", "_");
         Path repoDir = cachePath.resolve(dirName);
 
@@ -211,6 +202,8 @@ public class CursorRulesLoader {
     }
 
     private String injectCredentials(String url) {
+        String gitUsername = settings.get("git.username", "");
+        String gitPassword = settings.getSecret("git.password");
         if (gitUsername.isBlank() || gitPassword.isBlank()) {
             return url;
         }

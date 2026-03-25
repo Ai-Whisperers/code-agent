@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -42,11 +41,10 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     private static final Logger LOG = Logger.getLogger(AzureDevOpsPlatformService.class);
     private static final String API_VERSION = "api-version=7.1";
 
-    @ConfigProperty(name = "azuredevops.base.url", defaultValue = "https://dev.azure.com")
-    String baseUrl;
-
     @Inject
     SettingsService settingsService;
+
+    private String baseUrl() { return settingsService.get("azuredevops.base.url", "https://dev.azure.com"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -76,7 +74,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
             String prId = String.valueOf(node.path("pullRequestId").asInt());
             String prUrl = node.path("url").asText("");
             if (prUrl.contains("_apis/")) {
-                prUrl = baseUrl + "/" + org + "/" + project + "/_git/" + repo + "/pullrequest/" + prId;
+                prUrl = baseUrl() + "/" + org + "/" + project + "/_git/" + repo + "/pullrequest/" + prId;
             }
             LOG.infof("Created PR #%s: %s", prId, prUrl);
             return new String[] { prUrl, prId };
@@ -441,7 +439,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     }
 
     private String repoApiUrl(String org, String project, String repo) {
-        return baseUrl + "/" + org + "/" + project + "/_apis/git/repositories/" + repo;
+        return baseUrl() + "/" + org + "/" + project + "/_apis/git/repositories/" + repo;
     }
 
     private long parseThreadFirstCommentId(String responseBody) {
@@ -569,7 +567,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
      */
     private void requireTrustedUrl(String url) {
         try {
-            String configuredHost = URI.create(baseUrl).getHost();
+            String configuredHost = URI.create(baseUrl()).getHost();
             String targetHost = URI.create(url).getHost();
             if (!targetHost.equalsIgnoreCase(configuredHost)) {
                 throw new IllegalArgumentException(

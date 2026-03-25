@@ -25,7 +25,7 @@ import com.eneve.agent.diff.ParsedDiffFile;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -66,14 +66,11 @@ public class PrSummaryGenerator {
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
-
-    @ConfigProperty(name = "pr.summary.diagram.upload.enabled", defaultValue = "true")
-    boolean diagramUploadEnabled;
-
     @Inject
     AnthropicClient client;
+
+    @Inject
+    SettingsService settings;
 
     @Inject
     AiCallStore aiCallStore;
@@ -180,6 +177,7 @@ public class PrSummaryGenerator {
     private static final long INITIAL_BACKOFF_MS = 5_000;
 
     private String callClaude(String prompt, String jobId) {
+        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(4096)
@@ -277,8 +275,8 @@ public class PrSummaryGenerator {
             }
         }
 
-        boolean usePlaceholders = diagramUploadEnabled
-                && "bitbucket".equalsIgnoreCase(mermaidRenderer.platform.trim());
+        boolean usePlaceholders = Boolean.parseBoolean(settings.get("pr.summary.diagram.upload.enabled", "true"))
+                && "bitbucket".equalsIgnoreCase(mermaidRenderer.platform().trim());
 
         StringBuilder comment = new StringBuilder();
         List<PendingDiagram> pendingDiagrams = new ArrayList<>();

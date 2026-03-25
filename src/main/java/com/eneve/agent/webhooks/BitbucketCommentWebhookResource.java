@@ -26,7 +26,7 @@ import com.eneve.agent.model.ReplyCommentRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -64,12 +64,7 @@ public class BitbucketCommentWebhookResource {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitPlatformService platformService;
     @Inject WebhookAuditStore webhookAuditStore;
-
-    @ConfigProperty(name = "bitbucket.user")
-    String bbUser;
-
-    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
-    int fpAutoSuppressThreshold;
+    @Inject SettingsService settings;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -134,7 +129,7 @@ public class BitbucketCommentWebhookResource {
             // Bitbucket account username is different — if we compared against "x-token-auth"
             // the filter would never match and every agent reply would re-trigger processing.
             String botUsername = platformService.getCurrentUserUsername();
-            if (botUsername.isBlank()) botUsername = bbUser;
+            if (botUsername.isBlank()) botUsername = settings.get("bitbucket.user", "");
             if (commentAuthor.equals(botUsername)) {
                 LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, botUsername);
                 audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "ignored", rawPayload);
@@ -369,7 +364,7 @@ public class BitbucketCommentWebhookResource {
 
     private void checkAndAutoSuppress(String workspace, String repoSlug, String pattern, String author) {
         if (pattern == null || pattern.isBlank()) return;
-        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, fpAutoSuppressThreshold);
+        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, Integer.parseInt(settings.get("review.fp.auto-suppress-threshold", "3")));
         if (!recurring.contains(pattern)) return;
 
         String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;

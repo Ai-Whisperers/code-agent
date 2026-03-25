@@ -15,7 +15,7 @@ import com.eneve.agent.model.RunFixRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -50,12 +50,10 @@ public class JiraWebhookResource {
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
     @Inject HookEvaluator hookEvaluator;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "jira.agent.assignee", defaultValue = "")
-    String agentAssignee;
-
-    @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
-    String defaultRepoUrl;
+    private String agentAssignee()()  { return settings.get("jira.agent.assignee", ""); }
+    private String defaultRepoUrl()() { return settings.get("jira.agent.default-repo-url", ""); }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -177,7 +175,7 @@ public class JiraWebhookResource {
 
     private Response submitJob(String issueKey, String repoUrl, String prompt, String branchSuffix) {
         if (repoUrl == null || repoUrl.isBlank()) {
-            repoUrl = defaultRepoUrl;
+            repoUrl = defaultRepoUrl();
         }
         if (repoUrl == null || repoUrl.isBlank()) {
             LOG.warnf("JIRA webhook: cannot trigger job for %s — no repo URL (set jira.agent.default-repo-url)", issueKey);
@@ -211,13 +209,13 @@ public class JiraWebhookResource {
     }
 
     private boolean isAgentAssignee(String displayName, String email, String accountId) {
-        if (agentAssignee.isBlank()) {
+        if (agentAssignee().isBlank()) {
             LOG.warn("jira.agent.assignee not configured — webhook will not trigger jobs");
             return false;
         }
-        return agentAssignee.equalsIgnoreCase(displayName)
-                || agentAssignee.equalsIgnoreCase(email)
-                || agentAssignee.equalsIgnoreCase(accountId);
+        return agentAssignee().equalsIgnoreCase(displayName)
+                || agentAssignee().equalsIgnoreCase(email)
+                || agentAssignee().equalsIgnoreCase(accountId);
     }
 
     private boolean assigneeChangedInChangelog(JsonNode payload) {
@@ -267,9 +265,9 @@ public class JiraWebhookResource {
             // Parse workspace/repo from default repo URL if available
             String workspace = "unknown";
             String repoSlug = "unknown";
-            if (defaultRepoUrl != null && !defaultRepoUrl.isBlank()) {
+            if (defaultRepoUrl() != null && !defaultRepoUrl().isBlank()) {
                 try {
-                    RepoCoordinates coords = RepoCoordinates.parse(defaultRepoUrl);
+                    RepoCoordinates coords = RepoCoordinates.parse(defaultRepoUrl());
                     workspace = coords.organization();
                     repoSlug = coords.repository();
                 } catch (IllegalArgumentException e) {
@@ -279,7 +277,7 @@ public class JiraWebhookResource {
             
             // Evaluate hooks
             var hookJobIds = hookEvaluator.evaluateByTrigger(
-                    triggerType, workspace, repoSlug, defaultRepoUrl, context);
+                    triggerType, workspace, repoSlug, defaultRepoUrl(), context);
             
             if (!hookJobIds.isEmpty()) {
                 LOG.infof("JIRA webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);

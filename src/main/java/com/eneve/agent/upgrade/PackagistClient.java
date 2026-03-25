@@ -13,13 +13,14 @@ import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches the latest stable version of a Packagist (PHP Composer) package.
@@ -41,8 +42,7 @@ public class PackagistClient {
     private static final Pattern STABLE_VERSION_PATTERN =
             Pattern.compile("^v?\\d+\\.\\d+\\.\\d+$");
 
-    @ConfigProperty(name = "upgrade.scheduler.version-cache-minutes", defaultValue = "60")
-    long cacheDurationMinutes;
+    @Inject SettingsService settings;
 
     private final Map<String, String> versionCache = new ConcurrentHashMap<>();
     private final Map<String, Instant> expiryCache = new ConcurrentHashMap<>();
@@ -120,6 +120,7 @@ public class PackagistClient {
 
     private Optional<String> cacheAndReturn(String key, String version) {
         versionCache.put(key, version);
+        long cacheDurationMinutes = Long.parseLong(settings.get("upgrade.scheduler.version-cache-minutes", "60"));
         expiryCache.put(key, Instant.now().plusSeconds(cacheDurationMinutes * 60));
         LOG.infof("PackagistClient: latest stable version of %s is %s (cached for %d min)",
                 key, version, cacheDurationMinutes);

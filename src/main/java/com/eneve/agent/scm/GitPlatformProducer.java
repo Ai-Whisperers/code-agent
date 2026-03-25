@@ -4,10 +4,10 @@ import com.eneve.agent.scm.azuredevops.AzureDevOpsPlatformService;
 import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
 import com.eneve.agent.scm.github.GitHubPlatformService;
 import com.eneve.agent.scm.gitlab.GitLabPlatformService;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Produces;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
@@ -19,9 +19,7 @@ public class GitPlatformProducer {
 
     private static final Logger LOG = Logger.getLogger(GitPlatformProducer.class);
 
-    @ConfigProperty(name = "git.platform", defaultValue = "bitbucket")
-    String platform;
-
+    @Inject SettingsService settings;
     @Inject BitbucketPlatformService bitbucket;
     @Inject AzureDevOpsPlatformService azureDevOps;
     @Inject GitLabPlatformService gitlab;
@@ -30,6 +28,7 @@ public class GitPlatformProducer {
     @Produces
     @ApplicationScoped
     public GitPlatformService gitPlatformService() {
+        String platform = settings.get("git.platform", "bitbucket");
         return switch (platform.toLowerCase().trim()) {
             case "bitbucket" -> {
                 LOG.info("Git platform: Bitbucket Cloud");

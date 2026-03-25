@@ -8,9 +8,9 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -23,9 +23,7 @@ public class MetricsHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "metrics.job-timeout-minutes", defaultValue = "30")
-    long metricsTimeoutMinutes;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -34,6 +32,7 @@ public class MetricsHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long metricsTimeoutMinutes = Long.parseLong(settings.get("metrics.job-timeout-minutes", "30"));
         MetricsJobRequest request = job.getMetricsRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

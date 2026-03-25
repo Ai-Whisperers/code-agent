@@ -3,10 +3,10 @@ package com.eneve.agent.agent.service;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.scm.GitPlatformService;
 import io.quarkus.runtime.StartupEvent;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -29,10 +29,11 @@ public class RepoSyncService {
     @Inject
     RepoSettingsStore settingsStore;
 
-    @ConfigProperty(name = "bitbucket.workspace", defaultValue = "")
-    String workspace;
+    @Inject
+    SettingsService settings;
 
     void onStartup(@Observes StartupEvent event) {
+        String workspace = settings.get("bitbucket.workspace", "");
         if (workspace.isBlank()) {
             LOG.warn("bitbucket.workspace is not configured — skipping repo sync");
             return;
@@ -43,6 +44,7 @@ public class RepoSyncService {
     }
 
     public void syncRepos() {
+        String workspace = settings.get("bitbucket.workspace", "");
         try {
             List<String> repoSlugs = gitPlatformService.listRepositories(workspace);
             int newCount = 0;

@@ -11,9 +11,9 @@ import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -32,12 +32,7 @@ public class GenerateDocsHandler implements JobHandler {
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject PlanWorkspaceManager planWorkspaceManager;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
-
-    @ConfigProperty(name = "generate-docs.max-loop-iterations", defaultValue = "200")
-    int generateDocsMaxIterations;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -46,6 +41,8 @@ public class GenerateDocsHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
+        int generateDocsMaxIterations = Integer.parseInt(settings.get("generate-docs.max-loop-iterations", "200"));
         GenerateDocsRequest request = job.getGenerateDocsRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

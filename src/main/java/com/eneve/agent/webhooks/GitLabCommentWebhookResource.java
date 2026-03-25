@@ -24,7 +24,7 @@ import com.eneve.agent.scm.GitPlatformService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -66,12 +66,9 @@ public class GitLabCommentWebhookResource {
     @Inject MemoryStore memoryStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitPlatformService platformService;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "gitlab.agent.user", defaultValue = "")
-    String agentUser;
-
-    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
-    int fpAutoSuppressThreshold;
+    private String agentUser() { return settings.get("gitlab.agent.user", ""); }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -140,8 +137,8 @@ public class GitLabCommentWebhookResource {
             }
 
             // Guard: ignore notes from the agent itself (prevent infinite loops)
-            if (!agentUser.isEmpty() && noteAuthor.equalsIgnoreCase(agentUser)) {
-                LOG.debugf("Note webhook: ignoring note %d by agent user '%s'", noteId, agentUser);
+            if (!agentUser().isEmpty() && noteAuthor.equalsIgnoreCase(agentUser())) {
+                LOG.debugf("Note webhook: ignoring note %d by agent user '%s'", noteId, agentUser());
                 return ok("ignored", "Note is from the agent itself");
             }
 
@@ -365,7 +362,7 @@ public class GitLabCommentWebhookResource {
 
     private void checkAndAutoSuppress(String workspace, String repoSlug, String pattern, String author) {
         if (pattern == null || pattern.isBlank()) return;
-        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, fpAutoSuppressThreshold);
+        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, Integer.parseInt(settings.get("review.fp.auto-suppress-threshold", "3")));
         if (!recurring.contains(pattern)) return;
 
         String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;

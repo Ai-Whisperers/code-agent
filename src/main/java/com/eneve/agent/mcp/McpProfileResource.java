@@ -5,7 +5,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -42,17 +42,8 @@ public class McpProfileResource {
     @Inject
     JsonWebToken jwt;
 
-    @ConfigProperty(name = "jira.base.url", defaultValue = "")
-    String jiraBaseUrl;
-
-    @ConfigProperty(name = "jira.user", defaultValue = "")
-    String jiraUser;
-
-    @ConfigProperty(name = "confluence.base.url", defaultValue = "")
-    String confluenceBaseUrl;
-
-    @ConfigProperty(name = "confluence.user", defaultValue = "")
-    String confluenceUser;
+    @Inject
+    SettingsService settings;
 
     // ─── List all linked accounts for current user ─────────────────────────────
 
@@ -291,11 +282,11 @@ public class McpProfileResource {
         }
         return Response.ok(Map.of(
                 "jira", Map.of(
-                        "baseUrl", jiraBaseUrl != null ? jiraBaseUrl : "",
+                        "baseUrl", settings.get("jira.base.url", ""),
                         "username", email
                 ),
                 "confluence", Map.of(
-                        "baseUrl", confluenceBaseUrl != null ? confluenceBaseUrl : "",
+                        "baseUrl", settings.get("confluence.base.url", ""),
                         "username", email
                 )
         )).build();

@@ -18,9 +18,10 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
-import jakarta.enterprise.context.ApplicationScoped;
+import com.eneve.agent.settings.SettingsService;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Measures JaCoCo code coverage before and after unit test generation.
@@ -32,11 +33,11 @@ public class CoverageReporter {
     private static final Logger LOG = Logger.getLogger(CoverageReporter.class);
     private static final String JACOCO_REPORT_PATH = "target/site/jacoco/jacoco.xml";
 
-    @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
-    long timeoutMinutes;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "quality-report.jacoco.version", defaultValue = "0.8.12")
-    String jacocoVersion;
+    private long timeoutMinutes() {
+        return Long.parseLong(settings.get("generate-tests.job-timeout-minutes", "60"));
+    }
 
     // ─── Public API ──────────────────────────────────────────────────────
 
@@ -195,7 +196,7 @@ public class CoverageReporter {
         boolean jacocoPresent = isJacocoPresent(workspace);
         String pluginPrefix = jacocoPresent
                 ? "jacoco"
-                : "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+                : "org.jacoco:jacoco-maven-plugin:" + settings.get("quality-report.jacoco.version", "0.8.12");
 
         String command = ProcessHelper.mvn(workspace.getRoot())
                 + " " + pluginPrefix + ":prepare-agent test " + pluginPrefix + ":report -q";
@@ -275,11 +276,11 @@ public class CoverageReporter {
                     .redirectErrorStream(true);
             Process proc = pb.start();
             String output = new String(proc.getInputStream().readAllBytes());
-            boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+            boolean finished = proc.waitFor(timeoutMinutes(), TimeUnit.MINUTES);
 
             if (!finished) {
                 proc.destroyForcibly();
-                throw new RuntimeException("JaCoCo coverage run timed out after " + timeoutMinutes + " minutes");
+                throw new RuntimeException("JaCoCo coverage run timed out after " + timeoutMinutes() + " minutes");
             }
             if (proc.exitValue() != 0) {
                 String tail = output.length() > 3000 ? output.substring(output.length() - 3000) : output;

@@ -6,7 +6,7 @@ import java.util.Map;
 import com.eneve.agent.agent.store.CommentFeedbackStore;
 import com.eneve.agent.agent.store.CommentStore;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
@@ -35,8 +35,8 @@ public class ReviewMetricsResource {
     @Inject
     CommentFeedbackStore feedbackStore;
 
-    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
-    int fpAutoSuppressThreshold;
+    @Inject
+    SettingsService settings;
 
     @GET
     @Path("/review-quality/{workspace}/{repoSlug}")
@@ -57,7 +57,8 @@ public class ReviewMetricsResource {
         long resolvedFindings = commentStore.countResolvedFindings(workspace, repoSlug);
         long falsePositives = feedbackStore.countFalsePositives(workspace, repoSlug);
         Map<String, Long> fpByCategory = feedbackStore.countFalsePositivesByCategory(workspace, repoSlug);
-        int autoSuppressedPatterns = feedbackStore.findRecurringPatterns(workspace, repoSlug, fpAutoSuppressThreshold).size();
+        int autoSuppressedPatterns = feedbackStore.findRecurringPatterns(workspace, repoSlug,
+                Integer.parseInt(settings.get("review.fp.auto-suppress-threshold", "3"))).size();
 
         double fpRate = totalFindings > 0
                 ? Math.round((double) falsePositives / totalFindings * 10000.0) / 10000.0

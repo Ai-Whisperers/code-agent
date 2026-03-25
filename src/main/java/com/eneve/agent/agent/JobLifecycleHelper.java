@@ -1,6 +1,6 @@
 package com.eneve.agent.agent;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.agent.store.JobStore;
@@ -40,9 +40,7 @@ public class JobLifecycleHelper {
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "n8n.webhook.url", defaultValue = "")
-    String defaultN8nWebhookUrl;
+    @Inject com.eneve.agent.settings.SettingsService settings;
 
     // ─── Failure handlers ───────────────────────────────────────────────
 
@@ -286,7 +284,7 @@ public class JobLifecycleHelper {
     }
 
     public String resolveWebhookUrl(String requestUrl) {
-        return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : defaultN8nWebhookUrl;
+        return (requestUrl != null && !requestUrl.isBlank()) ? requestUrl : settings.get("n8n.webhook.url", "");
     }
 
     public String resolveRepoUrl(JobRecord job) {

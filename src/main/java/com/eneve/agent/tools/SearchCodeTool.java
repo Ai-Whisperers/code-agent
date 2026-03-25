@@ -8,7 +8,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.model.RepoCoordinates;
@@ -38,11 +38,8 @@ public class SearchCodeTool implements ToolExecutor {
     private static final int MAX_OUTPUT_CHARS = 30_000;
     private static final int MAX_RESULTS = 100;
 
-    @ConfigProperty(name = "git.username")
-    String gitUsername;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
+    @Inject
+    SettingsService settings;
 
     @Inject
     GitPlatformService platformService;
@@ -230,7 +227,7 @@ public class SearchCodeTool implements ToolExecutor {
         Path tempDir = Files.createTempDirectory("search-repo-" + coords.repository() + "-");
         LOG.infof("Cloning repository for search: %s into %s", coords.repoWebUrl(), tempDir);
 
-        String authenticatedUrl = coords.httpsCloneUrl(gitUsername, gitPassword);
+        String authenticatedUrl = coords.httpsCloneUrl(settings.get("git.username", ""), settings.getSecret("git.password"));
         
         // Use shallow clone for search purposes (faster)
         ProcessBuilder pb = ProcessHelper.cleanBuilder(null, 

@@ -18,8 +18,9 @@ import org.w3c.dom.NodeList;
 
 import com.eneve.agent.util.ProcessHelper;
 
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 
 import java.util.Optional;
 
@@ -28,8 +29,8 @@ public class SpotBugsLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(SpotBugsLinter.class);
 
-    @ConfigProperty(name = "build.java-home")
-    Optional<String> javaHome;
+    @Inject
+    SettingsService settings;
 
     private static final String COMPILE_ARGS = " compile -q";
     private static final String SPOTBUGS_ARGS =
@@ -51,7 +52,8 @@ public class SpotBugsLinter implements LinterRunner {
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running SpotBugs analysis (compile + analyze)...");
         String mvn = ProcessHelper.mvn(workspaceRoot);
-        String effectiveJavaHome = javaHome.filter(s -> !s.isBlank()).orElse(null);
+        String javaHomeVal = settings.get("build.java-home", "");
+        String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
 
         try {
             String compileOutput = runProcess(workspaceRoot, mvn + COMPILE_ARGS, timeoutMinutes);

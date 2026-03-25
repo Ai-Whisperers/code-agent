@@ -15,9 +15,9 @@ import com.eneve.agent.model.*;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.nio.charset.StandardCharsets;
@@ -46,15 +46,7 @@ public class ReviewHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
-
-    @ConfigProperty(name = "review.pr-summary.enabled", defaultValue = "true")
-    boolean prSummaryEnabled;
-
-    @ConfigProperty(name = "review.sequence-diagrams.enabled", defaultValue = "true")
-    boolean sequenceDiagramsEnabled;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -63,6 +55,9 @@ public class ReviewHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
+        boolean prSummaryEnabled = Boolean.parseBoolean(settings.get("review.pr-summary.enabled", "true"));
+        boolean sequenceDiagramsEnabled = Boolean.parseBoolean(settings.get("review.sequence-diagrams.enabled", "true"));
         ReviewPrRequest request = job.getReviewRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -43,11 +42,10 @@ public class GitHubPlatformService implements GitPlatformService {
 
     private static final Logger LOG = Logger.getLogger(GitHubPlatformService.class);
 
-    @ConfigProperty(name = "github.base.url", defaultValue = "https://api.github.com")
-    String baseUrl;
-
     @Inject
     SettingsService settingsService;
+
+    private String baseUrl() { return settingsService.get("github.base.url", "https://api.github.com"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -56,7 +54,7 @@ public class GitHubPlatformService implements GitPlatformService {
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls";
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls";
         String body = """
                 {
                   "head": "%s",
@@ -86,14 +84,14 @@ public class GitHubPlatformService implements GitPlatformService {
 
     @Override
     public void mergePullRequest(String org, String project, String repo, String prId) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/merge";
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/merge";
         putAndReturn(url, "{}", "merge PR #" + prId);
         LOG.infof("Merged PR #%s in %s/%s", prId, org, repo);
     }
 
     @Override
     public void declinePullRequest(String org, String project, String repo, String prId) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId;
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId;
         String body = """
                 { "state": "closed" }
                 """;
@@ -103,7 +101,7 @@ public class GitHubPlatformService implements GitPlatformService {
 
     @Override
     public Map<String, String> getPullRequestInfo(String org, String project, String repo, String prId) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId;
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId;
         String responseBody = getAndReturn(url, "get PR #" + prId);
 
         try {
@@ -124,7 +122,7 @@ public class GitHubPlatformService implements GitPlatformService {
 
     @Override
     public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/issues/" + prId + "/comments";
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/issues/" + prId + "/comments";
         String body = """
                 { "body": "%s" }
                 """.formatted(escapeJson(commentBody));
@@ -138,7 +136,7 @@ public class GitHubPlatformService implements GitPlatformService {
     public void updatePrComment(String org, String project, String repo, String prId,
                                 long commentId, String commentBody) {
         String safeId = sanitizeId(prId);
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/issues/comments/" + commentId;
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/issues/comments/" + commentId;
         String body = """
                 { "body": "%s" }
                 """.formatted(escapeJson(commentBody));
@@ -156,7 +154,7 @@ public class GitHubPlatformService implements GitPlatformService {
             return addPrComment(org, project, repo, prId, commentBody);
         }
 
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/comments";
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/comments";
         String body = """
                 {
                   "body": "%s",
@@ -188,7 +186,7 @@ public class GitHubPlatformService implements GitPlatformService {
     @Override
     public long replyToComment(String org, String project, String repo, String prId,
                                long parentCommentId, String commentBody) {
-        String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId
                 + "/comments/" + parentCommentId + "/replies";
         String body = """
                 { "body": "%s" }
@@ -205,7 +203,7 @@ public class GitHubPlatformService implements GitPlatformService {
                                                 String prId, long rootCommentId) {
         List<ThreadComment> result = new ArrayList<>();
 
-        String url = baseUrl + "/repos/" + org + "/" + repo
+        String url = baseUrl() + "/repos/" + org + "/" + repo
                 + "/pulls/" + prId + "/comments?per_page=100";
 
         while (url != null) {
@@ -243,9 +241,9 @@ public class GitHubPlatformService implements GitPlatformService {
     @Override
     public List<String> getPullRequestComments(String org, String project, String repo, String prId) {
         // Fetch general issue comments and inline review comments in parallel — independent endpoints
-        String issueUrl = baseUrl + "/repos/" + org + "/" + repo
+        String issueUrl = baseUrl() + "/repos/" + org + "/" + repo
                 + "/issues/" + prId + "/comments?per_page=100";
-        String reviewUrl = baseUrl + "/repos/" + org + "/" + repo
+        String reviewUrl = baseUrl() + "/repos/" + org + "/" + repo
                 + "/pulls/" + prId + "/comments?per_page=100";
 
         List<String> issueComments = new CopyOnWriteArrayList<>();
@@ -271,7 +269,7 @@ public class GitHubPlatformService implements GitPlatformService {
         List<AgentComment> comments = new ArrayList<>();
 
         // General issue comments (non-inline)
-        String issueUrl = baseUrl + "/repos/" + org + "/" + repo
+        String issueUrl = baseUrl() + "/repos/" + org + "/" + repo
                 + "/issues/" + prId + "/comments?per_page=100";
         String url = issueUrl;
         while (url != null) {
@@ -296,7 +294,7 @@ public class GitHubPlatformService implements GitPlatformService {
         }
 
         // Inline review comments
-        String reviewUrl = baseUrl + "/repos/" + org + "/" + repo
+        String reviewUrl = baseUrl() + "/repos/" + org + "/" + repo
                 + "/pulls/" + prId + "/comments?per_page=100";
         url = reviewUrl;
         while (url != null) {
@@ -336,7 +334,7 @@ public class GitHubPlatformService implements GitPlatformService {
     @Override
     public List<String> listRepositories(String org) {
         List<String> repos = new ArrayList<>();
-        String url = baseUrl + "/orgs/" + org + "/repos?per_page=100";
+        String url = baseUrl() + "/orgs/" + org + "/repos?per_page=100";
 
         while (url != null) {
             HttpResponse<String> response = getWithResponse(url, "list repositories for org " + org);
@@ -377,7 +375,7 @@ public class GitHubPlatformService implements GitPlatformService {
 
     private String fetchPrHeadSha(String org, String repo, String prId) {
         try {
-            String url = baseUrl + "/repos/" + org + "/" + repo + "/pulls/" + prId;
+            String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId;
             String responseBody = getAndReturn(url, "get PR HEAD SHA #" + prId);
             JsonNode node = objectMapper.readTree(responseBody);
             String sha = node.path("head").path("sha").asText("");
@@ -555,7 +553,7 @@ public class GitHubPlatformService implements GitPlatformService {
      */
     private void requireTrustedUrl(String url) {
         try {
-            String configuredHost = URI.create(baseUrl).getHost();
+            String configuredHost = URI.create(baseUrl()).getHost();
             String targetHost = URI.create(url).getHost();
             if (!targetHost.equalsIgnoreCase(configuredHost)) {
                 throw new IllegalArgumentException(

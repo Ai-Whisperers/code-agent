@@ -7,9 +7,9 @@ import com.eneve.agent.model.*;
 import com.eneve.agent.rules.CursorRulesLoader;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.Collections;
@@ -31,12 +31,7 @@ public class FixPrHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
-
-    @ConfigProperty(name = "rules.repo.url", defaultValue = "")
-    String defaultRulesRepoUrl;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -45,6 +40,7 @@ public class FixPrHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         FixPrRequest request = job.getFixPrRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
@@ -66,7 +62,7 @@ public class FixPrHandler implements JobHandler {
                     AgentPools.PARALLEL);
 
             String resolvedRulesRepoUrl = (request.rulesRepoUrl() != null && !request.rulesRepoUrl().isBlank())
-                    ? request.rulesRepoUrl() : defaultRulesRepoUrl;
+                    ? request.rulesRepoUrl() : settings.get("rules.repo.url", "");
             List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : Collections.emptyList();
             CompletableFuture<List<String>> sharedRulesFuture = CompletableFuture.supplyAsync(
                     () -> rulesLoader.loadFromRulesRepo(resolvedRulesRepoUrl, ruleNames),

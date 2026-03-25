@@ -16,7 +16,7 @@ import com.eneve.agent.model.ReplyCommentRequest;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -47,12 +47,9 @@ public class AzureDevOpsCommentWebhookResource {
     @Inject JobStore jobStore;
     @Inject CommentStore commentStore;
     @Inject IntentClassifier intentClassifier;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "azuredevops.agent.user", defaultValue = "")
-    String agentUser;
-
-    @ConfigProperty(name = "azuredevops.base.url", defaultValue = "https://dev.azure.com")
-    String adoBaseUrl;
+    private String agentUser() { return settings.get("azuredevops.agent.user", ""); }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -96,7 +93,7 @@ public class AzureDevOpsCommentWebhookResource {
             String remoteUrl = repoNode.path("remoteUrl").asText("");
             if (remoteUrl.isBlank()) {
                 String collectionUrl = payload.path("resourceContainers")
-                        .path("collection").path("baseUrl").asText(adoBaseUrl);
+                        .path("collection").path("baseUrl").asText(settings.get("azuredevops.base.url", "https://dev.azure.com"));
                 collectionUrl = collectionUrl.endsWith("/")
                         ? collectionUrl.substring(0, collectionUrl.length() - 1) : collectionUrl;
                 remoteUrl = collectionUrl + "/" + projectName + "/_git/" + repoName;
@@ -106,8 +103,8 @@ public class AzureDevOpsCommentWebhookResource {
                 return ok("ignored", "Missing comment ID, PR ID, or repository in payload");
             }
 
-            if (!agentUser.isEmpty() && commentAuthor.equalsIgnoreCase(agentUser)) {
-                LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser);
+            if (!agentUser().isEmpty() && commentAuthor.equalsIgnoreCase(agentUser())) {
+                LOG.debugf("Comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser());
                 return ok("ignored", "Comment is from the agent itself");
             }
 

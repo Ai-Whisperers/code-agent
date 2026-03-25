@@ -3,7 +3,7 @@ package com.eneve.agent.upgrade;
 import io.quarkus.scheduler.Scheduled;
 import io.quarkus.scheduler.Scheduled.ConcurrentExecution;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -26,13 +26,13 @@ public class UpgradeScheduler {
     @Inject
     UpgradeService upgradeService;
 
-    @ConfigProperty(name = "upgrade.scheduler.enabled", defaultValue = "false")
-    boolean enabled;
+    @Inject
+    SettingsService settings;
 
     @Scheduled(every = "24h", delayed = "10m",
                concurrentExecution = ConcurrentExecution.SKIP)
     void checkAndUpgrade() {
-        if (!enabled) {
+        if (!Boolean.parseBoolean(settings.get("upgrade.scheduler.enabled", "false"))) {
             return;
         }
         LOG.info("Upgrade scheduler triggered — checking all supported framework versions");

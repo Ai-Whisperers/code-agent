@@ -25,7 +25,7 @@ import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -63,12 +63,10 @@ public class RunFixResource {
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
     @Inject AuditService auditService;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "jira.agent.label", defaultValue = "WALL-E")
-    String agentLabel;
-
-    @ConfigProperty(name = "jira.agent.default-repo-url", defaultValue = "")
-    String defaultRepoUrl;
+    private String agentLabel()()    { return settings.get("jira.agent.label", "WALL-E"); }
+    private String defaultRepoUrl()() { return settings.get("jira.agent.default-repo-url", ""); }
 
     @POST
     @Path("/run-fix")
@@ -692,20 +690,20 @@ public class RunFixResource {
             @APIResponse(responseCode = "400", description = "Agent label not configured")
     })
     public Response syncJira() {
-        if (agentLabel.isBlank()) {
+        if (agentLabel().isBlank()) {
             return Response.status(400)
                     .entity(Map.of("error", "jira.agent.label not configured"))
                     .build();
         }
 
-        var issues = jiraService.searchIssuesByLabel(agentLabel);
+        var issues = jiraService.searchIssuesByLabel(agentLabel());
         if (issues.isEmpty()) {
-            LOG.infof("sync-jira: no open issues found with label %s", agentLabel);
+            LOG.infof("sync-jira: no open issues found with label %s", agentLabel());
             return Response.ok(Map.of("found", 0, "queued", 0,
                     "skipped", List.of())).build();
         }
 
-        LOG.infof("sync-jira: found %d open issues with label %s:", issues.size(), agentLabel);
+        LOG.infof("sync-jira: found %d open issues with label %s:", issues.size(), agentLabel());
         for (var issue : issues) {
             LOG.infof("  - %s: %s", issue.key(), issue.summary());
         }
@@ -738,7 +736,7 @@ public class RunFixResource {
             }
 
             if (repoUrl == null || repoUrl.isBlank()) {
-                repoUrl = defaultRepoUrl;
+                repoUrl = defaultRepoUrl();
             }
             if (repoUrl == null || repoUrl.isBlank()) {
                 skipped.add(Map.of("key", issue.key(), "reason", "No repo URL available"));

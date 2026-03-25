@@ -12,10 +12,11 @@ import java.util.Optional;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches the latest stable WildFly release version from the Maven Central repository.
@@ -41,8 +42,7 @@ public class WildflyReleaseClient {
     private static final Pattern VERSION_TAG_PATTERN =
             Pattern.compile("<version>([^<]+)</version>");
 
-    @ConfigProperty(name = "upgrade.scheduler.version-cache-minutes", defaultValue = "60")
-    long cacheDurationMinutes;
+    @Inject SettingsService settings;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
@@ -134,6 +134,7 @@ public class WildflyReleaseClient {
 
     private Optional<String> cacheAndReturn(String version) {
         cachedVersion = version;
+        long cacheDurationMinutes = Long.parseLong(settings.get("upgrade.scheduler.version-cache-minutes", "60"));
         cacheExpiry = Instant.now().plusSeconds(cacheDurationMinutes * 60);
         LOG.infof("WildflyReleaseClient: latest stable WildFly version is %s (cached for %d min)",
                 version, cacheDurationMinutes);

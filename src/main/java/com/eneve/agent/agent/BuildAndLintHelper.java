@@ -7,7 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -33,18 +33,7 @@ public class BuildAndLintHelper {
     @Inject LinterService linterService;
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject PromptTemplateService promptTemplates;
-
-    @ConfigProperty(name = "run-fix.max-build-retries", defaultValue = "2")
-    int maxBuildRetries;
-
-    @ConfigProperty(name = "run-fix.self-review.enabled", defaultValue = "true")
-    boolean selfReviewEnabled;
-
-    @ConfigProperty(name = "run-fix.self-review.max-iterations", defaultValue = "15")
-    int selfReviewMaxIterations;
-
-    @ConfigProperty(name = "run-fix.self-review.max-diff-chars", defaultValue = "30000")
-    int selfReviewMaxDiffChars;
+    @Inject SettingsService settings;
 
     /**
      * Outcome of the linter fix loop.
@@ -78,20 +67,20 @@ public class BuildAndLintHelper {
             } catch (Exception e) {
                 attempts++;
                 String buildError = e.getMessage() != null ? e.getMessage() : "Unknown build error";
-                if (attempts > maxBuildRetries) {
+                if (attempts > maxBuildRetries()) {
                     LOG.warnf("Build validation failed after %d attempt(s), giving up: %s",
                             attempts, buildError.length() > 200 ? buildError.substring(0, 200) + "..." : buildError);
                     return false;
                 }
 
                 LOG.infof("Build validation failed (attempt %d/%d), feeding error back to agent: %s",
-                        attempts, maxBuildRetries,
+                        attempts, maxBuildRetries(),
                         buildError.length() > 200 ? buildError.substring(0, 200) + "..." : buildError);
 
                 String retryPrompt = promptTemplates.resolve("build-retry", Map.of(
                         "BUILD_OUTPUT", buildError,
                         "ATTEMPT", String.valueOf(attempts),
-                        "MAX_ATTEMPTS", String.valueOf(maxBuildRetries)));
+                        "MAX_ATTEMPTS", String.valueOf(maxBuildRetries())));
 
                 try {
                     toolUseLoop.run(retryPrompt, workspace, 30, jobId, jobType);
@@ -155,7 +144,7 @@ public class BuildAndLintHelper {
      * anything it finds. This step is entirely non-fatal.
      */
     public void runSelfReview(WorkspaceContext workspace, JobRecord job, String originalTask) {
-        if (!selfReviewEnabled) {
+        if (!selfReviewEnabled()) {
             return;
         }
 
@@ -172,9 +161,9 @@ public class BuildAndLintHelper {
             return;
         }
 
-        if (diff.length() > selfReviewMaxDiffChars) {
-            diff = diff.substring(0, selfReviewMaxDiffChars)
-                    + "\n\n... [diff truncated at " + selfReviewMaxDiffChars + " chars] ...";
+        if (diff.length() > selfReviewMaxDiffChars()) {
+            diff = diff.substring(0, selfReviewMaxDiffChars())
+                    + "\n\n... [diff truncated at " + selfReviewMaxDiffChars() + " chars] ...";
         }
 
         String filesChanged = diff.lines()
@@ -193,7 +182,7 @@ public class BuildAndLintHelper {
         LOG.infof("Running self-review pass over %d changed file(s)...",
                 diff.lines().filter(l -> l.startsWith("diff --git ")).count());
         try {
-            toolUseLoop.run(reviewPrompt, workspace, selfReviewMaxIterations,
+            toolUseLoop.run(reviewPrompt, workspace, selfReviewMaxIterations(),
                     job.getJobId(), job.getJobType().name());
         } catch (Exception e) {
             LOG.warnf("Self-review loop error (non-fatal): %s", e.getMessage());
@@ -238,6 +227,22 @@ public class BuildAndLintHelper {
         LOG.infof("Static analysis diff: verdict=%s, newIssues=%d, resolvedIssues=%d",
                 report.verdict(), report.newIssues().size(), report.resolvedIssues().size());
         return report;
+    }
+
+    private int maxBuildRetries() {
+        return Integer.parseInt(settings.get("run-fix.max-build-retries", "2"));
+    }
+
+    private boolean selfReviewEnabled() {
+        return Boolean.parseBoolean(settings.get("run-fix.self-review.enabled", "true"));
+    }
+
+    private int selfReviewMaxIterations() {
+        return Integer.parseInt(settings.get("run-fix.self-review.max-iterations", "15"));
+    }
+
+    private int selfReviewMaxDiffChars() {
+        return Integer.parseInt(settings.get("run-fix.self-review.max-diff-chars", "30000"));
     }
 
     public static String buildLinterDiffSummaryLine(StaticAnalysisDiffReport report) {

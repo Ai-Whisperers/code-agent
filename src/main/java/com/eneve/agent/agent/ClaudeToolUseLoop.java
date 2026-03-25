@@ -40,7 +40,7 @@ import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
 import com.eneve.agent.workspace.WorkspaceContext;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -63,15 +63,6 @@ public class ClaudeToolUseLoop {
         return t;
     });
 
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
-
-    @ConfigProperty(name = "anthropic.max-tokens", defaultValue = "8192")
-    long maxTokens;
-
-    @ConfigProperty(name = "run-fix.max-loop-iterations", defaultValue = "50")
-    int maxIterations;
-
     @Inject
     AnthropicClient client;
 
@@ -84,13 +75,17 @@ public class ClaudeToolUseLoop {
     @Inject
     TokenBudgetTracker tokenBudgetTracker;
 
+    @Inject
+    SettingsService settings;
+
     /**
      * Run the agentic tool-use loop with a custom tool set and initial user message.
      */
     public String run(String systemPrompt, WorkspaceContext workspace,
                       List<ToolUnion> tools, String initialUserMessage,
                       String jobId, String jobType) {
-        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType, maxIterations);
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType,
+                Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")));
     }
 
     /**
@@ -111,7 +106,7 @@ public class ClaudeToolUseLoop {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(),
                 "Please complete the task described in the system prompt. "
                         + "Start by listing the repository structure, then proceed.",
-                jobId, jobType, maxIterations);
+                jobId, jobType, Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")));
     }
 
     /**
@@ -129,6 +124,8 @@ public class ClaudeToolUseLoop {
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
                          String jobId, String jobType, int iterationCap) {
+        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         List<MessageParam> messages = new ArrayList<>();
         messages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)

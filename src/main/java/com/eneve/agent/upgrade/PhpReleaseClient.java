@@ -11,13 +11,14 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches the latest stable PHP release version from the php.net releases JSON API.
@@ -38,8 +39,7 @@ public class PhpReleaseClient {
     /** Matches purely numeric PHP release versions like {@code 8.3.11}. */
     private static final Pattern STABLE_VERSION_PATTERN = Pattern.compile("^\\d+\\.\\d+\\.\\d+$");
 
-    @ConfigProperty(name = "upgrade.scheduler.version-cache-minutes", defaultValue = "60")
-    long cacheDurationMinutes;
+    @Inject SettingsService settings;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
@@ -104,6 +104,7 @@ public class PhpReleaseClient {
 
     private Optional<String> cacheAndReturn(String version) {
         cachedVersion = version;
+        long cacheDurationMinutes = Long.parseLong(settings.get("upgrade.scheduler.version-cache-minutes", "60"));
         cacheExpiry = Instant.now().plusSeconds(cacheDurationMinutes * 60);
         LOG.infof("PhpReleaseClient: latest stable PHP version is %s (cached for %d min)",
                 version, cacheDurationMinutes);

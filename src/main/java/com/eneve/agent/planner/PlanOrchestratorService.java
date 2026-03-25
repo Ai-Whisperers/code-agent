@@ -24,7 +24,7 @@ import com.eneve.agent.model.SyncConfluenceRequest;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -92,21 +92,11 @@ public class PlanOrchestratorService {
     @Inject GitPlatformService platformService;
     @Inject Event<PlanCompletedEvent> planCompletedEvent;
     @Inject Event<PlanOrchestratorEvent> orchestratorEvent;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "git.username")
-    String gitUser;
-
-    @ConfigProperty(name = "git.password")
-    String gitPassword;
-
-    @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
-    int defaultCcThreshold;
-
-    @ConfigProperty(name = "metrics.max-iterations", defaultValue = "3")
-    int defaultMaxIterations;
-
-    @ConfigProperty(name = "metrics.max-methods-per-fix", defaultValue = "20")
-    int defaultMaxMethodsPerFix;
+    private int defaultCcThreshold()      { return Integer.parseInt(settings.get("metrics.cc-threshold",        "10")); }
+    private int defaultMaxIterations()    { return Integer.parseInt(settings.get("metrics.max-iterations",      "3")); }
+    private int defaultMaxMethodsPerFix() { return Integer.parseInt(settings.get("metrics.max-methods-per-fix", "20")); }
 
     // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -408,7 +398,7 @@ public class PlanOrchestratorService {
 
         CodeMetricsSnapshot latest = snapshots.get(snapshots.size() - 1);
         int maxIterations = latest.threshold() > 0
-                ? defaultMaxIterations : defaultMaxIterations; // use snapshot threshold
+                ? defaultMaxIterations() : defaultMaxIterations(); // use snapshot threshold
 
         // Determine effective limits from the snapshot metadata (threshold was baked in)
         int ccThreshold = latest.threshold();
@@ -446,7 +436,7 @@ public class PlanOrchestratorService {
         String metricsStepId = "quality-metrics-iter-" + iteration;
 
         // Extract connection info from the latest metrics snapshot for the fix prompt
-        String metricsContext = latest.formatForPrompt(defaultMaxMethodsPerFix);
+        String metricsContext = latest.formatForPrompt(defaultMaxMethodsPerFix());
 
         // The new fix branch for this iteration
         String fixBranch = "agent/quality/" + planId.substring(0, 8) + "-iter-" + iteration;
@@ -597,16 +587,16 @@ public class PlanOrchestratorService {
             case "METRICS" -> {
                 String branch = param(step, "branch",
                         plan.targetBranch() != null ? plan.targetBranch() : "main");
-                String ccThresholdStr = param(step, "ccThreshold", String.valueOf(defaultCcThreshold));
-                String maxIterStr = param(step, "maxIterations", String.valueOf(defaultMaxIterations));
+                String ccThresholdStr = param(step, "ccThreshold", String.valueOf(defaultCcThreshold()));
+                String maxIterStr = param(step, "maxIterations", String.valueOf(defaultMaxIterations()));
                 int ccThreshold;
                 int maxIter;
                 try {
                     ccThreshold = Integer.parseInt(ccThresholdStr);
                     maxIter = Integer.parseInt(maxIterStr);
                 } catch (NumberFormatException e) {
-                    ccThreshold = defaultCcThreshold;
-                    maxIter = defaultMaxIterations;
+                    ccThreshold = defaultCcThreshold();
+                    maxIter = defaultMaxIterations();
                 }
                 yield new JobRecord(jobId, new MetricsJobRequest(
                         plan.repoUrl(),

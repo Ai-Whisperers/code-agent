@@ -3,9 +3,9 @@ package com.eneve.agent.mcp;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.Map;
@@ -25,11 +25,8 @@ public class JiraCreateIssueTool implements ToolExecutor {
     @Inject
     JiraService jiraService;
 
-    @ConfigProperty(name = "jira.billing-category-field", defaultValue = "")
-    String billingCategoryFieldId;
-
-    @ConfigProperty(name = "jira.billing-code-field", defaultValue = "")
-    String billingCodeFieldId;
+    @Inject
+    SettingsService settings;
 
     @Override
     public String name() {
@@ -78,7 +75,8 @@ public class JiraCreateIssueTool implements ToolExecutor {
             String createdKey = jiraService.createIssue(
                     projectKey, summary, description, issueType,
                     parentKey, billingCategory, billingCode,
-                    billingCategoryFieldId, billingCodeFieldId,
+                    settings.get("jira.billing-category-field", ""),
+                    settings.get("jira.billing-code-field", ""),
                     customFields, creds.get());
             if (createdKey == null) {
                 return "ERROR: Failed to create issue";

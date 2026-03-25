@@ -2,8 +2,9 @@ package com.eneve.agent.scm.bitbucket;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -26,14 +27,12 @@ public class BitbucketBranchService {
 
     private static final Logger LOG = Logger.getLogger(BitbucketBranchService.class);
 
-    @ConfigProperty(name = "bitbucket.base.url", defaultValue = "https://api.bitbucket.org/2.0")
-    String baseUrl;
+    @Inject
+    SettingsService settings;
 
-    @ConfigProperty(name = "bitbucket.user")
-    String bbUser;
-
-    @ConfigProperty(name = "bitbucket.app.password")
-    String appPassword;
+    private String baseUrl()     { return settings.get("bitbucket.base.url", "https://api.bitbucket.org/2.0"); }
+    private String bbUser()    { return settings.get("bitbucket.user", ""); }
+    private String appPassword() { return settings.getSecret("bitbucket.app.password"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -46,7 +45,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo + "/refs/branches/" + branch;
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
                     .GET()
@@ -76,7 +75,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo;
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
                     .GET()
@@ -111,7 +110,7 @@ public class BitbucketBranchService {
                 """.formatted(escapeJson(branchName), escapeJson(fromHash));
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -146,7 +145,7 @@ public class BitbucketBranchService {
                 """.formatted(escapeJson(branchName));
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -176,7 +175,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo + "/refs/branches/" + branchName;
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .DELETE()
                     .build();
@@ -198,11 +197,11 @@ public class BitbucketBranchService {
     }
 
     private String authHeader() {
-        if ("x-token-auth".equals(bbUser)) {
-            return "Bearer " + appPassword;
+        if ("x-token-auth".equals(bbUser())) {
+            return "Bearer " + appPassword();
         }
         return "Basic " + Base64.getEncoder()
-                .encodeToString((bbUser + ":" + appPassword).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((bbUser() + ":" + appPassword()).getBytes(StandardCharsets.UTF_8));
     }
 
     private static String escapeJson(String text) {

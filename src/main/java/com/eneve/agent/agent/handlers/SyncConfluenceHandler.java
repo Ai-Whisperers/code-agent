@@ -9,9 +9,9 @@ import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.nio.file.Files;
@@ -31,9 +31,7 @@ public class SyncConfluenceHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -42,6 +40,7 @@ public class SyncConfluenceHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         SyncConfluenceRequest request = job.getSyncConfluenceRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

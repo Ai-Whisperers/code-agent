@@ -24,7 +24,7 @@ import com.eneve.agent.scm.GitPlatformService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -71,12 +71,9 @@ public class GitHubCommentWebhookResource {
     @Inject MemoryStore memoryStore;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitPlatformService platformService;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "github.agent.user", defaultValue = "")
-    String agentUser;
-
-    @ConfigProperty(name = "review.fp.auto-suppress-threshold", defaultValue = "3")
-    int fpAutoSuppressThreshold;
+    private String agentUser() { return settings.get("github.agent.user", ""); }
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -149,8 +146,8 @@ public class GitHubCommentWebhookResource {
             return ok("skipped", "Review disabled for " + fullName);
         }
 
-        if (!agentUser.isEmpty() && commentAuthor.equalsIgnoreCase(agentUser)) {
-            LOG.debugf("Review comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser);
+        if (!agentUser().isEmpty() && commentAuthor.equalsIgnoreCase(agentUser())) {
+            LOG.debugf("Review comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser());
             return ok("ignored", "Comment is from the agent itself");
         }
 
@@ -230,8 +227,8 @@ public class GitHubCommentWebhookResource {
             return ok("skipped", "Review disabled for " + fullName);
         }
 
-        if (!agentUser.isEmpty() && commentAuthor.equalsIgnoreCase(agentUser)) {
-            LOG.debugf("Issue comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser);
+        if (!agentUser().isEmpty() && commentAuthor.equalsIgnoreCase(agentUser())) {
+            LOG.debugf("Issue comment webhook: ignoring comment %d by agent user '%s'", commentId, agentUser());
             return ok("ignored", "Comment is from the agent itself");
         }
 
@@ -412,7 +409,7 @@ public class GitHubCommentWebhookResource {
 
     private void checkAndAutoSuppress(String org, String repo, String pattern, String author) {
         if (pattern == null || pattern.isBlank()) return;
-        List<String> recurring = feedbackStore.findRecurringPatterns(org, repo, fpAutoSuppressThreshold);
+        List<String> recurring = feedbackStore.findRecurringPatterns(org, repo, Integer.parseInt(settings.get("review.fp.auto-suppress-threshold", "3")));
         if (!recurring.contains(pattern)) return;
 
         String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;

@@ -2,9 +2,9 @@ package com.eneve.agent.agent.store;
 
 import com.eneve.agent.agent.model.AiCallRecord;
 import io.agroal.api.AgroalDataSource;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.sql.*;
@@ -26,17 +26,8 @@ public class AiCallStore {
     @Inject
     AgroalDataSource dataSource;
 
-    @ConfigProperty(name = "anthropic.pricing.input-per-million", defaultValue = "3.0")
-    double priceInputPerMillion;
-
-    @ConfigProperty(name = "anthropic.pricing.output-per-million", defaultValue = "15.0")
-    double priceOutputPerMillion;
-
-    @ConfigProperty(name = "anthropic.pricing.cache-write-per-million", defaultValue = "3.75")
-    double priceCacheWritePerMillion;
-
-    @ConfigProperty(name = "anthropic.pricing.cache-read-per-million", defaultValue = "0.30")
-    double priceCacheReadPerMillion;
+    @Inject
+    SettingsService settings;
 
     public void save(AiCallRecord record) {
         String sql = """
@@ -375,6 +366,10 @@ public class AiCallStore {
 
     public double estimateCost(long inputTokens, long outputTokens,
                                long cacheWriteTokens, long cacheReadTokens) {
+        double priceInputPerMillion      = Double.parseDouble(settings.get("anthropic.pricing.input-per-million",      "3.0"));
+        double priceOutputPerMillion     = Double.parseDouble(settings.get("anthropic.pricing.output-per-million",     "15.0"));
+        double priceCacheWritePerMillion = Double.parseDouble(settings.get("anthropic.pricing.cache-write-per-million","3.75"));
+        double priceCacheReadPerMillion  = Double.parseDouble(settings.get("anthropic.pricing.cache-read-per-million", "0.30"));
         return (inputTokens * priceInputPerMillion
                 + outputTokens * priceOutputPerMillion
                 + cacheWriteTokens * priceCacheWritePerMillion

@@ -1,6 +1,6 @@
 package com.eneve.agent.agent;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -16,18 +16,14 @@ import com.eneve.agent.workspace.WorkspaceContext;
 public class GitWorkspaceHelper {
 
     @Inject GuardrailConfig guardrails;
-
-    @ConfigProperty(name = "git.author.name", defaultValue = "code-agent")
-    String gitAuthorName;
-
-    @ConfigProperty(name = "git.author.email", defaultValue = "")
-    String gitAuthorEmail;
+    @Inject SettingsService settings;
 
     public record DiffStats(int filesChanged, int linesChanged) {}
 
     public void configureGitIfNeeded(WorkspaceContext workspace) throws Exception {
-        if (!gitAuthorEmail.isBlank()) {
-            workspace.configureAuthor(gitAuthorName, gitAuthorEmail);
+        String email = settings.get("git.author.email", "");
+        if (!email.isBlank()) {
+            workspace.configureAuthor(settings.get("git.author.name", "code-agent"), email);
         }
     }
 

@@ -11,9 +11,9 @@ import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -35,12 +35,7 @@ public class RunFixHandler implements JobHandler {
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject LinterService linterService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
-
-    @ConfigProperty(name = "run-fix.job-timeout-minutes", defaultValue = "30")
-    long jobTimeoutMinutes;
-
-    @ConfigProperty(name = "metrics.max-methods-per-fix", defaultValue = "10")
-    int metricsMaxMethodsPerFix;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -49,6 +44,7 @@ public class RunFixHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         RunFixRequest request = job.getRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
@@ -275,12 +271,14 @@ public class RunFixHandler implements JobHandler {
             LOG.warnf("Quality-fix job for plan %s: no CC snapshot found", planId);
             return null;
         }
+        int metricsMaxMethodsPerFix = Integer.parseInt(settings.get("metrics.max-methods-per-fix", "10"));
         CodeMetricsCalculator.CodeMetricsSnapshot latest = snapshots.get(snapshots.size() - 1);
         return promptBuilder.buildMetricsFixPrompt(latest, metricsMaxMethodsPerFix);
     }
 
     private void finishFixJob(JobRecord job, RunFixRequest request,
                               WorkspaceContext workspace, String summary) {
+        long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
         if (!buildAndLintHelper.runBuildWithRetry(workspace, job)) {
             lifecycle.failFix(job, "Build validation failed after retry attempt(s)");

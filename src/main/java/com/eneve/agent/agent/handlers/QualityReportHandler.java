@@ -9,9 +9,9 @@ import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 /**
@@ -29,9 +29,7 @@ public class QualityReportHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject GitPlatformService platformService;
-
-    @ConfigProperty(name = "quality-report.job-timeout-minutes", defaultValue = "30")
-    long timeoutMinutes;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -40,6 +38,7 @@ public class QualityReportHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        long timeoutMinutes = Long.parseLong(settings.get("quality-report.job-timeout-minutes", "30"));
         QualityReportJobRequest request = job.getQualityReportRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

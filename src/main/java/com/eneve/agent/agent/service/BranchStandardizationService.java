@@ -3,9 +3,9 @@ package com.eneve.agent.agent.service;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.scm.bitbucket.BitbucketBranchService;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.*;
@@ -37,8 +37,8 @@ public class BranchStandardizationService {
     @Inject
     RepoSettingsStore settingsStore;
 
-    @ConfigProperty(name = "git.platform", defaultValue = "bitbucket")
-    String gitPlatform;
+    @Inject
+    SettingsService settings;
 
     /**
      * Runs standardization for every non-archived repo in {@code repo_settings}.
@@ -178,7 +178,7 @@ public class BranchStandardizationService {
     }
 
     private boolean isBitbucket() {
-        return "bitbucket".equalsIgnoreCase(gitPlatform);
+        return "bitbucket".equalsIgnoreCase(settings.get("git.platform", "bitbucket"));
     }
 
     // ── Result model ──────────────────────────────────────────────────────────

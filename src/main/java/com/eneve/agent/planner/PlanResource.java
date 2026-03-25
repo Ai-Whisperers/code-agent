@@ -22,7 +22,7 @@ import io.smallrye.mutiny.infrastructure.Infrastructure;
 import org.eclipse.microprofile.jwt.JsonWebToken;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -73,15 +73,7 @@ public class PlanResource {
     @Inject ClaudeToolUseLoop toolLoop;
     @Inject SecurityIdentity securityIdentity;
     @Inject JsonWebToken jwt;
-
-    @ConfigProperty(name = "planner.enabled", defaultValue = "true")
-    boolean plannerEnabled;
-
-    @ConfigProperty(name = "metrics.cc-threshold", defaultValue = "10")
-    int defaultCcThreshold;
-
-    @ConfigProperty(name = "metrics.max-iterations", defaultValue = "3")
-    int defaultMaxIterations;
+    @Inject SettingsService settings;
 
     // ─── Create / Generate ──────────────────────────────────────────────
 
@@ -101,7 +93,7 @@ public class PlanResource {
             @RequestBody(description = "Specification and repository context", required = true)
             CreatePlanRequest request) {
 
-        if (!plannerEnabled) {
+        if (!Boolean.parseBoolean(settings.get("planner.enabled", "true"))) {
             return Response.status(503).entity(Map.of("error", "Planner is disabled")).build();
         }
         if (request == null || request.repoUrl() == null || request.repoUrl().isBlank()) {
@@ -182,7 +174,7 @@ public class PlanResource {
             @RequestBody(description = "Repository context", required = true)
             CreatePlanRequest request) {
 
-        if (!plannerEnabled) {
+        if (!Boolean.parseBoolean(settings.get("planner.enabled", "true"))) {
             return Response.status(503).entity(Map.of("error", "Planner is disabled")).build();
         }
         String ticketText = jiraService.fetchIssuePrompt(jiraKey);
@@ -230,7 +222,7 @@ public class PlanResource {
             @RequestBody(description = "Repository and quality target parameters", required = true)
             ImproveQualityRequest request) {
 
-        if (!plannerEnabled) {
+        if (!Boolean.parseBoolean(settings.get("planner.enabled", "true"))) {
             return Response.status(503).entity(Map.of("error", "Planner is disabled")).build();
         }
         if (request == null || request.repoUrl() == null || request.repoUrl().isBlank()) {
@@ -240,8 +232,8 @@ public class PlanResource {
             return Response.status(400).entity(Map.of("error", "branch is required")).build();
         }
 
-        int ccThreshold = request.ccThreshold() > 0 ? request.ccThreshold() : defaultCcThreshold;
-        int maxIterations = request.maxIterations() > 0 ? request.maxIterations() : defaultMaxIterations;
+        int ccThreshold = request.ccThreshold() > 0 ? request.ccThreshold() : Integer.parseInt(settings.get("metrics.cc-threshold", "10"));
+        int maxIterations = request.maxIterations() > 0 ? request.maxIterations() : Integer.parseInt(settings.get("metrics.max-iterations", "3"));
         String targetBranch = request.targetBranch() != null && !request.targetBranch().isBlank()
                 ? request.targetBranch() : "main";
 

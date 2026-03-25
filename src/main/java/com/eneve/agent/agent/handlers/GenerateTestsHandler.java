@@ -7,9 +7,9 @@ import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 @ApplicationScoped
@@ -27,12 +27,7 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
-
-    @ConfigProperty(name = "generate-tests.max-loop-iterations", defaultValue = "500")
-    int generateTestsMaxIterations;
-
-    @ConfigProperty(name = "generate-tests.job-timeout-minutes", defaultValue = "60")
-    long generateTestsTimeoutMinutes;
+    @Inject SettingsService settings;
 
     @Override
     public JobType jobType() {
@@ -41,6 +36,8 @@ public class GenerateTestsHandler implements JobHandler {
 
     @Override
     public void handle(JobRecord job) {
+        int generateTestsMaxIterations = Integer.parseInt(settings.get("generate-tests.max-loop-iterations", "500"));
+        long generateTestsTimeoutMinutes = Long.parseLong(settings.get("generate-tests.job-timeout-minutes", "60"));
         GenerateTestsRequest request = job.getGenerateTestsRequest();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);

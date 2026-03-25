@@ -6,18 +6,19 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
+import java.util.stream.Collectors;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.select.Elements;
 
 import com.eneve.agent.workspace.WorkspaceContext;
-
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches a remote web page (documentation site, API reference, framework guide)
@@ -45,20 +46,7 @@ public class FetchUrlTool implements ToolExecutor {
     private static final String CONTENT_END =
             "\n=== END OF FETCHED DOCUMENTATION ===";
 
-    @ConfigProperty(name = "tools.fetch-url.enabled", defaultValue = "true")
-    boolean enabled;
-
-    @ConfigProperty(name = "tools.fetch-url.timeout-seconds", defaultValue = "15")
-    long timeoutSeconds;
-
-    /**
-     * Comma-separated list of allowed hostnames (and optional subdomains).
-     * When non-empty, only URLs whose host ends with one of the listed values are permitted.
-     * Example: "docs.spring.io,quarkus.io,developer.mozilla.org,docs.python.org"
-     * Leave empty (default) to allow all public HTTPS hosts.
-     */
-    @ConfigProperty(name = "tools.fetch-url.allowed-domains", defaultValue = "")
-    Optional<List<String>> allowedDomains;
+    @Inject SettingsService settings;
 
     @Override
     public String name() {
@@ -72,7 +60,7 @@ public class FetchUrlTool implements ToolExecutor {
 
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
-        if (!enabled) {
+        if (!Boolean.parseBoolean(settings.get("tools.fetch-url.enabled", "true"))) {
             return "ERROR: fetch_url tool is disabled. Set tools.fetch-url.enabled=true to enable it.";
         }
 
@@ -87,6 +75,7 @@ public class FetchUrlTool implements ToolExecutor {
         }
 
         try {
+            long timeoutSeconds = Long.parseLong(settings.get("tools.fetch-url.timeout-seconds", "15"));
             HttpClient client = HttpClient.newBuilder()
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .connectTimeout(Duration.ofSeconds(timeoutSeconds))
@@ -127,7 +116,7 @@ public class FetchUrlTool implements ToolExecutor {
             return CONTENT_START + text + CONTENT_END;
 
         } catch (java.net.http.HttpTimeoutException e) {
-            return "ERROR: Request timed out after " + timeoutSeconds + "s fetching " + url;
+            return "ERROR: Request timed out after " + settings.get("tools.fetch-url.timeout-seconds", "15") + "s fetching " + url;
         } catch (Exception e) {
             return "ERROR: Failed to fetch " + url + ": " + e.getMessage();
         }
@@ -192,7 +181,9 @@ public class FetchUrlTool implements ToolExecutor {
         }
 
         // Enforce domain allowlist when configured
-        List<String> domains = allowedDomains.orElse(List.of());
+        String allowedDomainsRaw = settings.get("tools.fetch-url.allowed-domains", "");
+        List<String> domains = allowedDomainsRaw.isBlank() ? List.of()
+                : Arrays.stream(allowedDomainsRaw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).collect(Collectors.toList());
         if (!domains.isEmpty()) {
             String normalizedHost = host.toLowerCase();
             boolean permitted = domains.stream()

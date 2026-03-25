@@ -8,13 +8,14 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches the current Java LTS version from the Eclipse Adoptium (Temurin) API.
@@ -36,8 +37,7 @@ public class JavaLtsClient {
     private static final String AVAILABLE_RELEASES_URL =
             "https://api.adoptium.net/v3/info/available_releases";
 
-    @ConfigProperty(name = "upgrade.scheduler.version-cache-minutes", defaultValue = "60")
-    long cacheDurationMinutes;
+    @Inject SettingsService settings;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
@@ -92,6 +92,7 @@ public class JavaLtsClient {
 
     private Optional<String> cacheAndReturn(String version) {
         cachedVersion = version;
+        long cacheDurationMinutes = Long.parseLong(settings.get("upgrade.scheduler.version-cache-minutes", "60"));
         cacheExpiry = Instant.now().plusSeconds(cacheDurationMinutes * 60);
         LOG.infof("JavaLtsClient: current Java LTS version is %s (cached for %d min)",
                 version, cacheDurationMinutes);

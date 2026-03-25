@@ -24,7 +24,7 @@ import com.eneve.agent.planner.PlannerService;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.util.UrlUtils;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -70,9 +70,9 @@ public class UpgradeService {
     @Inject TeamsNotifier teamsNotifier;
     @Inject GitPlatformService platformService;
     @Inject AikidoService aikidoService;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "upgrade.scheduler.default-branch", defaultValue = "develop")
-    String defaultBranch;
+    private String defaultBranch() { return settings.get("upgrade.scheduler.default-branch", "develop"); }
 
     /** Tracks plans started by this service: planId → upgrade context needed on completion. */
     private final ConcurrentHashMap<String, UpgradeContext> activePlans = new ConcurrentHashMap<>();
@@ -271,7 +271,7 @@ public class UpgradeService {
                 migrationNotes, aikidoFindings, latestJdbcVersion, currentJdbcVersion, jdbcSource);
 
         ExecutionPlan plan = plannerService.generatePlan(
-                specText, cleanUrl, defaultBranch, "UPGRADE", archetype + "-" + latestVersion);
+                specText, cleanUrl, defaultBranch(), "UPGRADE", archetype + "-" + latestVersion);
 
         if (plan == null) {
             LOG.errorf("UpgradeService: plan generation failed for %s/%s", repo.workspace(), repo.repoSlug());
@@ -407,7 +407,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 javaNote,
                 currentVersion, latestVersion,
-                branchName, defaultBranch,
+                branchName, defaultBranch(),
                 migrationSection);
     }
 
@@ -434,7 +434,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 latestVersion, latestVersion, latestVersion, latestVersion,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildWildflySpec(String currentVersion, String latestVersion, String branchName,
@@ -475,7 +475,7 @@ public class UpgradeService {
                 jdbcStep,
                 compileStep, testStep,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     /**
@@ -549,7 +549,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 latestMajor, latestMajor, latestMajor, latestMajor,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildReactSpec(String currentVersion, String latestVersion, String branchName) {
@@ -577,7 +577,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 latestVersion, latestVersion, latestVersion,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildLaravelSpec(String currentVersion, String latestVersion, String branchName) {
@@ -605,7 +605,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 latestMajor, latestMajor,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildSymfonySpec(String currentVersion, String latestVersion, String branchName) {
@@ -633,7 +633,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 latestMajor, latestMajor,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildPhpSpec(String currentVersion, String latestVersion, String branchName) {
@@ -663,7 +663,7 @@ public class UpgradeService {
                 currentVersion, latestVersion,
                 majorMinor, majorMinor, noDotsVersion,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     private String buildGenericSpec(String archetype, String currentVersion,
@@ -687,7 +687,7 @@ public class UpgradeService {
                 archetype, currentVersion, latestVersion,
                 archetype, latestVersion,
                 currentVersion, latestVersion,
-                branchName, defaultBranch);
+                branchName, defaultBranch());
     }
 
     // ─── Version comparison helpers ──────────────────────────────────────────────

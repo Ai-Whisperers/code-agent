@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -35,11 +34,10 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     private static final Logger LOG = Logger.getLogger(BitbucketPlatformService.class);
 
-    @ConfigProperty(name = "bitbucket.base.url", defaultValue = "https://api.bitbucket.org/2.0")
-    String baseUrl;
-
     @Inject
     SettingsService settingsService;
+
+    private String baseUrl() { return settingsService.get("bitbucket.base.url", "https://api.bitbucket.org/2.0"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -223,7 +221,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse comment thread response: %s", e.getMessage());
                 break;
@@ -277,7 +275,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse PR comments response: %s", e.getMessage());
                 break;
@@ -324,7 +322,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                 }
 
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse agent PR comments response: %s", e.getMessage());
                 break;
@@ -348,13 +346,13 @@ public class BitbucketPlatformService implements GitPlatformService {
     public String uploadDownload(String org, String repo, String filename,
                                  byte[] data, String contentType) {
         String path = "/repositories/" + org + "/" + repo + "/downloads";
-        requireTrustedUrl(baseUrl + path);
+        requireTrustedUrl(baseUrl() + path);
         String boundary = "----DownloadBoundary" + System.nanoTime();
         byte[] body = buildMultipartBody(boundary, filename, data, contentType);
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
                     .POST(HttpRequest.BodyPublishers.ofByteArray(body))
@@ -429,7 +427,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     }
                 }
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse repository list response: %s", e.getMessage());
                 break;
@@ -463,7 +461,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     }
                 }
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
                 break;
@@ -543,7 +541,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                     }
                 }
                 String next = root.path("next").asText(null);
-                path = next != null ? next.replace(baseUrl, "") : null;
+                path = next != null ? next.replace(baseUrl(), "") : null;
             } catch (Exception e) {
                 LOG.errorf("Failed to parse webhook list response for %s/%s: %s", workspace, repo, e.getMessage());
                 break;
@@ -559,10 +557,10 @@ public class BitbucketPlatformService implements GitPlatformService {
         // before embedding in a URI path where { and } are illegal characters.
         String bareUuid = uuid.replaceAll("[{}]", "");
         String deletePath = "/repositories/" + workspace + "/" + repo + "/hooks/" + bareUuid;
-        requireTrustedUrl(baseUrl + deletePath);
+        requireTrustedUrl(baseUrl() + deletePath);
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + deletePath))
+                    .uri(URI.create(baseUrl() + deletePath))
                     .header("Authorization", authHeader())
                     .DELETE()
                     .build();
@@ -585,10 +583,10 @@ public class BitbucketPlatformService implements GitPlatformService {
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {
-        requireTrustedUrl(baseUrl + path);
+        requireTrustedUrl(baseUrl() + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
                     .GET()
@@ -624,10 +622,10 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private String sendAndReturn(String path, String body, String method, String operation) {
-        requireTrustedUrl(baseUrl + path);
+        requireTrustedUrl(baseUrl() + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -767,7 +765,7 @@ public class BitbucketPlatformService implements GitPlatformService {
      */
     private void requireTrustedUrl(String url) {
         try {
-            String configuredHost = URI.create(baseUrl).getHost();
+            String configuredHost = URI.create(baseUrl()).getHost();
             String targetHost = URI.create(url).getHost();
             if (!targetHost.equalsIgnoreCase(configuredHost)) {
                 throw new IllegalArgumentException(

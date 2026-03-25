@@ -9,13 +9,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantLock;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Aikido Security REST API client.
@@ -37,17 +38,12 @@ public class AikidoService {
 
     private static final Logger LOG = Logger.getLogger(AikidoService.class);
 
-    @ConfigProperty(name = "aikido.base.url", defaultValue = "https://app.aikido.dev")
-    String baseUrl;
+    @Inject SettingsService settings;
 
-    @ConfigProperty(name = "aikido.client.id", defaultValue = "")
-    String clientId;
-
-    @ConfigProperty(name = "aikido.client.secret", defaultValue = "")
-    String clientSecret;
-
-    @ConfigProperty(name = "aikido.ci.api.secret", defaultValue = "")
-    String ciApiSecret;
+    private String baseUrl() { return settings.get("aikido.base.url", "https://app.aikido.dev"); }
+    private String clientId() { return settings.get("aikido.client.id", ""); }
+    private String clientSecret() { return settings.getSecret("aikido.client.secret"); }
+    private String ciApiSecret() { return settings.getSecret("aikido.ci.api.secret"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -57,8 +53,9 @@ public class AikidoService {
     private final ReentrantLock tokenLock = new ReentrantLock();
 
     public boolean isEnabled() {
-        return clientId != null && !clientId.isBlank()
-                && clientSecret != null && !clientSecret.isBlank();
+        String id = clientId();
+        String secret = clientSecret();
+        return id != null && !id.isBlank() && secret != null && !secret.isBlank();
     }
 
     // =========================================================================
@@ -81,14 +78,14 @@ public class AikidoService {
     private void refreshToken() {
         try {
             String basicAuth = java.util.Base64.getEncoder()
-                    .encodeToString((clientId + ":" + clientSecret)
+                    .encodeToString((clientId() + ":" + clientSecret())
                             .getBytes(java.nio.charset.StandardCharsets.UTF_8));
 
             String body = objectMapper.writeValueAsString(
                     java.util.Map.of("grant_type", "client_credentials"));
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/api/oauth/token"))
+                    .uri(URI.create(baseUrl() + "/api/oauth/token"))
                     .header("Authorization", "Basic " + basicAuth)
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -406,7 +403,7 @@ public class AikidoService {
      */
     public int triggerCiScan(String repositoryId, String baseCommitId, String headCommitId,
                              String branchName) {
-        if (ciApiSecret == null || ciApiSecret.isBlank()) {
+        if (ciApiSecret() == null || ciApiSecret().isBlank()) {
             LOG.warn("Aikido CI API secret not configured, skipping scan trigger");
             return -1;
         }
@@ -421,8 +418,8 @@ public class AikidoService {
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/api/integrations/continuous_integration/scan/repository"))
-                    .header("X-AIK-API-SECRET", ciApiSecret)
+                    .uri(URI.create(baseUrl() + "/api/integrations/continuous_integration/scan/repository"))
+                    .header("X-AIK-API-SECRET", ciApiSecret())
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();
@@ -447,12 +444,12 @@ public class AikidoService {
      * Poll CI scan status. Returns "passed", "failed", "running", or null on error.
      */
     public String pollCiScanStatus(int scanId) {
-        if (ciApiSecret == null || ciApiSecret.isBlank()) return null;
+        if (ciApiSecret() == null || ciApiSecret().isBlank()) return null;
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + "/api/integrations/continuous_integration/scan/repository/" + scanId))
-                    .header("X-AIK-API-SECRET", ciApiSecret)
+                    .uri(URI.create(baseUrl() + "/api/integrations/continuous_integration/scan/repository/" + scanId))
+                    .header("X-AIK-API-SECRET", ciApiSecret())
                     .header("Accept", "application/json")
                     .GET()
                     .build();
@@ -480,7 +477,7 @@ public class AikidoService {
     private String get(String path, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(baseUrl + path))
+                    .uri(URI.create(baseUrl() + path))
                     .header("Authorization", "Bearer " + getAccessToken())
                     .header("Accept", "application/json")
                     .GET()

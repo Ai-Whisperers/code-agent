@@ -9,7 +9,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Typed;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.net.URI;
@@ -43,11 +42,10 @@ public class GitLabPlatformService implements GitPlatformService {
 
     private static final Logger LOG = Logger.getLogger(GitLabPlatformService.class);
 
-    @ConfigProperty(name = "gitlab.base.url", defaultValue = "https://gitlab.com/api/v4")
-    String baseUrl;
-
     @Inject
     SettingsService settingsService;
+
+    private String baseUrl() { return settingsService.get("gitlab.base.url", "https://gitlab.com/api/v4"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -57,7 +55,7 @@ public class GitLabPlatformService implements GitPlatformService {
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests";
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests";
         String body = """
                 {
                   "source_branch": "%s",
@@ -89,7 +87,7 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public void mergePullRequest(String org, String project, String repo, String prId) {
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId + "/merge";
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId + "/merge";
         putAndReturn(url, "{}", "merge MR !" + prId);
         LOG.infof("Merged MR !%s in %s/%s", prId, org, repo);
     }
@@ -97,7 +95,7 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public void declinePullRequest(String org, String project, String repo, String prId) {
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId;
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId;
         String body = """
                 { "state_event": "close" }
                 """;
@@ -108,7 +106,7 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public Map<String, String> getPullRequestInfo(String org, String project, String repo, String prId) {
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId;
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId;
         String responseBody = getAndReturn(url, "get MR !" + prId);
 
         try {
@@ -130,7 +128,7 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId + "/notes";
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId + "/notes";
         String body = """
                 { "body": "%s" }
                 """.formatted(escapeJson(commentBody));
@@ -145,7 +143,7 @@ public class GitLabPlatformService implements GitPlatformService {
                                 long commentId, String commentBody) {
         String safeId = sanitizeId(prId);
         String projectPath = encodedProjectPath(org, repo);
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + safeId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + safeId
                 + "/notes/" + commentId;
         String body = """
                 { "body": "%s" }
@@ -166,7 +164,7 @@ public class GitLabPlatformService implements GitPlatformService {
             return addPrComment(org, project, repo, prId, commentBody);
         }
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId + "/discussions";
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId + "/discussions";
         String body = """
                 {
                   "body": "%s",
@@ -211,7 +209,7 @@ public class GitLabPlatformService implements GitPlatformService {
             return addPrComment(org, project, repo, prId, commentBody);
         }
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions/" + discussionId + "/notes";
         String body = """
                 { "body": "%s" }
@@ -229,7 +227,7 @@ public class GitLabPlatformService implements GitPlatformService {
         String projectPath = encodedProjectPath(org, repo);
         List<ThreadComment> result = new ArrayList<>();
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions?per_page=100";
 
         while (url != null) {
@@ -281,7 +279,7 @@ public class GitLabPlatformService implements GitPlatformService {
         String projectPath = encodedProjectPath(org, repo);
         List<String> comments = new ArrayList<>();
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions?per_page=100";
 
         while (url != null) {
@@ -334,7 +332,7 @@ public class GitLabPlatformService implements GitPlatformService {
         String projectPath = encodedProjectPath(org, repo);
         List<AgentComment> comments = new ArrayList<>();
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions?per_page=100";
 
         while (url != null) {
@@ -384,7 +382,7 @@ public class GitLabPlatformService implements GitPlatformService {
             return;
         }
 
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions/" + discussionId + "?resolved=true";
         putAndReturn(url, "{}", "resolve discussion for note #" + noteId + " on MR !" + prId);
         LOG.infof("Resolved discussion %s (note %d) on MR !%s in %s/%s",
@@ -398,7 +396,7 @@ public class GitLabPlatformService implements GitPlatformService {
      * Used to post replies into the correct discussion thread and to resolve discussions.
      */
     private String resolveDiscussionId(String projectPath, String prId, long noteId) {
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
                 + "/discussions?per_page=100";
 
         while (url != null) {
@@ -430,7 +428,7 @@ public class GitLabPlatformService implements GitPlatformService {
      * Fetch the diff_refs from a merge request, needed to post inline comments with valid positions.
      */
     private DiffRefs fetchDiffRefs(String projectPath, String prId) {
-        String url = baseUrl + "/projects/" + projectPath + "/merge_requests/" + prId;
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId;
         try {
             String responseBody = getAndReturn(url, "get MR diff_refs !" + prId);
             JsonNode node = objectMapper.readTree(responseBody);
@@ -587,7 +585,7 @@ public class GitLabPlatformService implements GitPlatformService {
      */
     private void requireTrustedUrl(String url) {
         try {
-            String configuredHost = URI.create(baseUrl).getHost();
+            String configuredHost = URI.create(baseUrl()).getHost();
             String targetHost = URI.create(url).getHost();
             if (!targetHost.equalsIgnoreCase(configuredHost)) {
                 throw new IllegalArgumentException(

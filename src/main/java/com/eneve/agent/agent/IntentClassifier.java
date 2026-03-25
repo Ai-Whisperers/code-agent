@@ -18,7 +18,7 @@ import com.anthropic.models.messages.Usage;
 
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.AiCallStore;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -34,9 +34,6 @@ public class IntentClassifier {
 
     private static final Logger LOG = Logger.getLogger(IntentClassifier.class);
 
-    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
-    String fastModelName;
-
     @Inject
     AnthropicClient client;
 
@@ -45,6 +42,13 @@ public class IntentClassifier {
 
     @Inject
     PromptTemplateService promptTemplates;
+
+    @Inject
+    SettingsService settings;
+
+    private String fastModelName() {
+        return settings.get("anthropic.fast-model", "claude-3-5-haiku-20241022");
+    }
 
     /**
      * Classify the developer's reply. Returns FIX if the developer is requesting
@@ -79,7 +83,7 @@ public class IntentClassifier {
         ));
 
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(fastModelName))
+                .model(Model.of(fastModelName()))
                 .maxTokens(50)
                 .messages(List.of(
                         MessageParam.builder()
@@ -96,7 +100,7 @@ public class IntentClassifier {
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
         aiCallStore.save(new AiCallRecord(
-                null, null, "INTENT_CLASSIFICATION", fastModelName, null,
+                null, null, "INTENT_CLASSIFICATION", fastModelName(), null,
                 0, 0, 0, 0,
                 null, null, durationMs,
                 true, e.getMessage(), Instant.now(),
@@ -108,7 +112,7 @@ public class IntentClassifier {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, null, "INTENT_CLASSIFICATION", fastModelName, null,
+                null, null, "INTENT_CLASSIFICATION", fastModelName(), null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),

@@ -30,7 +30,7 @@ import com.eneve.agent.workspace.WorkspaceContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -55,9 +55,6 @@ public class FindingResolver {
     private static final long INITIAL_BACKOFF_MS = 5_000;
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    @ConfigProperty(name = "anthropic.fast-model", defaultValue = "claude-3-5-haiku-20241022")
-    String fastModelName;
-
     @Inject
     AnthropicClient client;
 
@@ -69,6 +66,13 @@ public class FindingResolver {
 
     @Inject
     PromptTemplateService promptTemplates;
+
+    @Inject
+    SettingsService settings;
+
+    private String fastModelName() {
+        return settings.get("anthropic.fast-model", "claude-3-5-haiku-20241022");
+    }
 
     private record FindingCandidate(OpenFinding finding, String contextSnippet) {}
 
@@ -139,7 +143,7 @@ public class FindingResolver {
         int maxTokens = Math.max(candidates.size() * 15 + 50, 256);
 
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(fastModelName))
+                .model(Model.of(fastModelName()))
                 .maxTokens(maxTokens)
                 .messages(List.of(
                         MessageParam.builder()
@@ -156,7 +160,7 @@ public class FindingResolver {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, jobId, "FINDING_RESOLUTION", fastModelName, null,
+                null, jobId, "FINDING_RESOLUTION", fastModelName(), null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
@@ -242,7 +246,7 @@ public class FindingResolver {
         ));
 
         MessageCreateParams params = MessageCreateParams.builder()
-                .model(Model.of(fastModelName))
+                .model(Model.of(fastModelName()))
                 .maxTokens(10)
                 .messages(List.of(
                         MessageParam.builder()
@@ -259,7 +263,7 @@ public class FindingResolver {
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
             aiCallStore.save(new AiCallRecord(
-                    null, jobId, "FINDING_RESOLUTION", fastModelName, null,
+                    null, jobId, "FINDING_RESOLUTION", fastModelName(), null,
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
@@ -271,7 +275,7 @@ public class FindingResolver {
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
         aiCallStore.save(new AiCallRecord(
-                null, jobId, "FINDING_RESOLUTION", fastModelName, null,
+                null, jobId, "FINDING_RESOLUTION", fastModelName(), null,
                 usage.inputTokens(), usage.outputTokens(),
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),

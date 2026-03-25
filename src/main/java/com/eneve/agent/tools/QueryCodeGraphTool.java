@@ -6,9 +6,9 @@ import java.util.Map;
 import com.eneve.agent.agent.store.CodeGraphStore;
 import com.eneve.agent.workspace.WorkspaceContext;
 
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 @ApplicationScoped
 public class QueryCodeGraphTool implements ToolExecutor {
@@ -16,11 +16,8 @@ public class QueryCodeGraphTool implements ToolExecutor {
     @Inject
     CodeGraphStore codeGraphStore;
 
-    @ConfigProperty(name = "code-graph.cross-repo.enabled", defaultValue = "true")
-    boolean crossRepoEnabled;
-
-    @ConfigProperty(name = "code-graph.cross-repo.critical-threshold", defaultValue = "3")
-    int criticalThreshold;
+    @Inject
+    SettingsService settings;
 
     @Override
     public String name() {
@@ -56,7 +53,7 @@ public class QueryCodeGraphTool implements ToolExecutor {
                     + (available != null ? " Known repos: " + available : "");
         }
 
-        if (ws != null && "workspace".equalsIgnoreCase(scope) && crossRepoEnabled) {
+        if (ws != null && "workspace".equalsIgnoreCase(scope) && Boolean.parseBoolean(settings.get("code-graph.cross-repo.enabled", "true"))) {
             return executeWorkspaceScope(ws, repo, symbol, relation);
         }
 
@@ -160,7 +157,7 @@ public class QueryCodeGraphTool implements ToolExecutor {
         StringBuilder sb = new StringBuilder(localResults);
         sb.append("\nCross-repo (workspace-wide):\n");
 
-        if (count >= criticalThreshold) {
+        if (count >= Integer.parseInt(settings.get("code-graph.cross-repo.critical-threshold", "3"))) {
             sb.append("- **CRITICAL**: `").append(symbol)
                     .append("` is used across **").append(count)
                     .append("** other repositories — this is a widely-shared symbol. ")

@@ -17,7 +17,7 @@ import com.eneve.agent.agent.store.AiCallStore;
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.util.UrlUtils;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
+import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -32,11 +32,9 @@ import jakarta.inject.Inject;
 public class PlannerService {
 
     private static final Logger LOG = Logger.getLogger(PlannerService.class);
-    @ConfigProperty(name = "anthropic.model", defaultValue = "claude-sonnet-4-20250514")
-    String modelName;
 
-    @ConfigProperty(name = "planner.max-tokens", defaultValue = "8192")
-    long maxTokens;
+    @Inject
+    SettingsService settings;
 
     @Inject
     AnthropicClient client;
@@ -107,6 +105,8 @@ public class PlannerService {
     }
 
     private String callClaude(String prompt, String planId) {
+        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        long maxTokens = Long.parseLong(settings.get("planner.max-tokens", "8192"));
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(maxTokens)

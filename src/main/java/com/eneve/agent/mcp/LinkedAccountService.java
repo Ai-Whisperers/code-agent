@@ -4,9 +4,9 @@ import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.mcp.LinkedAccountStore.AccountRow;
 import com.eneve.agent.settings.SettingsEncryption;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.List;
@@ -35,8 +35,8 @@ public class LinkedAccountService {
     @Inject
     ConfluenceService confluenceService;
 
-    @ConfigProperty(name = "mcp.system-credential-fallback.enabled", defaultValue = "false")
-    boolean systemCredentialFallbackEnabled;
+    @Inject
+    SettingsService settings;
 
     // Use credential records from the respective services
     public record AccountView(
@@ -95,7 +95,7 @@ public class LinkedAccountService {
         }
 
         // Fallback to system credentials
-        if (systemCredentialFallbackEnabled && jiraService.isConfigured()) {
+        if (Boolean.parseBoolean(settings.get("mcp.system-credential-fallback.enabled", "false")) && jiraService.isConfigured()) {
             LOG.debugf("No linked Jira account for user=%s, using system credentials", userId);
             return Optional.of(new JiraService.JiraCredentials(
                     jiraService.getBaseUrl(),
@@ -138,7 +138,7 @@ public class LinkedAccountService {
         }
 
         // Fallback to system credentials
-        if (systemCredentialFallbackEnabled && confluenceService.isEnabled()) {
+        if (Boolean.parseBoolean(settings.get("mcp.system-credential-fallback.enabled", "false")) && confluenceService.isEnabled()) {
             LOG.debugf("No linked Confluence account for user=%s, using system credentials", userId);
             return Optional.of(new ConfluenceService.ConfluenceCredentials(
                     confluenceService.getBaseUrl(),
