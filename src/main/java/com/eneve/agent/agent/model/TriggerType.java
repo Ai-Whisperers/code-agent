@@ -35,6 +35,9 @@ public final class TriggerType {
     // ── Teams ─────────────────────────────────────────────────────────────────
     public static final String TEAMS_MESSAGE = "teams.message";
 
+    // ── Quality Report ────────────────────────────────────────────────────────
+    public static final String QUALITY_REPORT_GENERATED = "quality.report_generated";
+
     // ── Category sets ─────────────────────────────────────────────────────────
 
     public static final Set<String> SCM_TRIGGERS = Set.of(
@@ -56,6 +59,8 @@ public final class TriggerType {
     public static final Set<String> CRON_TRIGGERS = Set.of(CRON);
 
     public static final Set<String> TEAMS_TRIGGERS = Set.of(TEAMS_MESSAGE);
+
+    public static final Set<String> QUALITY_TRIGGERS = Set.of(QUALITY_REPORT_GENERATED);
 
     /**
      * Returns true if the trigger type is in the SCM category.
@@ -97,6 +102,13 @@ public final class TriggerType {
      */
     public static boolean isTeams(String triggerType) {
         return TEAMS_TRIGGERS.contains(triggerType);
+    }
+
+    /**
+     * Returns true if the trigger type is in the Quality Report category.
+     */
+    public static boolean isQuality(String triggerType) {
+        return QUALITY_TRIGGERS.contains(triggerType);
     }
 
     private TriggerType() {

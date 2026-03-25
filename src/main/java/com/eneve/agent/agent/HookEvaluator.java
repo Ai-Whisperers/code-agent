@@ -2,6 +2,8 @@ package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.model.AutomationHook;
 import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.model.QualityReport;
+import com.eneve.agent.agent.model.TriggerType;
 import com.eneve.agent.agent.store.HookStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
@@ -252,6 +254,136 @@ public class HookEvaluator {
         LOG.infof("Hook '%s' triggered job %s for %s/%s (branch: %s)",
                 hook.name(), jobId, workspace, repoSlug, targetBranch);
         return jobId;
+    }
+
+    /**
+     * Evaluates all {@code quality.report_generated} hooks against a completed quality report.
+     * Hooks are fired when the report's score or coverage falls <em>below</em> the configured
+     * thresholds ({@code minScore} and {@code minCoverage} in the hook's trigger filter).
+     * A missing threshold means "always match that dimension".
+     *
+     * <p>The full report metrics are injected into the hook prompt as trigger context.
+     */
+    public HookEvalResult evaluateQualityReport(QualityReport report, String repoUrl) {
+        List<AutomationHook> hooks = hookStore.findByTriggerType(TriggerType.QUALITY_REPORT_GENERATED);
+        if (hooks.isEmpty()) {
+            LOG.debugf("No quality report hooks configured");
+            return HookEvalResult.empty();
+        }
+
+        // score() is [0,1] — convert to [0,100] to match the UI filter values
+        double scorePercent   = report.score() * 100.0;
+        // lineRate() is already in [0,100] scale
+        double coveragePct    = report.coverage() != null ? report.coverage().lineRate() : -1.0;
+
+        List<String> submittedJobIds    = new ArrayList<>();
+        List<String> executedHookNames  = new ArrayList<>();
+
+        for (AutomationHook hook : hooks) {
+            Map<String, String> filter = hook.triggerFilter();
+
+            // Optional repoSlug restriction (comma-separated OR)
+            if (filter != null && filter.containsKey("repoSlug")) {
+                boolean slugMatch = false;
+                for (String s : filter.get("repoSlug").split(",")) {
+                    if (report.repoSlug().equalsIgnoreCase(s.trim())) { slugMatch = true; break; }
+                }
+                if (!slugMatch) {
+                    LOG.debugf("Hook '%s' skipped: repoSlug '%s' not in filter '%s'",
+                            hook.name(), report.repoSlug(), filter.get("repoSlug"));
+                    continue;
+                }
+            }
+
+            // Numeric threshold: fire only when BELOW the configured value
+            if (filter != null && filter.containsKey("minScore")) {
+                try {
+                    double threshold = Double.parseDouble(filter.get("minScore"));
+                    if (scorePercent >= threshold) {
+                        LOG.debugf("Hook '%s' skipped: score %.2f >= threshold %.2f",
+                                hook.name(), scorePercent, threshold);
+                        continue;
+                    }
+                } catch (NumberFormatException ignored) {
+                    LOG.warnf("Hook '%s' has non-numeric minScore filter: %s", hook.name(), filter.get("minScore"));
+                }
+            }
+
+            if (filter != null && filter.containsKey("minCoverage")) {
+                try {
+                    double threshold = Double.parseDouble(filter.get("minCoverage"));
+                    if (coveragePct < 0 || coveragePct >= threshold) {
+                        LOG.debugf("Hook '%s' skipped: coverage %.2f >= threshold %.2f",
+                                hook.name(), coveragePct, threshold);
+                        continue;
+                    }
+                } catch (NumberFormatException ignored) {
+                    LOG.warnf("Hook '%s' has non-numeric minCoverage filter: %s", hook.name(), filter.get("minCoverage"));
+                }
+            }
+
+            if (repoSettingsStore.isHookDisabled(report.workspace(), report.repoSlug(), hook.name())) {
+                LOG.infof("Hook '%s' skipped: disabled for %s/%s via repo settings",
+                        hook.name(), report.workspace(), report.repoSlug());
+                continue;
+            }
+
+            Map<String, String> context = buildQualityContext(report, scorePercent, coveragePct);
+            String jobId = submitHookJobWithContext(hook, report.workspace(), report.repoSlug(), repoUrl, context);
+            if (jobId != null) {
+                submittedJobIds.add(jobId);
+                executedHookNames.add(hook.name());
+            }
+        }
+
+        LOG.debugf("Quality report hook evaluation for %s/%s: %d hook(s) triggered",
+                report.workspace(), report.repoSlug(), submittedJobIds.size());
+        return new HookEvalResult(submittedJobIds, executedHookNames);
+    }
+
+    private static Map<String, String> buildQualityContext(QualityReport report,
+                                                           double scorePercent,
+                                                           double coveragePct) {
+        Map<String, String> ctx = new java.util.LinkedHashMap<>();
+        ctx.put("reportId",  report.reportId());
+        ctx.put("workspace", report.workspace());
+        ctx.put("repoSlug",  report.repoSlug());
+        ctx.put("branch",    report.branch());
+        ctx.put("score",     String.format("%.1f / 100", scorePercent));
+
+        if (report.coverage() != null) {
+            ctx.put("lineCoverage",    String.format("%.1f%%", report.coverage().lineRate()));
+            ctx.put("branchCoverage",  String.format("%.1f%%", report.coverage().branchRate()));
+            ctx.put("methodCoverage",  String.format("%.1f%%", report.coverage().methodRate()));
+        } else if (coveragePct < 0) {
+            ctx.put("lineCoverage", "n/a");
+        }
+
+        if (report.linter() != null) {
+            ctx.put("linterFindings", String.valueOf(report.linter().totalFindings()));
+            ctx.put("linterErrors",   String.valueOf(report.linter().errorCount()));
+            ctx.put("linterWarnings", String.valueOf(report.linter().warningCount()));
+        }
+
+        if (report.aikido() != null) {
+            ctx.put("securityIssues",    String.valueOf(report.aikido().totalIssues()));
+            ctx.put("securityCritical",  String.valueOf(report.aikido().criticalCount()));
+            ctx.put("securityHigh",      String.valueOf(report.aikido().highCount()));
+        }
+
+        if (report.complexity() != null) {
+            ctx.put("avgComplexity",          String.format("%.2f", report.complexity().avgComplexity()));
+            ctx.put("maxComplexity",          String.valueOf(report.complexity().maxComplexity()));
+            ctx.put("methodsAboveThreshold",  String.valueOf(report.complexity().methodsAboveThreshold()));
+        }
+
+        if (report.testPresence() != null) {
+            ctx.put("testRatio",     String.format("%.1f%%", report.testPresence().testRatio() * 100.0));
+            ctx.put("sourceFiles",   String.valueOf(report.testPresence().sourceFiles()));
+            ctx.put("testFiles",     String.valueOf(report.testPresence().testFiles()));
+        }
+
+        return ctx;
     }
 
     private static boolean matchesBranch(String pattern, String branch) {

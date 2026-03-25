@@ -1,8 +1,10 @@
 package com.eneve.agent.agent.handlers;
 
+import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobHandler;
 import com.eneve.agent.agent.JobLifecycleHelper;
 import com.eneve.agent.agent.QualityReportCollector;
+import com.eneve.agent.agent.model.HookEvalResult;
 import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.QualityReportStore;
@@ -30,6 +32,7 @@ public class QualityReportHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject GitPlatformService platformService;
     @Inject SettingsService settings;
+    @Inject HookEvaluator hookEvaluator;
 
     @Override
     public JobType jobType() {
@@ -84,6 +87,19 @@ public class QualityReportHandler implements JobHandler {
 
             LOG.infof("QualityReport job %s complete for %s/%s branch=%s: score=%.4f",
                     job.getJobId(), workspaceName, repoSlug, request.branch(), report.score());
+
+            // Evaluate any hooks registered for the quality.report_generated trigger
+            try {
+                HookEvalResult hookResult = hookEvaluator.evaluateQualityReport(report, request.repoUrl());
+                if (!hookResult.executedHookNames().isEmpty()) {
+                    LOG.infof("Quality report hooks triggered for %s/%s (branch=%s): %s",
+                            workspaceName, repoSlug, request.branch(), hookResult.executedHookNames());
+                }
+            } catch (Exception e) {
+                // Hook evaluation failure must not roll back a successful quality report
+                LOG.warnf("Quality report hook evaluation failed for %s/%s: %s",
+                        workspaceName, repoSlug, e.getMessage());
+            }
 
         } catch (Exception e) {
             lifecycle.failQualityReport(job, "Unexpected error in quality report job: " + e.getMessage());
