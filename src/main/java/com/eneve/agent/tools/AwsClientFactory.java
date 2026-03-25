@@ -25,17 +25,17 @@ import jakarta.inject.Inject;
  *
  * <p>Authentication strategy:
  * <ol>
- *   <li>Base credentials: {@link DefaultCredentialsProvider} — picks up the ECS task role in
- *       production, or {@code AWS_ACCESS_KEY_ID} / {@code AWS_SECRET_ACCESS_KEY} env vars in
- *       local development (set via {@code aws.access-key-id} / {@code aws.secret-access-key}
- *       config properties).</li>
+ *   <li>Base credentials: the Quarkus-managed {@link StsClient} (configured via
+ *       {@code quarkus.sts.*} properties) is used for the default credentials path — picks up
+ *       the ECS task role in production or {@code AWS_ACCESS_KEY_ID} / {@code AWS_SECRET_ACCESS_KEY}
+ *       env vars in local development.</li>
  *   <li>Cross-account access: when a {@code roleArn} is provided, STS {@code AssumeRole} is
  *       called to obtain temporary credentials scoped to the target customer account. This is the
  *       normal path in production — each customer account contains an {@code agent-readonly} role
  *       that trusts the code-agent's AWS account.</li>
- *   <li>Local dev fallback: when {@code roleArn} is blank the base credentials are used directly,
- *       which is useful when the developer's local AWS profile already has access to the target
- *       account.</li>
+ *   <li>Explicit credentials override: when account-specific or global {@code aws.access-key-id} /
+ *       {@code aws.secret-access-key} config properties are present, a dedicated STS client is built
+ *       with those credentials instead of the Quarkus-managed one.</li>
  * </ol>
  *
  * <p>Required IAM permissions:
@@ -59,6 +59,10 @@ public class AwsClientFactory {
 
     @Inject
     SettingsService settingsService;
+
+    /** Quarkus-managed STS client, configured via {@code quarkus.sts.*} properties. */
+    @Inject
+    StsClient stsClient;
 
     // ─── Public factory methods ───────────────────────────────────────────────────
 
@@ -101,21 +105,25 @@ public class AwsClientFactory {
     }
 
     private AwsCredentialsProvider resolveCredentials(String roleArn, String region, CloudAccount account) {
-        AwsCredentialsProvider base = baseCredentials(account);
-
         if (roleArn == null || roleArn.isBlank()) {
             LOG.debugf("No roleArn provided — using base credentials directly");
-            return base;
+            return baseCredentials(account);
         }
 
         try {
             Region stsRegion = toRegion(region);
-            StsClient sts = StsClient.builder()
-                    .credentialsProvider(base)
-                    .region(stsRegion)
-                    .build();
 
-            AssumeRoleResponse response = sts.assumeRole(AssumeRoleRequest.builder()
+            // Use the Quarkus-managed STS client for the default credentials path (ECS task role /
+            // env vars). When explicit per-account or global credentials are configured, build a
+            // dedicated STS client with those credentials instead.
+            StsClient effectiveSts = hasExplicitCredentials(account)
+                    ? StsClient.builder()
+                            .credentialsProvider(baseCredentials(account))
+                            .region(stsRegion)
+                            .build()
+                    : stsClient;
+
+            AssumeRoleResponse response = effectiveSts.assumeRole(AssumeRoleRequest.builder()
                     .roleArn(roleArn)
                     .roleSessionName(SESSION_NAME)
                     .durationSeconds(SESSION_DURATION_SECONDS)
@@ -134,6 +142,23 @@ public class AwsClientFactory {
         } catch (Exception e) {
             throw new RuntimeException("Failed to assume role " + roleArn + ": " + e.getMessage(), e);
         }
+    }
+
+    /**
+     * Returns {@code true} when explicit AWS credentials are available either from a linked
+     * {@link CloudAccount} or from the global {@code aws.access-key-id} / {@code aws.secret-access-key}
+     * config properties. When {@code false}, the Quarkus-managed {@link StsClient} (default
+     * credentials — ECS task role or environment variables) is used instead.
+     */
+    private boolean hasExplicitCredentials(CloudAccount account) {
+        if (account != null && account.credentials() != null) {
+            String keyId = account.credentials().getOrDefault("awsKeyId", "").strip();
+            String secret = account.credentials().getOrDefault("awsSecret", "").strip();
+            if (!keyId.isBlank() && !secret.isBlank()) return true;
+        }
+        String keyId = settingsService.getSecret("aws.access-key-id").strip();
+        String secret = settingsService.getSecret("aws.secret-access-key").strip();
+        return !keyId.isBlank() && !secret.isBlank();
     }
 
     /**
