@@ -1,6 +1,7 @@
 package com.eneve.agent;
 
 import com.eneve.agent.agent.store.WebhookAuditStore;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -11,6 +12,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
 @Path("/webhook-audit")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Webhook Audit", description = "Query the webhook event audit log")

@@ -3,6 +3,7 @@ package com.eneve.agent;
 import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.model.CloudAccountType;
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -15,6 +16,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import java.util.Map;
 
 @Path("/cloud-accounts")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Cloud Accounts", description = "Manage named cloud provider accounts and their credentials")

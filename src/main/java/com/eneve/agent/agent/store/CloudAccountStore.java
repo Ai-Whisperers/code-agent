@@ -56,6 +56,18 @@ public class CloudAccountStore {
     }
 
     public Optional<CloudAccount> getCloudAccount(String id) {
+        return fetchCloudAccount(id, true);
+    }
+
+    /**
+     * Returns the cloud account with plaintext (unmasked) credentials.
+     * Intended for internal use only — never expose the result via an API response.
+     */
+    public Optional<CloudAccount> getCloudAccountUnmasked(String id) {
+        return fetchCloudAccount(id, false);
+    }
+
+    private Optional<CloudAccount> fetchCloudAccount(String id, boolean maskSecrets) {
         String sql = """
                 SELECT id, name, description, type, credentials, created_at, updated_at
                 FROM cloud_accounts
@@ -66,7 +78,7 @@ public class CloudAccountStore {
             ps.setString(1, id);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
-                    return Optional.of(mapRow(rs, true));
+                    return Optional.of(mapRow(rs, maskSecrets));
                 }
             }
         } catch (SQLException e) {

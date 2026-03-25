@@ -19,6 +19,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DefaultValue;
@@ -144,6 +145,7 @@ public class QualityReportResource {
 
     @POST
     @Path("/{workspace}/{repoSlug}/{branch}")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Operation(
             operationId = "triggerQualityReport",
             summary = "Trigger a quality report collection",

@@ -15,6 +15,7 @@ import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.PartType;
 import org.jboss.resteasy.reactive.RestForm;
 
+import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -28,6 +29,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 @Path("/attachments")
+@Authenticated
 @Tag(name = "Chat Attachments", description = "File attachment management for chat conversations")
 @Produces(MediaType.APPLICATION_JSON)
 public class AttachmentsResource {

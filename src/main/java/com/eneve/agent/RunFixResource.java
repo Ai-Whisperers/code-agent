@@ -328,6 +328,7 @@ public class RunFixResource {
 
     @POST
     @Path("/review-pr")
+    @RolesAllowed({"app_developer", "app_admin"})
     @Tag(name = "Code Review")
     @Operation(
             operationId = "reviewPr",

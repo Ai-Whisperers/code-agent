@@ -12,6 +12,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -32,6 +33,7 @@ import jakarta.ws.rs.core.Response;
  * <p>Operations are idempotent — running the same endpoint multiple times is always safe.
  */
 @Path("/branches")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Tag(name = "Branch Management", description = "Standardise branch topology across Bitbucket repositories")
 public class BranchStandardizationResource {

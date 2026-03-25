@@ -12,6 +12,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
@@ -31,6 +32,7 @@ import jakarta.ws.rs.core.Response;
  * A DELETE removes the override, reverting the key to its JSON default.
  */
 @Path("/settings/prompts")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Prompt Templates", description = "Manage AI prompt templates — view defaults and create per-key overrides")

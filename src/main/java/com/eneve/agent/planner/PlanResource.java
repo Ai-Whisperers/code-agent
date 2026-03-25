@@ -15,8 +15,10 @@ import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.util.UrlUtils;
 import com.eneve.agent.workspace.WorkspaceContext;
 
+import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.Blocking;
+import jakarta.annotation.security.RolesAllowed;
 import io.smallrye.mutiny.Multi;
 import io.smallrye.mutiny.infrastructure.Infrastructure;
 import org.eclipse.microprofile.jwt.JsonWebToken;
@@ -57,6 +59,7 @@ import jakarta.ws.rs.sse.Sse;
  * to APPROVED when the human is satisfied.
  */
 @Path("/plans")
+@RolesAllowed({"app_developer", "app_admin"})
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Execution Plans", description = "AI-powered execution plan generation with human review and approval")

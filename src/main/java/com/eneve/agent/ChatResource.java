@@ -8,6 +8,7 @@ import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.security.AppPermission;
 import com.eneve.agent.security.PermissionService;
 
+import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
@@ -47,6 +48,7 @@ import jakarta.ws.rs.core.Response;
  * </pre>
  */
 @Path("/chat")
+@Authenticated
 @Tag(name = "Chat", description = "Freeform AI chat with knowledge base and code search access")
 public class ChatResource {
 

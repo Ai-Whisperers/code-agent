@@ -13,6 +13,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -22,6 +23,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
 @Path("/graph")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Tag(name = "Code Graph", description = "Build and manage per-repo code graphs for impact analysis")
 public class CodeGraphResource {

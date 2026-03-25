@@ -14,7 +14,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 
-import jakarta.annotation.security.RolesAllowed;
+import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
@@ -23,9 +23,9 @@ import java.util.List;
 import java.util.Map;
 
 @Path("/conversation-context")
+@Authenticated
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
-//@RolesAllowed("user")
 @Tag(name = "Conversation Context", description = "Manage conversation context including customers, products, issues, and documents")
 public class ConversationContextResource {
 

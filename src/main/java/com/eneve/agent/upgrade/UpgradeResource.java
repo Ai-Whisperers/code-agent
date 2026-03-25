@@ -17,6 +17,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
+import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -33,6 +34,7 @@ import jakarta.ws.rs.core.Response;
  * <p>Background execution follows the same pattern as {@code CodeGraphResource}.
  */
 @Path("/upgrades")
+@RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Tag(name = "Upgrades", description = "Automated framework version upgrade detection and plan creation")
 public class UpgradeResource {

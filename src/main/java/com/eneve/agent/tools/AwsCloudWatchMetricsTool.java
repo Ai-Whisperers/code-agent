@@ -1,6 +1,8 @@
 package com.eneve.agent.tools;
 
+import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.model.CustomerConfig;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -49,6 +51,9 @@ public class AwsCloudWatchMetricsTool implements ToolExecutor {
     @Inject
     CustomerRegistryStore registryStore;
 
+    @Inject
+    CloudAccountStore cloudAccountStore;
+
     @Override
     public String name() {
         return "aws_cloudwatch_metrics";
@@ -93,7 +98,7 @@ public class AwsCloudWatchMetricsTool implements ToolExecutor {
 
         try {
             AwsEnvConfig env = resolveEnv(customerId, environmentName);
-            try (CloudWatchClient client = clientFactory.cloudWatchClient(env.roleArn(), env.region())) {
+            try (CloudWatchClient client = clientFactory.cloudWatchClient(env.roleArn(), env.region(), env.cloudAccount())) {
                 return getMetrics(client, metricName, clusterName, serviceName,
                         startTime, endTime, period, statistic, env);
             }
@@ -215,10 +220,11 @@ public class AwsCloudWatchMetricsTool implements ToolExecutor {
         if (customer.isEmpty()) {
             throw new IllegalArgumentException("Customer '" + customerId + "' not found in registry");
         }
-        if (customer.get().environments() == null) {
+        CustomerConfig cfg = customer.get();
+        if (cfg.environments() == null) {
             throw new IllegalArgumentException("Customer '" + customerId + "' has no environments configured");
         }
-        EnvironmentConfig env = customer.get().environments().stream()
+        EnvironmentConfig env = cfg.environments().stream()
                 .filter(e -> environmentName.equalsIgnoreCase(e.name()))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException(
@@ -231,8 +237,13 @@ public class AwsCloudWatchMetricsTool implements ToolExecutor {
         String roleArn = env.aws().iamRole() != null ? env.aws().iamRole() : "";
         String region = env.aws().region() != null ? env.aws().region() : "";
         String label = customerId + "/" + environmentName + " (" + env.aws().accountId() + ")";
-        return new AwsEnvConfig(roleArn, region, label);
+
+        CloudAccount cloudAccount = cfg.cloudAccountId() != null && !cfg.cloudAccountId().isBlank()
+                ? cloudAccountStore.getCloudAccountUnmasked(cfg.cloudAccountId()).orElse(null)
+                : null;
+
+        return new AwsEnvConfig(roleArn, region, label, cloudAccount);
     }
 
-    record AwsEnvConfig(String roleArn, String region, String label) {}
+    record AwsEnvConfig(String roleArn, String region, String label, CloudAccount cloudAccount) {}
 }

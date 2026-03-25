@@ -1,5 +1,6 @@
 package com.eneve.agent.tools;
 
+import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 import software.amazon.awssdk.auth.credentials.AwsBasicCredentials;
@@ -61,26 +62,26 @@ public class AwsClientFactory {
 
     // ─── Public factory methods ───────────────────────────────────────────────────
 
-    public CloudWatchLogsClient cloudWatchLogsClient(String roleArn, String region) {
+    public CloudWatchLogsClient cloudWatchLogsClient(String roleArn, String region, CloudAccount account) {
         checkEnabled();
         return CloudWatchLogsClient.builder()
-                .credentialsProvider(resolveCredentials(roleArn, region))
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
                 .region(toRegion(region))
                 .build();
     }
 
-    public EcsClient ecsClient(String roleArn, String region) {
+    public EcsClient ecsClient(String roleArn, String region, CloudAccount account) {
         checkEnabled();
         return EcsClient.builder()
-                .credentialsProvider(resolveCredentials(roleArn, region))
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
                 .region(toRegion(region))
                 .build();
     }
 
-    public CloudWatchClient cloudWatchClient(String roleArn, String region) {
+    public CloudWatchClient cloudWatchClient(String roleArn, String region, CloudAccount account) {
         checkEnabled();
         return CloudWatchClient.builder()
-                .credentialsProvider(resolveCredentials(roleArn, region))
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
                 .region(toRegion(region))
                 .build();
     }
@@ -99,8 +100,8 @@ public class AwsClientFactory {
         return (region != null && !region.isBlank()) ? Region.of(region) : Region.of(defaultRegion);
     }
 
-    private AwsCredentialsProvider resolveCredentials(String roleArn, String region) {
-        AwsCredentialsProvider base = baseCredentials();
+    private AwsCredentialsProvider resolveCredentials(String roleArn, String region, CloudAccount account) {
+        AwsCredentialsProvider base = baseCredentials(account);
 
         if (roleArn == null || roleArn.isBlank()) {
             LOG.debugf("No roleArn provided — using base credentials directly");
@@ -135,7 +136,24 @@ public class AwsClientFactory {
         }
     }
 
-    private AwsCredentialsProvider baseCredentials() {
+    /**
+     * Resolves the base {@link AwsCredentialsProvider} using the following priority:
+     * <ol>
+     *   <li>Explicit credentials from the linked {@link CloudAccount} ({@code awsKeyId} /
+     *       {@code awsSecret} credential keys).</li>
+     *   <li>Global config properties {@code aws.access-key-id} / {@code aws.secret-access-key}.</li>
+     *   <li>{@link DefaultCredentialsProvider} — ECS task role or environment variables.</li>
+     * </ol>
+     */
+    private AwsCredentialsProvider baseCredentials(CloudAccount account) {
+        if (account != null && account.credentials() != null) {
+            String keyId = account.credentials().getOrDefault("awsKeyId", "").strip();
+            String secret = account.credentials().getOrDefault("awsSecret", "").strip();
+            if (!keyId.isBlank() && !secret.isBlank()) {
+                LOG.debugf("Using AWS credentials from cloud account '%s'", account.id());
+                return StaticCredentialsProvider.create(AwsBasicCredentials.create(keyId, secret));
+            }
+        }
         String keyId = settingsService.getSecret("aws.access-key-id").strip();
         String secret = settingsService.getSecret("aws.secret-access-key").strip();
         if (!keyId.isBlank() && !secret.isBlank()) {
