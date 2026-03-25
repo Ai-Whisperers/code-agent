@@ -9,6 +9,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -127,6 +128,35 @@ public class CodeGraphStore {
             LOG.errorf("Failed to delete all graph data for %s/%s: %s",
                     workspace, repoSlug, e.getMessage());
         }
+    }
+
+    public record GraphStatus(String workspace, String repoSlug, Instant lastUpdatedAt, long nodeCount) {}
+
+    public List<GraphStatus> getGraphStatusAll() {
+        String sql = """
+                SELECT workspace, repo_slug, MAX(updated_at) AS last_updated, COUNT(*) AS node_count
+                FROM code_graph_nodes
+                GROUP BY workspace, repo_slug
+                ORDER BY workspace, repo_slug
+                """;
+        List<GraphStatus> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                Instant lastUpdated = rs.getTimestamp("last_updated") != null
+                        ? rs.getTimestamp("last_updated").toInstant()
+                        : null;
+                results.add(new GraphStatus(
+                        rs.getString("workspace"),
+                        rs.getString("repo_slug"),
+                        lastUpdated,
+                        rs.getLong("node_count")));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to get graph status: %s", e.getMessage());
+        }
+        return results;
     }
 
     public record EdgeResult(String sourceNode, String sourceFile) {}

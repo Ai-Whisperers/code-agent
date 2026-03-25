@@ -1,5 +1,6 @@
 package com.eneve.agent;
 
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -15,6 +16,7 @@ import org.jboss.logging.Logger;
 
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
+import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -41,6 +43,20 @@ public class CodeGraphResource {
         t.setDaemon(true);
         return t;
     });
+
+    @GET
+    @Path("/status")
+    @Operation(
+            operationId = "getGraphStatus",
+            summary = "Get code graph status for all repositories",
+            description = "Returns the workspace, repo slug, node count, and last updated timestamp "
+                    + "for every repository that has a code graph built."
+    )
+    @APIResponse(responseCode = "200", description = "List of graph status entries")
+    public Response getStatus() {
+        List<CodeGraphStore.GraphStatus> statuses = codeGraphStore.getGraphStatusAll();
+        return Response.ok(statuses).build();
+    }
 
     @POST
     @Path("/build-missing")
