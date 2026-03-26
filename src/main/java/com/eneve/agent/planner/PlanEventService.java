@@ -107,7 +107,7 @@ public class PlanEventService {
                     event.phaseOrder(),
                     event.stepId(),
                     event.stepTitle(),
-                    "RUNNING",
+                    PlanStatus.EXECUTING.name(),
                     System.currentTimeMillis(),
                     null
                 );

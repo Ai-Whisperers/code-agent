@@ -90,9 +90,11 @@ public class PlannerService {
                 null,
                 null,
                 null,
-                null, // conversationId
+                null,
                 markdownContent,
-                null  // workspacePath
+                null,
+                false,
+                null // createdBy set by PlanResource after generation
         );
     }
 
@@ -161,10 +163,21 @@ public class PlannerService {
     }
 
     private String deriveTitle(String specText, String sourceRef) {
-        if (sourceRef != null && !sourceRef.isBlank()) {
+        if (sourceRef != null && !sourceRef.isBlank() && !looksLikeId(sourceRef)) {
             return sourceRef;
         }
         String firstLine = specText.lines().findFirst().orElse("").strip();
         return firstLine.length() > 80 ? firstLine.substring(0, 77) + "..." : firstLine;
+    }
+
+    /**
+     * Returns true when the ref looks like a raw UUID or a prefixed UUID
+     * (e.g. "chat-4d485372-c0fb-412b-aeb1-887b22a495d1") that would make
+     * a confusing plan title.
+     */
+    private static boolean looksLikeId(String ref) {
+        // Match bare UUIDs or kebab-prefixed UUIDs like "chat-<uuid>" / "plan-<uuid>"
+        return ref.matches("[0-9a-fA-F\\-]{36}")
+                || ref.matches("[a-zA-Z0-9]+-[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}");
     }
 }

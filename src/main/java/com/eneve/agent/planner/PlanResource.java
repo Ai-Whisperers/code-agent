@@ -69,6 +69,7 @@ public class PlanResource {
 
     @Inject PlannerService plannerService;
     @Inject PlanStore planStore;
+    @Inject PlanTrackedJobStore trackedJobStore;
     @Inject JiraService jiraService;
     @Inject PlanOrchestratorService orchestratorService;
     @Inject PlanEventService planEventService;
@@ -105,18 +106,29 @@ public class PlanResource {
         if (request.specText() == null || request.specText().isBlank()) {
             return Response.status(400).entity(Map.of("error", "specText is required")).build();
         }
+        if (request.specText().length() > 10_000) {
+            return Response.status(400).entity(Map.of("error", "specText must be 10,000 characters or fewer")).build();
+        }
 
         String sourceType = request.sourceType() != null ? request.sourceType() : "FREE_TEXT";
         String targetBranch = request.targetBranch() != null ? request.targetBranch() : "main";
 
         LOG.infof("Creating plan: sourceType=%s, repoUrl=%s", sourceType, UrlUtils.stripCredentials(request.repoUrl()));
 
-        ExecutionPlan plan = plannerService.generatePlan(
+        ExecutionPlan draft = plannerService.generatePlan(
                 request.specText(), request.repoUrl(), targetBranch, sourceType, request.sourceRef());
 
-        if (plan == null) {
+        if (draft == null) {
             return Response.status(503).entity(Map.of("error", "Plan generation failed")).build();
         }
+
+        String author = resolveDisplayName();
+        ExecutionPlan plan = new ExecutionPlan(
+                draft.planId(), draft.status(), draft.sourceType(), draft.sourceRef(),
+                draft.repoUrl(), draft.targetBranch(), draft.title(), draft.planData(),
+                draft.createdAt(), draft.updatedAt(), draft.approvedAt(), draft.summary(),
+                draft.errorMessage(), draft.prUrl(), draft.conversationId(),
+                draft.markdownContent(), draft.workspacePath(), false, author);
 
         planStore.create(plan);
         LOG.infof("Plan %s created with %d phase(s)", plan.planId(),
@@ -192,12 +204,20 @@ public class PlanResource {
 
         LOG.infof("Creating plan from Jira %s, repoUrl=%s", jiraKey, UrlUtils.stripCredentials(repoUrl));
 
-        ExecutionPlan plan = plannerService.generatePlan(
+        ExecutionPlan draft = plannerService.generatePlan(
                 ticketText, repoUrl, targetBranch, "JIRA", jiraKey);
 
-        if (plan == null) {
+        if (draft == null) {
             return Response.status(503).entity(Map.of("error", "Plan generation failed")).build();
         }
+
+        String author = resolveDisplayName();
+        ExecutionPlan plan = new ExecutionPlan(
+                draft.planId(), draft.status(), draft.sourceType(), draft.sourceRef(),
+                draft.repoUrl(), draft.targetBranch(), draft.title(), draft.planData(),
+                draft.createdAt(), draft.updatedAt(), draft.approvedAt(), draft.summary(),
+                draft.errorMessage(), draft.prUrl(), draft.conversationId(),
+                draft.markdownContent(), draft.workspacePath(), false, author);
 
         planStore.create(plan);
         LOG.infof("Plan %s created from Jira %s with %d phase(s)", plan.planId(), jiraKey,
@@ -275,9 +295,11 @@ public class PlanResource {
                 null,
                 null,
                 null,
-                null, // conversationId
-                null, // markdownContent  
-                null  // workspacePath
+                null,
+                null,
+                null,
+                false,
+                resolveDisplayName()
         );
 
         planStore.create(plan);
@@ -315,7 +337,9 @@ public class PlanResource {
             @Parameter(description = "Filter by status (optional)")
             @QueryParam("status") String status,
             @Parameter(description = "Filter by conversation ID (optional)")
-            @QueryParam("conversationId") String conversationId) {
+            @QueryParam("conversationId") String conversationId,
+            @Parameter(description = "Include archived plans (default false)")
+            @QueryParam("includeArchived") @jakarta.ws.rs.DefaultValue("false") boolean includeArchived) {
 
         List<ExecutionPlan> plans;
         if (conversationId != null && !conversationId.isBlank()) {
@@ -323,7 +347,7 @@ public class PlanResource {
         } else if (status != null && !status.isBlank()) {
             plans = planStore.listByStatus(status.toUpperCase());
         } else {
-            plans = planStore.listAll();
+            plans = planStore.listAll(includeArchived);
         }
         return Response.ok(plans).build();
     }
@@ -896,6 +920,35 @@ public class PlanResource {
         return securityIdentity.getPrincipal().getName();
     }
 
+    /** Returns a human-readable display name for the current user, preferring preferred_username over sub. */
+    private String resolveDisplayName() {
+        if (securityIdentity.isAnonymous()) {
+            return "anonymous";
+        }
+        try {
+            String preferred = jwt.getClaim("preferred_username");
+            if (preferred != null && !preferred.isBlank()) {
+                return preferred;
+            }
+            String sub = jwt.getClaim("sub");
+            if (sub != null && !sub.isBlank()) {
+                return sub;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        return securityIdentity.getPrincipal().getName();
+    }
+
+    /** Returns true when the current user is the plan's creator OR has the app_admin role. */
+    private boolean isCreatorOrAdmin(ExecutionPlan plan) {
+        if (securityIdentity.hasRole("app_admin")) {
+            return true;
+        }
+        String currentUser = resolveDisplayName();
+        return currentUser.equals(plan.createdBy());
+    }
+
     @POST
     @Path("/{planId}/approve-pr")
     @Operation(
@@ -997,17 +1050,58 @@ public class PlanResource {
         }
     }
 
+    @POST
+    @Path("/{planId}/archive")
+    @Operation(
+            operationId = "archivePlan",
+            summary = "Archive a plan",
+            description = "Marks the plan as archived, hiding it from the default list view. "
+                    + "Archived plans can be restored by deleting the archived flag. "
+                    + "Only the plan creator or an admin can archive a plan."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Plan archived"),
+            @APIResponse(responseCode = "400", description = "Plan is currently executing"),
+            @APIResponse(responseCode = "403", description = "Not authorized to archive this plan"),
+            @APIResponse(responseCode = "404", description = "Plan not found")
+    })
+    public Response archive(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId) {
+
+        Optional<ExecutionPlan> existing = planStore.find(planId);
+        if (existing.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
+        }
+        ExecutionPlan plan = existing.get();
+        if (PlanStatus.EXECUTING.name().equals(plan.status())
+                || PlanStatus.PAUSED.name().equals(plan.status())) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Cannot archive a plan that is currently executing or paused"))
+                    .build();
+        }
+        if (!isCreatorOrAdmin(plan)) {
+            return Response.status(403).entity(Map.of("error", "Not authorized to archive this plan")).build();
+        }
+
+        planStore.archive(planId);
+        LOG.infof("Plan %s archived by %s", planId, resolveDisplayName());
+        return Response.ok(Map.of("action", "archived", "planId", planId)).build();
+    }
+
     @DELETE
     @Path("/{planId}")
     @Operation(
             operationId = "deletePlan",
             summary = "Delete a plan",
-            description = "Permanently removes the plan. Only DRAFT plans can be deleted."
+            description = "Permanently removes the plan. Only plans in DRAFT, FAILED, or ARCHIVED status can be deleted. "
+                    + "Only the plan creator or an admin can delete a plan."
     )
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Plan deleted"),
+            @APIResponse(responseCode = "403", description = "Not authorized to delete this plan"),
             @APIResponse(responseCode = "404", description = "Plan not found"),
-            @APIResponse(responseCode = "409", description = "Plan is not in DRAFT status")
+            @APIResponse(responseCode = "409", description = "Plan cannot be deleted in its current status")
     })
     public Response delete(
             @Parameter(description = "Plan ID", required = true)
@@ -1017,14 +1111,88 @@ public class PlanResource {
         if (existing.isEmpty()) {
             return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
         }
-        if (!PlanStatus.DRAFT.name().equals(existing.get().status())) {
+        ExecutionPlan plan = existing.get();
+        String status = plan.status();
+        if (!PlanStatus.DRAFT.name().equals(status)
+                && !PlanStatus.FAILED.name().equals(status)
+                && !PlanStatus.CANCELLED.name().equals(status)
+                && !plan.archived()) {
             return Response.status(409)
-                    .entity(Map.of("error", "Only DRAFT plans can be deleted"))
+                    .entity(Map.of("error",
+                            "Only DRAFT, FAILED, CANCELLED, or archived plans can be deleted (current: " + status + ")"))
                     .build();
+        }
+        if (!isCreatorOrAdmin(plan)) {
+            return Response.status(403).entity(Map.of("error", "Not authorized to delete this plan")).build();
         }
 
         planStore.delete(planId);
+        LOG.infof("Plan %s deleted by %s", planId, resolveDisplayName());
         return Response.ok(Map.of("action", "deleted", "planId", planId)).build();
+    }
+
+    @POST
+    @Path("/{planId}/replan")
+    @Operation(
+            operationId = "replanFromMarkdown",
+            summary = "Regenerate plan structure from markdown content",
+            description = "Parses the plan's current markdown content into a fresh set of phases and steps, "
+                    + "resets all step statuses to PENDING, clears tracked jobs, and transitions the plan to "
+                    + "APPROVED so the user can review and execute it cleanly. "
+                    + "Only allowed when the plan is in PAUSED status."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Plan regenerated and transitioned to APPROVED"),
+            @APIResponse(responseCode = "400", description = "Plan is not PAUSED or has no markdown content"),
+            @APIResponse(responseCode = "404", description = "Plan not found")
+    })
+    public Response replan(
+            @Parameter(description = "Plan ID", required = true)
+            @PathParam("planId") String planId) {
+
+        Optional<ExecutionPlan> existing = planStore.find(planId);
+        if (existing.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Plan not found: " + planId)).build();
+        }
+        ExecutionPlan plan = existing.get();
+        if (!PlanStatus.PAUSED.name().equals(plan.status())) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Only PAUSED plans can be replanned (current: " + plan.status() + ")"))
+                    .build();
+        }
+        String markdown = plan.markdownContent();
+        if (markdown == null || markdown.isBlank()) {
+            return Response.status(400).entity(Map.of("error", "Plan has no markdown content to parse")).build();
+        }
+
+        // Parse markdown checklist items into a single phase of steps deterministically.
+        List<PlanStep> steps = new ArrayList<>();
+        int order = 1;
+        for (String line : markdown.lines().toList()) {
+            String trimmed = line.trim();
+            if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ")) {
+                String title = trimmed.substring(6).trim();
+                steps.add(new PlanStep(
+                        "step-" + order, "FIX", title, title, "PENDING", null, Map.of(), null));
+                order++;
+            }
+        }
+        if (steps.isEmpty()) {
+            return Response.status(400)
+                    .entity(Map.of("error", "No checklist items found in markdown content")).build();
+        }
+
+        PlanData newPlanData = new PlanData(List.of(new PlanPhase(1, "Replanned Steps", true, steps)));
+
+        // Clear in-flight tracked jobs for this plan before resetting step statuses.
+        trackedJobStore.deleteByPlanId(planId);
+        planStore.updatePlanData(planId, newPlanData);
+        planStore.approve(planId);
+
+        LOG.infof("Plan %s replanned from markdown with %d step(s); transitioned to APPROVED", planId, steps.size());
+        return planStore.find(planId)
+                .map(p -> Response.ok(p).build())
+                .orElse(Response.status(404).entity(Map.of("error", "Plan not found after replan")).build());
     }
 
     // ─── Request/Response records ────────────────────────────────────────
@@ -1153,9 +1321,9 @@ public class PlanResource {
         
         ExecutionPlan plan = planOpt.get();
 
-        if (!"RUNNING".equals(plan.status())) {
+        if (!PlanStatus.EXECUTING.name().equals(plan.status())) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity(Map.of("error", "Plan is not currently running"))
+                    .entity(Map.of("error", "Plan is not currently executing"))
                     .build();
         }
 
@@ -1231,9 +1399,10 @@ public class PlanResource {
         
         ExecutionPlan plan = planOpt.get();
 
-        if (!"RUNNING".equals(plan.status()) && !"PAUSED".equals(plan.status())) {
+        if (!PlanStatus.EXECUTING.name().equals(plan.status())
+                && !PlanStatus.PAUSED.name().equals(plan.status())) {
             return Response.status(Response.Status.BAD_REQUEST)
-                    .entity(Map.of("error", "Plan is not currently running or paused"))
+                    .entity(Map.of("error", "Plan is not currently executing or paused"))
                     .build();
         }
 

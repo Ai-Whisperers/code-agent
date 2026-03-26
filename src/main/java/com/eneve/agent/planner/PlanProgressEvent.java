@@ -9,7 +9,7 @@ public record PlanProgressEvent(
     Integer phaseOrder,      // null for plan-level events
     String stepId,           // null for phase/plan-level events
     String title,            // step/phase title, null for plan-level events
-    String status,           // "RUNNING", "COMPLETED", "FAILED"
+    String status,           // "EXECUTING", "COMPLETED", "FAILED"
     Long timestamp,          // when the event occurred
     String errorMessage      // only for failed events
 ) {}

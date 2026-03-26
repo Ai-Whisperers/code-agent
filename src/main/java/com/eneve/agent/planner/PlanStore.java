@@ -32,6 +32,12 @@ public class PlanStore {
     private static final Logger LOG = Logger.getLogger(PlanStore.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
+    private static final String SELECT_COLS = """
+            plan_id, status, source_type, source_ref, repo_url, target_branch,
+            title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
+            conversation_id, markdown_content, workspace_path, archived, created_by
+            """;
+
     @Inject
     AgroalDataSource dataSource;
 
@@ -43,8 +49,8 @@ public class PlanStore {
                 INSERT INTO execution_plans
                     (plan_id, status, source_type, source_ref, repo_url, target_branch,
                      title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
-                     conversation_id, markdown_content, workspace_path)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     conversation_id, markdown_content, workspace_path, archived, created_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -65,6 +71,8 @@ public class PlanStore {
             setNullableString(ps, 15, plan.conversationId());
             setNullableString(ps, 16, plan.markdownContent());
             setNullableString(ps, 17, plan.workspacePath());
+            ps.setBoolean(18, plan.archived());
+            setNullableString(ps, 19, plan.createdBy());
             ps.executeUpdate();
             LOG.debugf("Created execution plan %s (status=%s)", plan.planId(), plan.status());
         } catch (SQLException e) {
@@ -73,13 +81,7 @@ public class PlanStore {
     }
 
     public Optional<ExecutionPlan> find(String planId) {
-        String sql = """
-                SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
-                       conversation_id, markdown_content, workspace_path
-                FROM execution_plans
-                WHERE plan_id = ?
-                """;
+        String sql = "SELECT " + SELECT_COLS + " FROM execution_plans WHERE plan_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, planId);
@@ -94,14 +96,16 @@ public class PlanStore {
         return Optional.empty();
     }
 
+    /** Lists all non-archived plans ordered by creation date descending. */
     public List<ExecutionPlan> listAll() {
-        String sql = """
-                SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
-                       conversation_id, markdown_content, workspace_path
-                FROM execution_plans
-                ORDER BY created_at DESC
-                """;
+        return listAll(false);
+    }
+
+    /** Lists plans ordered by creation date descending, optionally including archived. */
+    public List<ExecutionPlan> listAll(boolean includeArchived) {
+        String sql = "SELECT " + SELECT_COLS + " FROM execution_plans"
+                + (includeArchived ? "" : " WHERE archived = false")
+                + " ORDER BY created_at DESC";
         List<ExecutionPlan> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql);
@@ -116,14 +120,8 @@ public class PlanStore {
     }
 
     public List<ExecutionPlan> listByStatus(String status) {
-        String sql = """
-                SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
-                       conversation_id, markdown_content, workspace_path
-                FROM execution_plans
-                WHERE status = ?
-                ORDER BY created_at DESC
-                """;
+        String sql = "SELECT " + SELECT_COLS + " FROM execution_plans"
+                + " WHERE status = ? AND archived = false ORDER BY created_at DESC";
         List<ExecutionPlan> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -186,6 +184,26 @@ public class PlanStore {
             LOG.infof("Approved execution plan %s", planId);
         } catch (SQLException e) {
             LOG.errorf("Failed to approve execution plan %s: %s", planId, e.getMessage());
+        }
+    }
+
+    /**
+     * Marks a plan as archived. Archived plans are hidden from the default list view
+     * but are not deleted from the database.
+     */
+    public void archive(String planId) {
+        String sql = """
+                UPDATE execution_plans
+                SET archived = true, updated_at = now()
+                WHERE plan_id = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, planId);
+            ps.executeUpdate();
+            LOG.infof("Archived execution plan %s", planId);
+        } catch (SQLException e) {
+            LOG.errorf("Failed to archive execution plan %s: %s", planId, e.getMessage());
         }
     }
 
@@ -319,7 +337,6 @@ public class PlanStore {
         if (planOpt.isEmpty()) {
             throw new RuntimeException("Plan not found: " + planId);
         }
-        
         ExecutionPlan plan = planOpt.get();
         try {
             RepoCoordinates coords = RepoCoordinates.parse(plan.repoUrl());
@@ -340,7 +357,6 @@ public class PlanStore {
         if (planOpt.isEmpty()) {
             throw new RuntimeException("Plan not found: " + planId);
         }
-        
         ExecutionPlan plan = planOpt.get();
         try {
             RepoCoordinates coords = RepoCoordinates.parse(plan.repoUrl());
@@ -354,11 +370,10 @@ public class PlanStore {
     }
 
     private String extractPrIdFromUrl(String prUrl) {
-        // Extract PR ID from Bitbucket URL format: https://bitbucket.org/workspace/repo/pull-requests/123
         if (prUrl != null && prUrl.contains("/pull-requests/")) {
             String[] parts = prUrl.split("/pull-requests/");
             if (parts.length > 1) {
-                return parts[1].split("/")[0]; // Get just the PR number
+                return parts[1].split("/")[0];
             }
         }
         throw new IllegalArgumentException("Cannot extract PR ID from URL: " + prUrl);
@@ -387,8 +402,7 @@ public class PlanStore {
         Timestamp createdTs = rs.getTimestamp("created_at");
         Timestamp updatedTs = rs.getTimestamp("updated_at");
         Timestamp approvedTs = rs.getTimestamp("approved_at");
-        String planDataJson = rs.getString("plan_data");
-        PlanData planData = fromJson(planDataJson);
+        PlanData planData = fromJson(rs.getString("plan_data"));
         return new ExecutionPlan(
                 rs.getString("plan_id"),
                 rs.getString("status"),
@@ -406,22 +420,15 @@ public class PlanStore {
                 rs.getString("pr_url"),
                 rs.getString("conversation_id"),
                 rs.getString("markdown_content"),
-                rs.getString("workspace_path")
+                rs.getString("workspace_path"),
+                rs.getBoolean("archived"),
+                rs.getString("created_by")
         );
     }
 
-    /**
-     * Find plans by conversation ID
-     */
     public List<ExecutionPlan> findByConversationId(String conversationId) {
-        String sql = """
-                SELECT plan_id, status, source_type, source_ref, repo_url, target_branch,
-                       title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
-                       conversation_id, markdown_content, workspace_path
-                FROM execution_plans
-                WHERE conversation_id = ?
-                ORDER BY created_at DESC
-                """;
+        String sql = "SELECT " + SELECT_COLS + " FROM execution_plans"
+                + " WHERE conversation_id = ? ORDER BY created_at DESC";
         List<ExecutionPlan> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -437,9 +444,6 @@ public class PlanStore {
         return results;
     }
 
-    /**
-     * Update markdown content for a plan
-     */
     public void updateMarkdownContent(String planId, String markdownContent) {
         String sql = """
                 UPDATE execution_plans
@@ -457,9 +461,6 @@ public class PlanStore {
         }
     }
 
-    /**
-     * Update workspace path for a plan
-     */
     public void updateWorkspacePath(String planId, String workspacePath) {
         String sql = """
                 UPDATE execution_plans
@@ -477,9 +478,6 @@ public class PlanStore {
         }
     }
 
-    /**
-     * Update conversation ID for a plan (used when linking existing plans to chats)
-     */
     public void updateConversationId(String planId, String conversationId) {
         String sql = """
                 UPDATE execution_plans

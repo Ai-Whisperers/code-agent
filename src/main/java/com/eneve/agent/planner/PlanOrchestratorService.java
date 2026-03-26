@@ -266,8 +266,9 @@ public class PlanOrchestratorService {
 
         List<PlanStep> steps = phase.steps();
 
-        boolean anyRunning = steps.stream().anyMatch(s -> "RUNNING".equals(s.status()) || "PENDING".equals(s.status()));
-        if (anyRunning) {
+        boolean anyExecuting = steps.stream().anyMatch(s ->
+                PlanStatus.EXECUTING.name().equals(s.status()) || "PENDING".equals(s.status()));
+        if (anyExecuting) {
             return; // phase still in progress
         }
 
@@ -416,7 +417,7 @@ public class PlanOrchestratorService {
             trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order(), isMetrics));
             trackedJobStore.insert(job.getJobId(), plan.planId(), step.stepId(), phase.order(), isMetrics);
             submittedJobIds.add(job.getJobId());
-            planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId(), null);
+            planStore.updateStepInPlan(plan.planId(), step.stepId(), PlanStatus.EXECUTING.name(), job.getJobId(), null);
             LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s (branch: %s)",
                     job.getJobId(), step.stepId(), step.jobType(), plan.planId(), sharedBranch);
         }
@@ -902,13 +903,12 @@ public class PlanOrchestratorService {
         synchronized (lockFor(planId)) {
             ExecutionPlan plan = planStore.find(planId)
                     .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
-            
-            if (!"RUNNING".equals(plan.status())) {
-                throw new IllegalStateException("Plan is not currently running: " + planId);
+
+            if (!PlanStatus.EXECUTING.name().equals(plan.status())) {
+                throw new IllegalStateException("Plan is not currently executing: " + planId);
             }
 
-            // Update plan status to PAUSED
-            planStore.updateStatus(planId, "PAUSED");
+            planStore.updateStatus(planId, PlanStatus.PAUSED.name());
             LOG.infof("Plan execution paused: %s", planId);
         }
     }
@@ -920,16 +920,16 @@ public class PlanOrchestratorService {
         synchronized (lockFor(planId)) {
             ExecutionPlan plan = planStore.find(planId)
                     .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
-            
-            if (!"PAUSED".equals(plan.status())) {
+
+            if (!PlanStatus.PAUSED.name().equals(plan.status())) {
                 throw new IllegalStateException("Plan is not currently paused: " + planId);
             }
 
-            // Update plan status back to RUNNING and continue execution
-            planStore.updateStatus(planId, "RUNNING");
+            // Restore EXECUTING (not RUNNING) so checkPhaseCompletion() can still process
+            // job-completion events dispatched by continueExecution below.
+            planStore.updateStatus(planId, PlanStatus.EXECUTING.name());
             LOG.infof("Plan execution resumed: %s", planId);
-            
-            // Find the next step to execute and continue from where we left off
+
             continueExecution(planId);
         }
     }
@@ -941,17 +941,15 @@ public class PlanOrchestratorService {
         synchronized (lockFor(planId)) {
             ExecutionPlan plan = planStore.find(planId)
                     .orElseThrow(() -> new IllegalArgumentException("Plan not found: " + planId));
-            
-            if (!"RUNNING".equals(plan.status()) && !"PAUSED".equals(plan.status())) {
-                throw new IllegalStateException("Plan is not currently running or paused: " + planId);
+
+            if (!PlanStatus.EXECUTING.name().equals(plan.status())
+                    && !PlanStatus.PAUSED.name().equals(plan.status())) {
+                throw new IllegalStateException("Plan is not currently executing or paused: " + planId);
             }
 
-            // Update plan status to CANCELLED
-            planStore.updateStatus(planId, "CANCELLED");
-            
-            // Remove from tracking and clean up resources
+            planStore.updateStatus(planId, PlanStatus.CANCELLED.name());
             cleanup(planId);
-            
+
             LOG.infof("Plan execution cancelled: %s", planId);
         }
     }
@@ -994,8 +992,7 @@ public class PlanOrchestratorService {
             trackedJobs.put(job.getJobId(), new TrackedStep(planId, step.stepId(), phaseOrder, isMetrics));
             trackedJobStore.insert(job.getJobId(), planId, step.stepId(), phaseOrder, isMetrics);
 
-            // Update step status to RUNNING
-            planStore.updateStepInPlan(planId, step.stepId(), "RUNNING", job.getJobId(), null);
+            planStore.updateStepInPlan(planId, step.stepId(), PlanStatus.EXECUTING.name(), job.getJobId(), null);
             
             // Fire step started event
             orchestratorEvent.fireAsync(new PlanOrchestratorEvent(
@@ -1024,12 +1021,12 @@ public class PlanOrchestratorService {
 
             // Find the next pending step to execute
             for (PlanPhase phase : planData.phases()) {
-                boolean hasRunningStep = false;
+                boolean hasExecutingStep = false;
                 boolean hasFailedStep = false;
-                
+
                 for (PlanStep step : phase.steps()) {
-                    if ("RUNNING".equals(step.status())) {
-                        hasRunningStep = true;
+                    if (PlanStatus.EXECUTING.name().equals(step.status())) {
+                        hasExecutingStep = true;
                         break;
                     }
                     if ("FAILED".equals(step.status())) {
@@ -1037,14 +1034,13 @@ public class PlanOrchestratorService {
                         break;
                     }
                     if ("PENDING".equals(step.status())) {
-                        // Found the next step to execute
                         executeStep(planId, phase.order(), step);
                         return;
                     }
                 }
 
-                // If we have a running step, wait for it to complete
-                if (hasRunningStep) {
+                // If we have an executing step, wait for it to complete
+                if (hasExecutingStep) {
                     return;
                 }
 

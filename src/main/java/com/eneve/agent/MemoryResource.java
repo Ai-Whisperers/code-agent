@@ -29,7 +29,7 @@ import jakarta.ws.rs.core.Response;
  * REST endpoints for managing the review memory — team preferences and
  * learned patterns that the reviewer remembers across PR reviews.
  */
-@Path("/memory")
+@Path("/memories")
 @RolesAllowed("app_admin")
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)

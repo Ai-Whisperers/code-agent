@@ -22,7 +22,9 @@ public record ExecutionPlan(
         String summary,
         String errorMessage,
         String prUrl,
-        String conversationId, // Link to chat conversation that generated this plan
-        String markdownContent, // Human-readable markdown representation of the plan
-        String workspacePath // Path to the .md file in the workspace
+        String conversationId,
+        String markdownContent,
+        String workspacePath,
+        boolean archived,
+        String createdBy
 ) {}
