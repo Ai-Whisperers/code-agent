@@ -32,11 +32,15 @@ import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.context.ManagedExecutor;
 import org.jboss.logging.Logger;
 
+import java.sql.Connection;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
@@ -77,6 +81,7 @@ public class RoadmapService {
     @Inject AnthropicClient anthropicClient;
     @Inject ClaudeToolUseLoop toolLoop;
     @Inject CustomerRegistryStore customerRegistryStore;
+    @Inject AgroalDataSource dataSource;
 
     // ─── Exception types ─────────────────────────────────────────────────────
 
@@ -894,5 +899,43 @@ public class RoadmapService {
             if (nl > 0 && end > nl) s = s.substring(nl + 1, end).strip();
         }
         return s;
+    }
+
+    // ─── Token stats ─────────────────────────────────────────────────────────
+
+    /**
+     * Returns average input/output token counts per roadmap review job type,
+     * computed from the {@code ai_calls} ledger.
+     *
+     * <p>The map keys are {@code REVIEW_EPIC}, {@code REVIEW_FEATURE}, and
+     * {@code REVIEW_USERSTORY}. Each value is a map with {@code avgInputTokens},
+     * {@code avgOutputTokens}, and {@code sampleCount}.
+     */
+    public Map<String, Object> getReviewTokenStats() {
+        String sql = """
+                SELECT job_type,
+                       ROUND(AVG(input_tokens))  AS avg_input,
+                       ROUND(AVG(output_tokens)) AS avg_output,
+                       COUNT(*)                  AS sample_count
+                FROM ai_calls
+                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
+                  AND is_error = false
+                GROUP BY job_type
+                """;
+        Map<String, Object> result = new LinkedHashMap<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                Map<String, Long> stats = new LinkedHashMap<>();
+                stats.put("avgInputTokens",  rs.getLong("avg_input"));
+                stats.put("avgOutputTokens", rs.getLong("avg_output"));
+                stats.put("sampleCount",     rs.getLong("sample_count"));
+                result.put(rs.getString("job_type"), stats);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to query review token stats: %s", e.getMessage());
+        }
+        return result;
     }
 }

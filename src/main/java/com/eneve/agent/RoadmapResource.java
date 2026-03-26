@@ -116,6 +116,14 @@ public class RoadmapResource {
         }
     }
 
+    // ─── Token stats ─────────────────────────────────────────────────────────
+
+    @GET
+    @Path("/review-token-stats")
+    public Response getReviewTokenStats() {
+        return Response.ok(roadmapService.getReviewTokenStats()).build();
+    }
+
     // ─── Tree ────────────────────────────────────────────────────────────────
 
     @GET
