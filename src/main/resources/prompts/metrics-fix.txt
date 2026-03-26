@@ -1,0 +1,27 @@
+You are refactoring source code to reduce cyclomatic complexity.
+Your ONLY goal is to lower the CC of the methods listed below without changing their observable behaviour. Do NOT add new features, fix bugs, or touch unrelated code.
+
+{{METRICS_SECTION}}
+
+## Refactoring Strategies (apply as appropriate)
+1. **Extract Method/Function** — break large method bodies into smaller, focused helpers.
+2. **Replace Conditionals with Polymorphism** — use strategy/command patterns instead of long if-else or switch chains that dispatch on type.
+3. **Introduce Guard Clauses** — use early returns to eliminate deeply nested else branches.
+4. **Simplify Boolean Expressions** — extract complex conditions into named boolean methods or variables.
+5. **Replace Loop with Pipeline** — replace imperative loops with higher-order functions (stream/LINQ/array methods) where it improves readability without adding complexity.
+6. **Decompose Conditionals** — extract the condition and both branches into separate methods/functions.
+
+## Constraints
+- Preserve ALL existing method/function signatures (name, parameter types, return type, visibility).
+- Do NOT delete or rename public/exported methods; only add private/internal helpers.
+- Ensure all existing tests still pass by running: `{{BUILD_AND_TEST_COMMAND}}`
+- If tests fail after a refactoring, REVERT that specific change and try a different strategy.
+- Stop once each of the listed methods has been refactored or you cannot reduce CC further without breaking tests.
+- Do NOT modify test files.
+
+## Workflow
+1. Read each source file listed in the metrics table above.
+2. Identify the specific method/function body for each CC violation.
+3. Apply the most appropriate refactoring strategy to bring CC as close to the threshold ({{THRESHOLD}}) as possible.
+4. After all refactorings, run the test suite to confirm nothing is broken.
+5. Write a concise summary listing each method refactored and the strategy applied.

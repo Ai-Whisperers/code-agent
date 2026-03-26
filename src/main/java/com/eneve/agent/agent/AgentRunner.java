@@ -11,6 +11,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+import org.jboss.logging.MDC;
 
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -50,7 +51,18 @@ public class AgentRunner {
         if (handler == null) {
             throw new IllegalArgumentException("No handler registered for job type: " + job.getJobType());
         }
-        handler.handle(job);
+        MDC.put("jobId", job.getJobId());
+        MDC.put("jobType", job.getJobType().name());
+        if (job.getRepoSlug() != null) MDC.put("repoSlug", job.getRepoSlug());
+        if (job.getWorkspace() != null) MDC.put("workspace", job.getWorkspace());
+        try {
+            handler.handle(job);
+        } finally {
+            MDC.remove("jobId");
+            MDC.remove("jobType");
+            MDC.remove("repoSlug");
+            MDC.remove("workspace");
+        }
     }
 
     // ─── Approve / Reject ───────────────────────────────────────────────

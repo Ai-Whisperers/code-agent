@@ -25,6 +25,7 @@ import io.smallrye.mutiny.infrastructure.Infrastructure;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+import org.jboss.logging.MDC;
 
 import java.io.IOException;
 import java.util.*;
@@ -75,6 +76,7 @@ public class ChatService {
      */
     public Multi<ChatEvent> chatStream(ChatRequest request, String userId, boolean canExecuteJobs) {
         return Multi.createFrom().<ChatEvent>emitter(emitter -> {
+            MDC.put("userId", userId != null ? userId : "anonymous");
             WorkspaceContext workspace = null;
             try {
                 // ── Resolve conversation ───────────────────────────────
@@ -107,6 +109,7 @@ public class ChatService {
                 }
 
                 int priorCount = history.size();
+                MDC.put("conversationId", conversationId);
 
                 // ── Create workspace context for tool access ───────────
                 workspace = createChatWorkspace(conversationId, request.productId());
@@ -218,6 +221,8 @@ public class ChatService {
                 if (workspace != null) {
                     workspace.close();
                 }
+                MDC.remove("conversationId");
+                MDC.remove("userId");
             }
         }).runSubscriptionOn(Infrastructure.getDefaultWorkerPool());
     }

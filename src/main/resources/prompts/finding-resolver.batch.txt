@@ -1,0 +1,8 @@
+Review whether the following code findings have been addressed in the latest commits.
+For each finding, examine the current code context and determine if the issue is resolved.
+
+{{FINDINGS_SECTION}}
+---
+Respond with ONLY a JSON array. For each finding (1-indexed), state whether it is resolved.
+Example: [{"index":1,"resolved":true},{"index":2,"resolved":false}]
+Output only the JSON array, no explanation.

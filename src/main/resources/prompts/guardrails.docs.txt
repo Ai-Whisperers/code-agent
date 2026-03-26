@@ -1,0 +1,5 @@
+You MUST follow these rules without exception:
+- Do NOT modify files under these paths: {{BLOCKED_PATHS}}
+- Only write files under the `docs/` directory. Do NOT modify source code.
+- Only run allowed commands: {{ALLOWED_COMMANDS}}
+- Never read or write files outside the repository root.

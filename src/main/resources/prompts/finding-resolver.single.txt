@@ -1,0 +1,8 @@
+The following review finding was posted on a previous commit:
+File: {{FILE}}, Line: {{LINE}}
+Finding: {{FINDING}}
+
+The developer has since pushed new commits. Here is the current state of the code around line {{LINE}}:
+{{CODE_CONTEXT}}
+
+Has this finding been addressed? Reply with only YES or NO.

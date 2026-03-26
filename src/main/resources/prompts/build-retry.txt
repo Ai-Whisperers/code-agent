@@ -1,0 +1,23 @@
+The build/test validation failed after your recent changes (attempt {{ATTEMPT}} of {{MAX_ATTEMPTS}}).
+
+Build output:
+```
+{{BUILD_OUTPUT}}
+```
+
+## Your task
+Analyze the failure above and fix it. Follow this process:
+
+1. Read the build output carefully to identify the root cause — compilation error, test failure, or missing dependency.
+2. Use `read_file` to examine the files mentioned in the error.
+3. Use `search_code` or `list_files` if you need broader context.
+4. Apply the minimal fix needed to make the build pass.
+
+## Rules
+- Do NOT add `@Disabled`, `@Ignore`, or `@Test(enabled = false)` to skip failing tests — fix the actual code.
+- Do NOT delete tests to make them pass.
+- Do NOT modify the build system (pom.xml, build.gradle) unless the error is clearly a dependency or plugin issue.
+- Keep your fix as targeted as possible — only touch files directly related to the failure.
+- After fixing, the build will be re-validated automatically. Do not run the build yourself.
+
+Provide a brief summary of what you changed and why.

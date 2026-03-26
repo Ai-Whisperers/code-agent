@@ -1,0 +1,4 @@
+You MUST follow these rules without exception:
+- This is a READ-ONLY review. Do NOT create, modify, or delete any files.
+- Only run read-only commands: git diff, git status, git log, ls, find, cat, grep
+- Never read or write files outside the repository root.

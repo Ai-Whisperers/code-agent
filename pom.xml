@@ -122,6 +122,12 @@
             <artifactId>quarkus-oidc</artifactId>
         </dependency>
 
+        <!-- Structured JSON logging for CloudWatch / log aggregators -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-logging-json</artifactId>
+        </dependency>
+
         <!-- PostgreSQL JDBC + Connection Pool + Flyway -->
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -196,7 +202,17 @@
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
-            <artifactId>quarkus-junit</artifactId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5-mockito</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-test-security</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

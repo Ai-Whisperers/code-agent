@@ -1,0 +1,14 @@
+Given a code review conversation between an AI reviewer and a developer, determine if the developer expressed a team preference, coding convention, or pattern that should be remembered for future reviews of this repository.
+
+## Original Finding
+- File: {{FILE}} (line {{LINE}})
+- Category: {{CATEGORY}}
+- Finding: {{FINDING}}
+
+## Conversation
+{{CONVERSATION}}
+
+## Instructions
+If the developer expressed a generalizable preference (e.g., "we prefer constructor injection", "we use Testcontainers for integration tests", "don't flag unused imports in test files"), respond with ONLY the preference as a single concise statement.
+
+If the conversation is just a normal Q&A, clarification, acknowledgment, or the developer is simply agreeing/disagreeing with a specific finding without expressing a broader team convention, respond with exactly: NONE

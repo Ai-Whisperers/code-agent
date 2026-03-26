@@ -12,8 +12,10 @@ import org.jboss.logging.Logger;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -45,17 +47,48 @@ public class PromptTemplateService {
 
     @PostConstruct
     void init() {
+        Map<String, PromptDefault> metadata;
         try (InputStream is = getClass().getClassLoader().getResourceAsStream("default-prompts.json")) {
             if (is == null) {
                 LOG.error("default-prompts.json not found on classpath — prompt templates will be unavailable");
                 defaults = Map.of();
                 return;
             }
-            defaults = MAPPER.readValue(is, new TypeReference<>() {});
-            LOG.infof("Loaded %d built-in prompt templates from default-prompts.json", defaults.size());
+            metadata = MAPPER.readValue(is, new TypeReference<>() {});
         } catch (IOException e) {
             LOG.errorf("Failed to parse default-prompts.json: %s", e.getMessage());
             defaults = Map.of();
+            return;
+        }
+
+        // Load content for each key from its corresponding prompts/{key}.txt file.
+        // This keeps the large prompt text out of the JSON file, making diffs readable.
+        Map<String, PromptDefault> loaded = new HashMap<>(metadata.size());
+        for (Map.Entry<String, PromptDefault> entry : metadata.entrySet()) {
+            String key = entry.getKey();
+            PromptDefault meta = entry.getValue();
+            String content = loadPromptFile(key);
+            loaded.put(key, new PromptDefault(meta.description(), meta.placeholders(), content));
+        }
+        defaults = Map.copyOf(loaded);
+        LOG.infof("Loaded %d built-in prompt templates from default-prompts.json + prompts/*.txt", defaults.size());
+    }
+
+    /**
+     * Loads the default content for a template key from {@code prompts/{key}.txt}
+     * on the classpath. Returns an empty string if the file is missing (and logs a warning).
+     */
+    private String loadPromptFile(String key) {
+        String path = "prompts/" + key + ".txt";
+        try (InputStream is = getClass().getClassLoader().getResourceAsStream(path)) {
+            if (is == null) {
+                LOG.warnf("Prompt file not found on classpath: %s — using empty default", path);
+                return "";
+            }
+            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            LOG.errorf("Failed to read prompt file %s: %s", path, e.getMessage());
+            return "";
         }
     }
 
@@ -159,7 +192,12 @@ public class PromptTemplateService {
     // ─── Inner types ─────────────────────────────────────────────────────
 
     @JsonIgnoreProperties(ignoreUnknown = true)
-    public record PromptDefault(String description, List<String> placeholders, String content) {}
+    public record PromptDefault(String description, List<String> placeholders, String content) {
+        public PromptDefault {
+            placeholders = placeholders != null ? placeholders : List.of();
+            content = content != null ? content : "";
+        }
+    }
 
     public record PromptTemplateInfo(
             String key,

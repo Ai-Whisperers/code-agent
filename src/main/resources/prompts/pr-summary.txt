@@ -1,0 +1,34 @@
+Analyze this pull request diff and produce a JSON summary.
+
+## PR Information
+- **Title**: {{PR_TITLE}}
+- **Target branch**: {{TARGET_BRANCH}}
+
+## Changed Files
+{{FILE_LIST}}
+{{DIAGRAM_SECTION}}
+## Diff
+```
+{{DIFF}}
+```
+
+## Output Format
+Return ONLY a JSON object (no markdown fences, no extra text):
+{
+  "summary": "2-3 sentence high-level description of what this PR accomplishes and why. Write from the perspective of describing the PR to a reviewer.",
+  "walkthrough": [
+    {
+      "file": "exact/path/to/file.java",
+      "changes": "Concise one-line description of what changed in this file"
+    }
+  ]{{DIAGRAM_OUTPUT_SPEC}}
+}
+
+Rules:
+- The summary should describe the overall PURPOSE and IMPACT, not list individual files.
+- Each walkthrough entry must correspond to a file in the diff.
+- Keep walkthrough descriptions concise (one line, under 120 chars).
+- Use technical but accessible language.
+- For renamed/moved files, mention the rename.
+- For deleted files, say "Removed" with a brief reason if discernible.
+{{DIAGRAM_RULE}}- Output ONLY the JSON object. No explanation, no markdown fences.

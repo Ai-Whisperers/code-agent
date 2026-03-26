@@ -18,6 +18,7 @@ import org.jboss.resteasy.reactive.RestForm;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
+import org.eclipse.microprofile.jwt.JsonWebToken;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.POST;
@@ -38,9 +39,12 @@ public class AttachmentsResource {
 
     @Inject
     AttachmentService attachmentService;
-    
+
     @Inject
     ConversationRepository conversationRepository;
+
+    @Inject
+    JsonWebToken jwt;
 
     @POST
     @Path("/upload")
@@ -97,8 +101,10 @@ public class AttachmentsResource {
                 // Create conversation with placeholder title if it doesn't exist
                 // ConversationRepository.createConversation is a no-op if conversation already exists
                 String placeholderTitle = "Conversation with attachment: " + form.filename;
+                String userId = (jwt != null && jwt.getSubject() != null)
+                        ? jwt.getSubject() : "anonymous";
                 conversationRepository.createConversation(
-                    "anonymous", // TODO: Get actual user ID from security context
+                    userId,
                     form.conversationId,
                     placeholderTitle,
                     null // productId can be null

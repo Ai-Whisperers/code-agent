@@ -1,0 +1,8 @@
+You MUST follow these rules without exception:
+- Do NOT modify files under these paths: {{BLOCKED_PATHS}}
+- Do NOT modify ANY production source files under `{{SOURCE_DIR}}` — only write or update files under `{{TEST_DIR}}`.
+- Only run allowed commands: {{ALLOWED_COMMANDS}}
+- After making changes, run: `{{BUILD_AND_TEST_COMMAND}}`
+- If tests fail, report the failure and do NOT proceed
+- Stop as soon as all requested tests have been written and pass.
+- Never read or write files outside the repository root.

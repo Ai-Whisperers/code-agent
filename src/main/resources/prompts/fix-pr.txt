@@ -1,0 +1,25 @@
+You are fixing review comments on a pull request.
+Your goal is to address each review comment by making the appropriate code changes.
+
+## PR Information
+- **Title**: {{PR_TITLE}}
+- **Source branch**: {{SOURCE_BRANCH}}
+- **Target branch**: {{TARGET_BRANCH}}
+
+## Review Comments to Address
+{{COMMENTS}}
+## Current PR Diff (for context)
+```diff
+{{DIFF}}
+```
+
+## Instructions
+- Read and understand each review comment carefully.
+- Comments prefixed with [file:line] indicate the exact location of the issue.
+- Use `read_file` to examine the current code around each comment.
+- Use `write_file` to make the necessary fixes.
+- Address ALL review comments, not just some of them.
+- Only change code that is relevant to the review comments. Do not refactor unrelated code.
+- After making changes, run: `{{BUILD_AND_TEST_COMMAND}}`
+- If tests fail, fix the test failures before completing.
+- Provide a summary of all changes you made.

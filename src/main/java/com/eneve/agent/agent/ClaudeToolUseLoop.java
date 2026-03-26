@@ -128,6 +128,8 @@ public class ClaudeToolUseLoop {
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
+        long compressionThreshold = Long.parseLong(
+                settings.get("agent.context.compression-threshold", "160000"));
         List<MessageParam> messages = new ArrayList<>();
         messages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)
@@ -163,6 +165,11 @@ public class ClaudeToolUseLoop {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
             logUsage(response, iteration + 1);
             tokenBudgetTracker.recordUsage(response.usage().inputTokens(), response.usage().outputTokens());
+
+            // Compress context when the measured input token count approaches the limit.
+            if (response.usage().inputTokens() >= compressionThreshold) {
+                messages = compressContext(messages, systemPrompt, modelName, maxTokens);
+            }
 
             List<ContentBlockParam> toolResults = new ArrayList<>();
             StringBuilder textAccumulator = new StringBuilder();
@@ -383,7 +390,7 @@ public class ClaudeToolUseLoop {
                 long startNs = System.nanoTime();
 
                 try (StreamResponse<RawMessageStreamEvent> stream =
-                             client.messages().createStreaming(params)) {
+                             callStreamingWithRetry(params)) {
                     stream.stream().forEach(event -> {
                         accumulator.accumulate(event);
 
@@ -563,20 +570,186 @@ public class ClaudeToolUseLoop {
         throw new RuntimeException("Exhausted retries after rate limiting");
     }
 
+    /**
+     * Streaming equivalent of {@link #callWithRetry}: opens a streaming API call with
+     * exponential backoff + jitter on {@link RateLimitException}, matching the retry
+     * behaviour of the non-streaming path.
+     */
+    private StreamResponse<RawMessageStreamEvent> callStreamingWithRetry(MessageCreateParams params) {
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                tokenBudgetTracker.waitIfNeeded();
+                return client.messages().createStreaming(params);
+            } catch (RateLimitException e) {
+                if (attempt == MAX_RETRIES) {
+                    throw e;
+                }
+                long waitMs = INITIAL_BACKOFF_MS * (1L << attempt);
+                waitMs += (long) (waitMs * 0.5 * ThreadLocalRandom.current().nextDouble());
+                LOG.warnf("Streaming rate limited (attempt %d/%d), waiting %dms before retry...",
+                        attempt + 1, MAX_RETRIES, waitMs);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during streaming rate limit backoff", ie);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException("Interrupted while waiting for token budget", e);
+            }
+        }
+        throw new RuntimeException("Exhausted retries after rate limiting (streaming)");
+    }
+
+    /**
+     * When the conversation context is getting large, asks Claude to produce a concise
+     * summary of the work completed so far, then replaces the message list with just
+     * [summary turn + last 4 messages]. The system prompt is always passed separately
+     * and is not affected.
+     *
+     * <p>This prevents hitting the model's hard context-window limit on long fix or
+     * doc-generation jobs while keeping the most recent tool results visible.
+     */
+    private List<MessageParam> compressContext(List<MessageParam> messages, String systemPrompt,
+            String modelName, long maxTokens) {
+        LOG.infof("Context compression triggered: %d messages in history — summarizing", messages.size());
+        try {
+            String historyText = messages.stream()
+                    .map(m -> m.role().toString().toUpperCase() + ": "
+                            + contentToText(m))
+                    .collect(Collectors.joining("\n\n"));
+
+            String summarizePrompt = "You are summarizing an ongoing agentic coding session. "
+                    + "Produce a concise but complete summary of all files read, changes made, "
+                    + "tools called, and key decisions taken so far. "
+                    + "This summary will replace the full history — do not omit any completed work.\n\n"
+                    + "CONVERSATION HISTORY:\n" + historyText;
+
+            MessageCreateParams summaryParams = MessageCreateParams.builder()
+                    .model(Model.of(modelName))
+                    .maxTokens(maxTokens)
+                    .system(systemPrompt)
+                    .messages(List.of(MessageParam.builder()
+                            .role(MessageParam.Role.USER)
+                            .content(summarizePrompt)
+                            .build()))
+                    .build();
+
+            Message summaryResponse = callWithRetry(summaryParams);
+            String summary = summaryResponse.content().stream()
+                    .filter(ContentBlock::isText)
+                    .map(b -> b.asText().text())
+                    .collect(Collectors.joining());
+            tokenBudgetTracker.recordUsage(
+                    summaryResponse.usage().inputTokens(),
+                    summaryResponse.usage().outputTokens());
+
+            // Preserve the most recent messages for continuity (avoid losing active tool calls)
+            int keepLast = Math.min(4, messages.size());
+            List<MessageParam> tail = messages.subList(messages.size() - keepLast, messages.size());
+
+            List<MessageParam> compressed = new ArrayList<>();
+            compressed.add(MessageParam.builder()
+                    .role(MessageParam.Role.USER)
+                    .content("Summary of work completed so far:\n\n" + summary)
+                    .build());
+            compressed.add(MessageParam.builder()
+                    .role(MessageParam.Role.ASSISTANT)
+                    .content("Understood. I have reviewed the summary and will continue from where we left off.")
+                    .build());
+            compressed.addAll(tail);
+            LOG.infof("Context compressed: %d messages → %d messages", messages.size(), compressed.size());
+            return compressed;
+        } catch (Exception e) {
+            LOG.warnf("Context compression failed, continuing with full history: %s", e.getMessage());
+            return messages;
+        }
+    }
+
+    /** Extracts displayable text from a MessageParam for use in the summarization prompt. */
+    private static String contentToText(MessageParam msg) {
+        if (msg.content().isString()) {
+            return msg.content().asString();
+        }
+        if (!msg.content().isBlockParams()) {
+            return "";
+        }
+        return msg.content().asBlockParams().stream()
+                .map(block -> {
+                    if (block.isText()) return block.asText().text();
+                    if (block.isToolResult()) return "[tool-result]";
+                    if (block.isToolUse()) return "[tool-call:" + block.asToolUse().name() + "]";
+                    return "[block]";
+                })
+                .collect(Collectors.joining(" "));
+    }
+
     private String dispatchTool(ToolUseBlock toolUse, WorkspaceContext workspace) {
         ToolExecutor executor = toolRegistry.get(toolUse.name());
         if (executor == null) {
             return "ERROR: Unknown tool: " + toolUse.name();
         }
 
+        if (!executor.isAuthorized(workspace)) {
+            LOG.warnf("Tool %s denied by isAuthorized check for workspace %s",
+                    toolUse.name(), workspace != null ? workspace.getRoot() : "null");
+            return "UNAUTHORIZED: Tool " + toolUse.name() + " is not permitted in the current context.";
+        }
+
         try {
             JsonValue inputJson = toolUse._input();
             Map<String, Object> inputMap = convertJsonValueToMap(inputJson);
-            return executor.execute(workspace, inputMap);
+            return executeWithRetry(toolUse.name(), executor, workspace, inputMap);
         } catch (Exception e) {
             LOG.errorf("Tool execution error for %s: %s", toolUse.name(), e.getMessage());
             return "ERROR: Tool execution failed: " + e.getMessage();
         }
+    }
+
+    /**
+     * Executes a tool with up to {@code TOOL_MAX_RETRIES} retries on transient I/O errors.
+     * Non-transient errors (e.g. {@link IllegalArgumentException}, auth failures) are
+     * propagated immediately without retrying.
+     */
+    private static final int TOOL_MAX_RETRIES = 3;
+    private static final long TOOL_INITIAL_BACKOFF_MS = 1_000;
+
+    private String executeWithRetry(String toolName, ToolExecutor executor,
+            WorkspaceContext workspace, Map<String, Object> inputMap) throws Exception {
+        Exception lastTransient = null;
+        for (int attempt = 0; attempt <= TOOL_MAX_RETRIES; attempt++) {
+            try {
+                return executor.execute(workspace, inputMap);
+            } catch (IllegalArgumentException | IllegalStateException | SecurityException e) {
+                throw e; // non-transient — propagate immediately
+            } catch (Exception e) {
+                // Retry on exception messages that suggest transient network/IO conditions.
+                String msg = e.getMessage() != null ? e.getMessage().toLowerCase() : "";
+                boolean looksTransient = msg.contains("timeout") || msg.contains("connection")
+                        || msg.contains("network") || msg.contains("unavailable")
+                        || msg.contains("reset") || msg.contains("refused")
+                        || e.getClass().getName().contains("Socket")
+                        || e.getClass().getName().contains("IO");
+                if (!looksTransient || attempt == TOOL_MAX_RETRIES) {
+                    throw e;
+                }
+                lastTransient = e;
+            }
+
+            if (attempt < TOOL_MAX_RETRIES) {
+                long waitMs = TOOL_INITIAL_BACKOFF_MS * (1L << attempt);
+                LOG.warnf("Tool %s transient error (attempt %d/%d): %s — retrying in %dms",
+                        toolName, attempt + 1, TOOL_MAX_RETRIES, lastTransient.getMessage(), waitMs);
+                try {
+                    Thread.sleep(waitMs);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new RuntimeException("Interrupted during tool retry backoff", ie);
+                }
+            }
+        }
+        throw lastTransient;
     }
 
     @SuppressWarnings("unchecked")

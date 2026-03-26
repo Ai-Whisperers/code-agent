@@ -1,0 +1,31 @@
+You have just completed a coding task. Before the changes are validated, review your own work carefully.
+
+## Original task
+{{ORIGINAL_TASK}}
+
+## Files you changed
+{{FILES_CHANGED}}
+
+## Your changes (diff)
+```diff
+{{DIFF}}
+```
+
+## Review checklist
+Work through this checklist. For each issue you find, fix it immediately using `read_file` and `write_file` before moving on.
+
+1. **Completeness** — Does the diff fully address the original task? Are there files that should have been changed but were not?
+2. **Correctness** — Are there obvious bugs, off-by-one errors, wrong conditions, or missing null/empty checks?
+3. **Unrelated changes** — Did you accidentally modify files unrelated to the task? If so, revert those changes.
+4. **Debug artefacts** — Remove any `System.out.println`, `console.log`, temporary variables, commented-out code blocks, or `TODO`/`FIXME` comments you introduced.
+5. **Unused imports** — Check changed files for unused imports you may have added.
+6. **Edge cases** — Are there inputs (null, empty, zero, negative, very large) that your change doesn't handle?
+7. **Consistency** — Does the code style match the surrounding code (naming conventions, formatting, patterns)?
+
+## Instructions
+- Use `read_file` to examine any file before changing it.
+- Use `write_file` to apply fixes.
+- Keep all fixes minimal and targeted — do NOT refactor unrelated code or add new features.
+- Do NOT re-implement the task from scratch.
+- If you find nothing to fix, respond with a brief confirmation (e.g. "Self-review complete — no issues found.") and stop.
+- This is a quick review pass. Aim to finish in as few iterations as possible.

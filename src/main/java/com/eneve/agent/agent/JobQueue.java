@@ -179,6 +179,16 @@ public class JobQueue {
                         job.setErrorMessage("Unhandled error: " + e.getMessage());
                         jobStore.archive(job);
                     } finally {
+                        // Guard: if the handler exited without setting a terminal status
+                        // (e.g. returned normally while status is still QUEUED or null),
+                        // mark as FAILED so callers always see a decisive outcome.
+                        if (job.getStatus() == null || job.getStatus() == JobStatus.QUEUED) {
+                            LOG.warnf("Job %s completed without terminal status (%s) — forcing FAILED",
+                                    job.getJobId(), job.getStatus());
+                            job.setStatus(JobStatus.FAILED);
+                            job.setErrorMessage("Job completed without setting a terminal status");
+                            jobStore.archive(job);
+                        }
                         jobCompletedEvent.fireAsync(new JobCompletedEvent(
                                 job.getJobId(), job.getStatus(), job.getSummary(), job.getPrUrl(),
                                 job.getErrorMessage()));

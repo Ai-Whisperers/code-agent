@@ -27,9 +27,11 @@ import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
+import io.quarkus.runtime.StartupEvent;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Event;
 import jakarta.enterprise.event.ObservesAsync;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
 /**
@@ -86,6 +88,7 @@ public class PlanOrchestratorService {
     private final ConcurrentHashMap<String, AtomicInteger> planIterationCount = new ConcurrentHashMap<>();
 
     @Inject PlanStore planStore;
+    @Inject PlanTrackedJobStore trackedJobStore;
     @Inject JobQueue jobQueue;
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject PlanWorkspaceManager planWorkspaceManager;
@@ -97,6 +100,51 @@ public class PlanOrchestratorService {
     private int defaultCcThreshold()      { return Integer.parseInt(settings.get("metrics.cc-threshold",        "10")); }
     private int defaultMaxIterations()    { return Integer.parseInt(settings.get("metrics.max-iterations",      "3")); }
     private int defaultMaxMethodsPerFix() { return Integer.parseInt(settings.get("metrics.max-methods-per-fix", "20")); }
+
+    // ─── Startup recovery ────────────────────────────────────────────────────────
+
+    /**
+     * On startup, rehydrate in-memory state for any plans that were mid-execution when
+     * the process last stopped. Loads persisted tracked-job rows and restores
+     * {@code trackedJobs}, {@code planLocks}, {@code planBranchName}, {@code planPrUrl},
+     * and {@code planIterationCount} so that incoming job-completion events can be
+     * correlated correctly without requiring manual intervention.
+     */
+    void rehydrateOnBoot(@Observes StartupEvent event) {
+        List<PlanTrackedJobStore.TrackedJobRow> rows = trackedJobStore.findAll();
+        if (rows.isEmpty()) {
+            return;
+        }
+
+        LOG.infof("Orchestrator: rehydrating in-memory state from %d persisted tracked job(s)", rows.size());
+        for (PlanTrackedJobStore.TrackedJobRow row : rows) {
+            trackedJobs.put(row.jobId(),
+                    new TrackedStep(row.planId(), row.stepId(), row.phaseOrder(), row.isMetrics()));
+            planLocks.computeIfAbsent(row.planId(), k -> new Object());
+        }
+
+        // Restore per-plan metadata from the execution_plans table.
+        rows.stream()
+                .map(PlanTrackedJobStore.TrackedJobRow::planId)
+                .distinct()
+                .forEach(planId -> planStore.find(planId).ifPresent(plan -> {
+                    restoreInMemoryState(plan);
+                    // Restore iteration count from the number of quality-iteration phases
+                    // already appended to the plan (phase names follow "Quality Fix (iteration N)").
+                    if (plan.planData() != null && plan.planData().phases() != null) {
+                        long iterations = plan.planData().phases().stream()
+                                .filter(p -> p.name() != null && p.name().startsWith("Quality Fix (iteration "))
+                                .count();
+                        if (iterations > 0) {
+                            planIterationCount.computeIfAbsent(planId, k -> new AtomicInteger(0))
+                                    .set((int) iterations);
+                        }
+                    }
+                }));
+
+        LOG.infof("Orchestrator: rehydration complete (%d plan(s) restored)", 
+                rows.stream().map(PlanTrackedJobStore.TrackedJobRow::planId).distinct().count());
+    }
 
     // ─── Public API ─────────────────────────────────────────────────────────────
 
@@ -163,6 +211,7 @@ public class PlanOrchestratorService {
         if (tracked == null) {
             return; // not an orchestrator-dispatched job
         }
+        trackedJobStore.delete(event.jobId());
 
         LOG.infof("Orchestrator: job %s for plan %s / step %s completed with %s",
                 event.jobId(), tracked.planId(), tracked.stepId(), event.status());
@@ -350,7 +399,10 @@ public class PlanOrchestratorService {
                 LOG.errorf("Orchestrator: job queue rejected job for step %s in plan %s", step.stepId(), plan.planId());
                 // Remove tracking for jobs already submitted in this phase so their
                 // completion events don't trigger phase-advancement on a FAILED plan.
-                submittedJobIds.forEach(trackedJobs::remove);
+                submittedJobIds.forEach(id -> {
+                    trackedJobs.remove(id);
+                    trackedJobStore.delete(id);
+                });
                 planStore.updateStepInPlan(plan.planId(), step.stepId(), "FAILED", job.getJobId(),
                         "Job queue full");
                 planStore.updateStatusAndError(plan.planId(), PlanStatus.FAILED.name(),
@@ -362,6 +414,7 @@ public class PlanOrchestratorService {
 
             boolean isMetrics = "METRICS".equalsIgnoreCase(step.jobType());
             trackedJobs.put(job.getJobId(), new TrackedStep(plan.planId(), step.stepId(), phase.order(), isMetrics));
+            trackedJobStore.insert(job.getJobId(), plan.planId(), step.stepId(), phase.order(), isMetrics);
             submittedJobIds.add(job.getJobId());
             planStore.updateStepInPlan(plan.planId(), step.stepId(), "RUNNING", job.getJobId(), null);
             LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s (branch: %s)",
@@ -703,7 +756,8 @@ public class PlanOrchestratorService {
 
     /**
      * Rebuilds in-memory plan state ({@code planBranchName}, {@code planPrUrl}) from the
-     * persisted step data so that a resumed plan uses the same branch and PR as before.
+     * persisted plan record and step data so that a resumed plan uses the same branch and
+     * PR as before.
      */
     private void restoreInMemoryState(ExecutionPlan plan) {
         if (plan.planData() == null || plan.planData().phases() == null) return;
@@ -716,11 +770,14 @@ public class PlanOrchestratorService {
                             "agent/plan/" + plan.planId().substring(0, 8));
                     planBranchName.putIfAbsent(plan.planId(), branch);
                 });
-        // Restore PR URL from first completed FIX step that has a job record with a prUrl.
-        // We rely on the step's jobId to look it up — best-effort; REVIEW steps will still
-        // work even if this is not restored since they use planPrUrl only as a fallback.
-        LOG.debugf("Orchestrator: restored in-memory state for plan %s (branch=%s)",
-                plan.planId(), planBranchName.get(plan.planId()));
+        // Restore PR URL from the persisted pr_url column on the execution plan.
+        // planStore.updatePrUrl is called in markCompleted() whenever the PR is created,
+        // so this faithfully reflects the last known PR URL even after a restart.
+        if (plan.prUrl() != null && !plan.prUrl().isBlank()) {
+            planPrUrl.putIfAbsent(plan.planId(), plan.prUrl());
+        }
+        LOG.debugf("Orchestrator: restored in-memory state for plan %s (branch=%s, prUrl=%s)",
+                plan.planId(), planBranchName.get(plan.planId()), planPrUrl.get(plan.planId()));
     }
 
     private static PlanData skipRemainingPhases(PlanData data, int fromPhaseOrder) {
@@ -818,6 +875,7 @@ public class PlanOrchestratorService {
         planIterationCount.remove(planId);
         planBranchName.remove(planId);
         planWorkspaceManager.release(planId);
+        trackedJobStore.deleteByPlanId(planId);
     }
 
     private Object lockFor(String planId) {
@@ -934,7 +992,8 @@ public class PlanOrchestratorService {
             // Track the job
             boolean isMetrics = "METRICS".equalsIgnoreCase(step.jobType());
             trackedJobs.put(job.getJobId(), new TrackedStep(planId, step.stepId(), phaseOrder, isMetrics));
-            
+            trackedJobStore.insert(job.getJobId(), planId, step.stepId(), phaseOrder, isMetrics);
+
             // Update step status to RUNNING
             planStore.updateStepInPlan(planId, step.stepId(), "RUNNING", job.getJobId(), null);
             
