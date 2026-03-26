@@ -180,7 +180,8 @@ public class PrSummaryGenerator {
     private static final long INITIAL_BACKOFF_MS = 5_000;
 
     private String callClaude(String prompt, String jobId) {
-        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        String modelName = settings.get("anthropic.summary-model",
+                settings.get("anthropic.fast-model", "claude-3-5-haiku-20241022"));
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(4096)

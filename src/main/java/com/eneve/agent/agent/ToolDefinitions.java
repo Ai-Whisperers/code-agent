@@ -103,6 +103,18 @@ public final class ToolDefinitions {
      *                       {@code false} for USER / STAFF (read-only + Jira/Confluence reads only)
      */
     public static List<ToolUnion> chat(boolean canExecuteJobs) {
+        return chat(canExecuteJobs, true);
+    }
+
+    /**
+     * Returns the tool set for the chat loop.
+     *
+     * @param canExecuteJobs  {@code true} for DEVELOPER / ADMINISTRATOR roles
+     * @param includeAwsTools {@code true} to include AWS tools; pass {@code false} when no
+     *                        customer context is resolved yet to avoid paying for their large
+     *                        tool schemas on every iteration
+     */
+    public static List<ToolUnion> chat(boolean canExecuteJobs, boolean includeAwsTools) {
         List<ToolUnion> tools = new ArrayList<>(List.of(
                 // ── Read-only / analysis tools (all roles) ────────────────
                 ToolUnion.ofTool(searchKnowledgeBase()),
@@ -112,10 +124,6 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(searchCode()),
                 ToolUnion.ofTool(queryCodeGraph()),
                 ToolUnion.ofTool(fetchUrl()),
-                ToolUnion.ofTool(awsCloudWatchLogs()),
-                ToolUnion.ofTool(awsEcs()),
-                ToolUnion.ofTool(awsCloudWatchMetrics()),
-                ToolUnion.ofTool(awsRds()),
                 // Jira read tools (all roles)
                 ToolUnion.ofTool(jiraSearchIssues()),
                 ToolUnion.ofTool(jiraGetIssue()),
@@ -125,6 +133,15 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(confluenceSearch()),
                 ToolUnion.ofTool(confluenceGetPage())
         ));
+
+        if (includeAwsTools) {
+            tools.addAll(List.of(
+                    ToolUnion.ofTool(awsCloudWatchLogs()),
+                    ToolUnion.ofTool(awsEcs()),
+                    ToolUnion.ofTool(awsCloudWatchMetrics()),
+                    ToolUnion.ofTool(awsRds())
+            ));
+        }
 
         if (canExecuteJobs) {
             // ── Write / action tools (DEVELOPER / ADMINISTRATOR only) ────

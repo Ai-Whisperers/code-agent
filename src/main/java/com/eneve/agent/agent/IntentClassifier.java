@@ -7,6 +7,7 @@ import com.eneve.agent.agent.model.CommentIntent;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.ContentBlock;
@@ -31,6 +32,10 @@ import jakarta.inject.Inject;
  */
 @ApplicationScoped
 public class IntentClassifier {
+
+    private static final Set<String> FIX_KEYWORDS = Set.of(
+            "please fix", "apply this", "apply the fix", "go ahead",
+            "do it", "yes fix", "fix it", "make the change", "apply suggestion");
 
     private static final Logger LOG = Logger.getLogger(IntentClassifier.class);
 
@@ -64,6 +69,13 @@ public class IntentClassifier {
         // Fast path: explicit /fix command
         if (trimmed.toLowerCase(Locale.ROOT).startsWith("/fix")) {
             LOG.infof("Intent: FIX (explicit /fix command)");
+            return CommentIntent.FIX;
+        }
+
+        // Fast path: unambiguous fix-intent keywords
+        String lower = trimmed.toLowerCase(Locale.ROOT);
+        if (FIX_KEYWORDS.stream().anyMatch(lower::contains)) {
+            LOG.infof("Intent: FIX (keyword match)");
             return CommentIntent.FIX;
         }
 

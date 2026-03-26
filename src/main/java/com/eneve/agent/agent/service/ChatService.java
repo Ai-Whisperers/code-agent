@@ -126,7 +126,11 @@ public class ChatService {
                         request.productId(),
                         mergeContexts(storedContext, request.conversationContext()),
                         userId);
-                List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs);
+                boolean hasCustomer = workspace.getMetadata("customerId") != null
+                        || (storedContext != null
+                            && storedContext.customerIds() != null
+                            && !storedContext.customerIds().isEmpty());
+                List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs, hasCustomer);
                 
                 // Create final reference for lambda
                 final WorkspaceContext finalWorkspace = workspace;

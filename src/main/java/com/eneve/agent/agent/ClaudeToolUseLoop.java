@@ -124,7 +124,9 @@ public class ClaudeToolUseLoop {
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
                          String jobId, String jobType, int iterationCap) {
-        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        String modelName = settings.get(
+                "anthropic.model." + jobType.toLowerCase(),
+                settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         List<MessageParam> messages = new ArrayList<>();
         messages.add(MessageParam.builder()
@@ -219,7 +221,7 @@ public class ClaudeToolUseLoop {
                     toolResults.add(ContentBlockParam.ofToolResult(
                             ToolResultBlockParam.builder()
                                     .toolUseId(toolUse.id())
-                                    .content(result)
+                                    .content(truncateResult(result))
                                     .isError(isError)
                                     .build()
                     ));
@@ -354,7 +356,9 @@ public class ClaudeToolUseLoop {
                                 List<ToolUnion> tools, List<MessageParam> messages,
                                 String jobId, String jobType, int iterationCap,
                                 Consumer<ChatEvent> eventSink) {
-        String modelName = settings.get("anthropic.model", "claude-sonnet-4-20250514");
+        String modelName = settings.get(
+                "anthropic.model." + jobType.toLowerCase(),
+                settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         try {
             for (int iteration = 0; iteration < iterationCap; iteration++) {
@@ -363,6 +367,7 @@ public class ClaudeToolUseLoop {
                 MessageCreateParams params = MessageCreateParams.builder()
                         .model(Model.of(modelName))
                         .maxTokens(maxTokens)
+                        .cacheControl(CacheControlEphemeral.builder().build())
                         .system(systemPrompt)
                         .messages(messages)
                         .tools(tools)
@@ -464,7 +469,7 @@ public class ClaudeToolUseLoop {
                     toolResults.add(ContentBlockParam.ofToolResult(
                             ToolResultBlockParam.builder()
                                     .toolUseId(toolUse.id())
-                                    .content(result)
+                                    .content(truncateResult(result))
                                     .isError(isError)
                                     .build()
                     ));
@@ -517,6 +522,14 @@ public class ClaudeToolUseLoop {
         long cacheRead = usage.cacheReadInputTokens().orElse(0L);
         LOG.infof("Iteration %d tokens — input: %d, output: %d, cache_write: %d, cache_read: %d",
                 iteration, input, output, cacheWrite, cacheRead);
+    }
+
+    private static final int MAX_TOOL_RESULT_CHARS = 12_000;
+
+    private static String truncateResult(String result) {
+        if (result == null || result.length() <= MAX_TOOL_RESULT_CHARS) return result;
+        return result.substring(0, MAX_TOOL_RESULT_CHARS)
+                + "\n... [truncated " + (result.length() - MAX_TOOL_RESULT_CHARS) + " chars]";
     }
 
     private static final int MAX_RETRIES = 5;
