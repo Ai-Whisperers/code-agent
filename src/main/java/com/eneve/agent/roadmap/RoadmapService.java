@@ -1,9 +1,21 @@
 package com.eneve.agent.roadmap;
 
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.Model;
+import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.ToolDefinitions;
+import com.eneve.agent.agent.service.JiraReviewContextBuilder;
+import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JiraIssueReviewStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RoadmapItemOverrideStore;
+import com.eneve.agent.agent.store.RoadmapItemProposalStore;
 import com.eneve.agent.agent.store.RoadmapItemStore;
 import com.eneve.agent.agent.store.RoadmapStore;
 import com.eneve.agent.jira.JiraService;
@@ -12,9 +24,14 @@ import com.eneve.agent.model.JiraIssueReview;
 import com.eneve.agent.model.JiraReviewRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.RoadmapItem;
+import com.eneve.agent.model.RoadmapProposal;
 import com.eneve.agent.model.RoadmapRecord;
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.workspace.WorkspaceContext;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.context.ManagedExecutor;
@@ -43,6 +60,8 @@ public class RoadmapService {
 
     private static final Logger LOG = Logger.getLogger(RoadmapService.class);
 
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
     @Inject RoadmapStore roadmapStore;
     @Inject RoadmapItemStore roadmapItemStore;
     @Inject JiraIssueReviewStore reviewStore;
@@ -52,6 +71,12 @@ public class RoadmapService {
     @Inject JiraService jiraService;
     @Inject SettingsService settings;
     @Inject ManagedExecutor managedExecutor;
+    @Inject RoadmapItemProposalStore proposalStore;
+    @Inject JiraReviewContextBuilder contextBuilder;
+    @Inject PromptTemplateService promptTemplates;
+    @Inject AnthropicClient anthropicClient;
+    @Inject ClaudeToolUseLoop toolLoop;
+    @Inject CustomerRegistryStore customerRegistryStore;
 
     // ─── Exception types ─────────────────────────────────────────────────────
 
@@ -75,6 +100,16 @@ public class RoadmapService {
         public JiraIssueNotFoundException(String issueKey) {
             super("Jira issue not found in roadmap_items (sync first): " + issueKey);
         }
+    }
+
+    public static final class ProposalNotFoundException extends RuntimeException {
+        public ProposalNotFoundException(String proposalId) {
+            super("Proposal not found: " + proposalId);
+        }
+    }
+
+    public static final class ImprovementGenerationException extends RuntimeException {
+        public ImprovementGenerationException(String message) { super(message); }
     }
 
     // ─── Result records ───────────────────────────────────────────────────────
@@ -256,6 +291,96 @@ public class RoadmapService {
         return result;
     }
 
+    // ─── Sprint view ──────────────────────────────────────────────────────────
+
+    /**
+     * Builds a sprint-grouped view for the Gantt chart.
+     * Returns a list of sprint groups, each containing the features and stories
+     * assigned to that sprint, ordered by sprint start date.
+     * Items without a sprint assignment are excluded from this view.
+     *
+     * @throws RoadmapNotFoundException if the roadmap does not exist
+     */
+    public List<Map<String, Object>> buildSprintView(String roadmapId) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+
+        List<RoadmapItem> sprintItems = roadmapItemStore.findSprintItems(roadmapId);
+
+        // Group by sprint name (preserving insertion order → already sorted by sprint_start)
+        Map<String, List<RoadmapItem>> bySprint = new LinkedHashMap<>();
+        Map<String, java.time.Instant> sprintStarts = new LinkedHashMap<>();
+        Map<String, java.time.Instant> sprintEnds   = new LinkedHashMap<>();
+
+        for (RoadmapItem item : sprintItems) {
+            String name = item.sprintName();
+            bySprint.computeIfAbsent(name, k -> new ArrayList<>()).add(item);
+            sprintStarts.putIfAbsent(name, item.sprintStart());
+            sprintEnds.putIfAbsent(name, item.sprintEnd());
+        }
+
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (Map.Entry<String, List<RoadmapItem>> entry : bySprint.entrySet()) {
+            String sprintName = entry.getKey();
+            List<Map<String, Object>> itemMaps = entry.getValue().stream()
+                    .map(i -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("issueKey",   i.issueKey());
+                        m.put("issueType",  i.issueType());
+                        m.put("summary",    i.summary() != null ? i.summary() : "");
+                        m.put("parentKey",  i.parentKey());
+                        m.put("grandparentKey", i.grandparentKey());
+                        m.put("jiraStatus", mapStatus(i.jiraStatus()));
+                        if (i.assignee() != null) m.put("assignee", i.assignee());
+                        if (i.sprintStart() != null) m.put("sprintStart", i.sprintStart());
+                        if (i.sprintEnd()   != null) m.put("sprintEnd",   i.sprintEnd());
+                        return m;
+                    })
+                    .collect(Collectors.toList());
+
+            Map<String, Object> group = new LinkedHashMap<>();
+            group.put("sprintName",  sprintName);
+            group.put("sprintStart", sprintStarts.get(sprintName));
+            group.put("sprintEnd",   sprintEnds.get(sprintName));
+            group.put("items",       itemMaps);
+            result.add(group);
+        }
+        return result;
+    }
+
+    // ─── Live refresh ─────────────────────────────────────────────────────────
+
+    /**
+     * Fetches fresh Jira data for a single item, updates its stored live fields,
+     * then returns a tree-item map in the same shape as {@link #buildTree}.
+     *
+     * @throws RoadmapNotFoundException   if the roadmap does not exist
+     * @throws JiraIssueNotFoundException if the item is not in roadmap_items
+     */
+    public Map<String, Object> refreshItem(String roadmapId, String issueKey) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+
+        RoadmapItem stored = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+                .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
+
+        JiraIssueDetail live = jiraService.fetchIssueDetail(issueKey);
+        if (live != null) {
+            roadmapItemStore.refreshLiveFields(
+                    roadmapId, issueKey,
+                    live.summary(), live.status(), live.updatedAt(),
+                    live.assignee(), live.reporter(),
+                    live.sprintName(), live.sprintStart(), live.sprintEnd());
+            // Reload so the map reflects the updated values
+            stored = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+                    .orElse(stored);
+        }
+
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(roadmapId).stream()
+                .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
+        Map<String, String> overrideMap = overrideStore.findByRoadmap(roadmapId);
+
+        return buildTreeItem(stored, reviewMap.get(issueKey), overrideMap.get(issueKey));
+    }
+
     // ─── Reviews ──────────────────────────────────────────────────────────────
 
     /**
@@ -347,6 +472,166 @@ public class RoadmapService {
         overrideStore.clearOverride(roadmapId, issueKey);
     }
 
+    // ─── AI Proposals ─────────────────────────────────────────────────────────
+
+    /**
+     * Generates an AI improvement proposal for the given issue and stores it as DRAFT.
+     * Synchronous — call from a JAX-RS endpoint that can tolerate latency.
+     *
+     * @throws RoadmapNotFoundException   if the roadmap does not exist
+     * @throws JiraIssueNotFoundException if the item is not in roadmap_items
+     * @throws ImprovementGenerationException if the AI call fails or returns unparseable JSON
+     */
+    public RoadmapProposal improveItem(String roadmapId, String issueKey) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+        RoadmapItem item = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+                .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
+
+        String context = buildImproveContext(item);
+        String promptKey = "improve-" + item.issueType().toLowerCase();
+        String prompt = promptTemplates.resolve(promptKey, Map.of("jira_context", context));
+
+        List<ProductConfig> linkedProducts = roadmapStore.listLinkedProductIds(roadmapId).stream()
+                .map(pid -> customerRegistryStore.getProduct(pid).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+
+        String responseText = linkedProducts.isEmpty()
+                ? callClaudeForProposal(prompt, issueKey)
+                : callClaudeWithTools(prompt, issueKey, roadmapId, linkedProducts);
+        if (responseText == null) {
+            throw new ImprovementGenerationException("AI call returned no content for " + issueKey);
+        }
+
+        String cleaned = extractJson(responseText);
+        JsonNode root;
+        try {
+            root = MAPPER.readTree(cleaned);
+        } catch (Exception e) {
+            throw new ImprovementGenerationException("Malformed JSON from AI for " + issueKey + ": " + e.getMessage());
+        }
+
+        return proposalStore.create(
+                roadmapId, issueKey, item.issueType(), item.parentKey(),
+                root.path("proposed_summary").asText(""),
+                root.path("proposed_description").asText(""),
+                root.path("proposed_criteria").asText(""),
+                root.path("proposed_technical").asText(""),
+                root.path("ai_explanation").asText("")
+        );
+    }
+
+    /**
+     * Returns all proposals for a given roadmap + issue key (newest first).
+     */
+    public List<RoadmapProposal> getProposals(String roadmapId, String issueKey) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+        return proposalStore.findByRoadmapAndIssueKey(roadmapId, issueKey);
+    }
+
+    /**
+     * Updates the text fields of an existing proposal (allowed at any status).
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     */
+    public RoadmapProposal updateProposal(String roadmapId, String proposalId,
+                                           String summary, String description,
+                                           String criteria, String technical) {
+        RoadmapProposal existing = proposalStore.findById(proposalId)
+                .orElseThrow(() -> new ProposalNotFoundException(proposalId));
+        proposalStore.updateFields(proposalId, summary, description, criteria, technical);
+        return proposalStore.findById(proposalId).orElse(existing);
+    }
+
+    /**
+     * Accepts a proposal:
+     * <ul>
+     *   <li>EPIC — updates the existing Jira Epic in place</li>
+     *   <li>FEATURE / USERSTORY — creates a new Jira issue as a child of the parent</li>
+     * </ul>
+     * Marks the proposal ACCEPTED and stores the resulting Jira key.
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     * @throws ImprovementGenerationException if the Jira write fails
+     */
+    public RoadmapProposal acceptProposal(String roadmapId, String proposalId) {
+        RoadmapProposal proposal = proposalStore.findById(proposalId)
+                .orElseThrow(() -> new ProposalNotFoundException(proposalId));
+
+        String jiraResultKey;
+        if ("EPIC".equals(proposal.issueType())) {
+            jiraService.updateIssueSystem(
+                    proposal.issueKey(),
+                    proposal.proposedSummary(),
+                    proposal.proposedDescription());
+            jiraResultKey = proposal.issueKey();
+        } else {
+            // Derive project key from the issue key prefix (e.g. "PRJ-10" → "PRJ")
+            String projectKey = proposal.issueKey().replaceAll("-\\d+$", "");
+            RoadmapRecord roadmap = roadmapStore.findById(roadmapId)
+                    .orElseThrow(() -> new RoadmapNotFoundException(roadmapId));
+            String issueType = "FEATURE".equals(proposal.issueType())
+                    ? roadmap.featureIssuetype()
+                    : roadmap.userstoryIssuetype();
+            jiraResultKey = jiraService.createIssueSystem(
+                    projectKey,
+                    proposal.proposedSummary(),
+                    proposal.proposedDescription(),
+                    issueType,
+                    proposal.parentKey());
+        }
+
+        if (jiraResultKey == null) {
+            throw new ImprovementGenerationException(
+                    "Jira write failed for proposal " + proposalId + " — check system Jira credentials");
+        }
+
+        proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey);
+        return proposalStore.findById(proposalId).orElse(proposal);
+    }
+
+    /**
+     * Soft-rejects a proposal (marks REJECTED, keeps the row for reference).
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     */
+    public RoadmapProposal rejectProposal(String roadmapId, String proposalId) {
+        RoadmapProposal proposal = proposalStore.findById(proposalId)
+                .orElseThrow(() -> new ProposalNotFoundException(proposalId));
+        proposalStore.updateStatus(proposalId, "REJECTED", null);
+        return proposalStore.findById(proposalId).orElse(proposal);
+    }
+
+    /**
+     * Hard-deletes a proposal. Allowed at any status.
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     */
+    public void deleteProposal(String roadmapId, String proposalId) {
+        if (proposalStore.findById(proposalId).isEmpty()) throw new ProposalNotFoundException(proposalId);
+        proposalStore.delete(proposalId);
+    }
+
+    // ─── Product links ────────────────────────────────────────────────────────
+
+    public List<ProductConfig> listLinkedProducts(String roadmapId) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+        return roadmapStore.listLinkedProductIds(roadmapId).stream()
+                .map(pid -> customerRegistryStore.getProduct(pid).orElse(null))
+                .filter(java.util.Objects::nonNull)
+                .collect(Collectors.toList());
+    }
+
+    public void linkProduct(String roadmapId, String productId) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+        roadmapStore.linkProduct(roadmapId, productId);
+    }
+
+    public void unlinkProduct(String roadmapId, String productId) {
+        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+        roadmapStore.unlinkProduct(roadmapId, productId);
+    }
+
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     /**
@@ -381,19 +666,24 @@ public class RoadmapService {
         for (int ei = 0; ei < epics.size(); ei++) {
             JiraIssueDetail epic = epics.get(ei);
             items.add(new RoadmapItem(null, roadmapId, epic.key(), "EPIC",
-                    null, null, epic.summary(), epic.status(), null, epic.updatedAt()));
+                    null, null, epic.summary(), epic.status(), null, epic.updatedAt(),
+                    epic.assignee(), epic.reporter(), null, null, null));
 
             List<JiraIssueDetail> features = featuresByEpic.get(ei);
             for (JiraIssueDetail feature : features) {
                 items.add(new RoadmapItem(null, roadmapId, feature.key(), "FEATURE",
-                        epic.key(), null, feature.summary(), feature.status(), null, feature.updatedAt()));
+                        epic.key(), null, feature.summary(), feature.status(), null, feature.updatedAt(),
+                        feature.assignee(), feature.reporter(),
+                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd()));
 
                 int featureIdx = allFeatures.indexOf(feature);
                 List<JiraIssueDetail> stories = featureIdx >= 0
                         ? storiesByFeature.get(featureIdx) : List.of();
                 for (JiraIssueDetail story : stories) {
                     items.add(new RoadmapItem(null, roadmapId, story.key(), "USERSTORY",
-                            feature.key(), epic.key(), story.summary(), story.status(), null, story.updatedAt()));
+                            feature.key(), epic.key(), story.summary(), story.status(), null, story.updatedAt(),
+                            story.assignee(), story.reporter(),
+                            story.sprintName(), story.sprintStart(), story.sprintEnd()));
                 }
             }
         }
@@ -410,6 +700,11 @@ public class RoadmapService {
         if (item.grandparentKey() != null) out.put("grandparentKey", item.grandparentKey());
         out.put("jiraStatus", mapStatus(item.jiraStatus()));
         if (item.jiraModifiedAt() != null) out.put("jiraModifiedAt", item.jiraModifiedAt());
+        if (item.assignee()       != null) out.put("assignee",       item.assignee());
+        if (item.reporter()       != null) out.put("reporter",       item.reporter());
+        if (item.sprintName()     != null) out.put("sprintName",     item.sprintName());
+        if (item.sprintStart()    != null) out.put("sprintStart",    item.sprintStart());
+        if (item.sprintEnd()      != null) out.put("sprintEnd",      item.sprintEnd());
 
         if (review != null) {
             out.put("readinessScore",     review.readinessScore());
@@ -490,5 +785,114 @@ public class RoadmapService {
     /** Falls back to {@code fallback} when {@code value} is blank. */
     private static String blankFallback(String value, String fallback) {
         return (value != null && !value.isBlank()) ? value.trim() : fallback;
+    }
+
+    private String buildImproveContext(RoadmapItem item) {
+        return switch (item.issueType()) {
+            case "EPIC"      -> contextBuilder.buildEpicContext(item.issueKey());
+            case "FEATURE"   -> contextBuilder.buildFeatureContext(item.issueKey(), item.parentKey());
+            default          -> contextBuilder.buildUserStoryContext(item.issueKey(), item.parentKey(), item.grandparentKey());
+        };
+    }
+
+    private String callClaudeForProposal(String prompt, String issueKey) {
+        String modelName = settings.get("roadmap.review.model", "");
+        if (modelName.isBlank()) modelName = settings.get("anthropic.model", "claude-3-5-sonnet-20241022");
+        int maxTokens = Integer.parseInt(settings.get("roadmap.review.max-tokens", "4096"));
+
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(modelName))
+                .maxTokens(maxTokens)
+                .messages(List.of(MessageParam.builder()
+                        .role(MessageParam.Role.USER)
+                        .content(prompt)
+                        .build()))
+                .build();
+        try {
+            Message response = anthropicClient.messages().create(params);
+            for (ContentBlock block : response.content()) {
+                if (block.isText()) return block.asText().text().trim();
+            }
+            return null;
+        } catch (Exception e) {
+            LOG.errorf("RoadmapService.callClaudeForProposal: Claude call failed for %s: %s",
+                    issueKey, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Runs the tool-enabled agentic loop for AI improvement when the roadmap has
+     * linked products. Claude can call search_knowledge_base, semantic_search,
+     * query_code_graph, and fetch_url to research the codebase before producing
+     * its improved issue JSON.
+     */
+    private String callClaudeWithTools(String userPrompt, String issueKey,
+                                       String roadmapId, List<ProductConfig> products) {
+        // Build workspace context with product metadata so tools can scope searches
+        WorkspaceContext workspace;
+        try {
+            workspace = WorkspaceContext.create("roadmap-improve-" + issueKey);
+        } catch (Exception e) {
+            LOG.warnf("RoadmapService.callClaudeWithTools: could not create workspace, falling back to simple call: %s",
+                    e.getMessage());
+            return callClaudeForProposal(userPrompt, issueKey);
+        }
+
+        try {
+            // Populate workspace metadata from the first product's git config so
+            // code-graph and semantic search tools can resolve the correct repo scope.
+            ProductConfig primary = products.get(0);
+            if (primary.git() != null) {
+                if (primary.git().workspace() != null)
+                    workspace.putMetadata("workspace", primary.git().workspace());
+                if (primary.git().repos() != null && !primary.git().repos().isEmpty())
+                    workspace.putMetadata("repoSlug", primary.git().repos().get(0));
+                if (primary.git().repos() != null && primary.git().repos().size() > 1)
+                    workspace.putMetadata("productRepos", String.join(",", primary.git().repos()));
+            }
+
+            String productContext = buildProductContext(products);
+            String systemPrompt = """
+                    You are a senior product manager and software architect improving Jira issues.
+                    Use the available tools to research the current codebase architecture, knowledge base,
+                    and documentation so your improvements are grounded in the actual implementation.
+                    Always respond with valid JSON only — no prose outside the JSON block.
+                    """ + productContext;
+
+            String modelName = settings.get("roadmap.review.model", "");
+            if (modelName.isBlank()) modelName = settings.get("anthropic.model", "claude-3-5-sonnet-20241022");
+            int maxTokens = Integer.parseInt(settings.get("roadmap.review.max-tokens", "4096"));
+            int maxIterations = Integer.parseInt(settings.get("roadmap.improve.max-tool-iterations", "10"));
+
+            return toolLoop.run(systemPrompt, workspace, ToolDefinitions.roadmapImprove(),
+                    userPrompt, maxIterations,
+                    "roadmap-improve-" + issueKey, "ROADMAP_IMPROVE");
+        } finally {
+            workspace.close();
+        }
+    }
+
+    private static String buildProductContext(List<ProductConfig> products) {
+        if (products.isEmpty()) return "";
+        StringBuilder sb = new StringBuilder("\n\nLinked products for codebase context:\n");
+        for (ProductConfig p : products) {
+            sb.append("- ").append(p.displayName()).append(" (id: ").append(p.productId()).append(")");
+            if (p.git() != null && p.git().repos() != null && !p.git().repos().isEmpty()) {
+                sb.append(" repos: ").append(String.join(", ", p.git().repos()));
+            }
+            sb.append("\n");
+        }
+        return sb.toString();
+    }
+
+    private static String extractJson(String text) {
+        String s = text.strip();
+        if (s.startsWith("```")) {
+            int nl = s.indexOf('\n');
+            int end = s.lastIndexOf("```");
+            if (nl > 0 && end > nl) s = s.substring(nl + 1, end).strip();
+        }
+        return s;
     }
 }

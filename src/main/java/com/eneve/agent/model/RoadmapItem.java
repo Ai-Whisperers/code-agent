@@ -18,5 +18,10 @@ public record RoadmapItem(
         String jiraStatus,
         Instant syncedAt,
         /** Jira {@code updated} timestamp. Null when not yet fetched or unavailable. */
-        Instant jiraModifiedAt
+        Instant jiraModifiedAt,
+        String assignee,
+        String reporter,
+        String sprintName,
+        Instant sprintStart,
+        Instant sprintEnd
 ) {}

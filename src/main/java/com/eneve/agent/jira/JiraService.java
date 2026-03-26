@@ -474,6 +474,8 @@ public class JiraService {
      * Full issue detail record for knowledge indexing and roadmap reviews.
      * {@code updatedAt} reflects the Jira {@code updated} timestamp so callers
      * can detect whether the issue was modified after the last AI review.
+     * Sprint fields are populated only for FEATURE and USERSTORY items; they are
+     * derived from {@code customfield_10020} (the last sprint in the array).
      */
     public record JiraIssueDetail(
             String key,
@@ -485,8 +487,22 @@ public class JiraService {
             java.util.List<String> labels,
             java.util.List<String> comments,
             java.util.List<JiraAttachment> attachments,
-            java.time.Instant updatedAt
-    ) {}
+            java.time.Instant updatedAt,
+            String sprintName,
+            java.time.Instant sprintStart,
+            java.time.Instant sprintEnd
+    ) {
+        /** Convenience constructor that leaves sprint fields null (backwards-compat). */
+        public JiraIssueDetail(String key, String summary, String description, String status,
+                               String reporter, String assignee,
+                               java.util.List<String> labels,
+                               java.util.List<String> comments,
+                               java.util.List<JiraAttachment> attachments,
+                               java.time.Instant updatedAt) {
+            this(key, summary, description, status, reporter, assignee,
+                    labels, comments, attachments, updatedAt, null, null, null);
+        }
+    }
 
     /**
      * Attachment metadata returned by the Jira REST API.
@@ -514,7 +530,8 @@ public class JiraService {
      */
     public java.util.List<JiraIssueDetail> searchIssues(String jql, int maxResults) {
         int cap = Math.min(Math.max(1, maxResults), 100);
-        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment", "updated");
+        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee",
+                "labels", "comment", "attachment", "updated", "customfield_10020");
 
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         var body = mapper.createObjectNode();
@@ -577,8 +594,21 @@ public class JiraService {
 
                 java.time.Instant updatedAt = parseJiraTimestamp(fieldsNode.path("updated").asText(null));
 
+                // Parse sprint from customfield_10020 (array of sprint objects — use the last one)
+                String sprintName = null;
+                java.time.Instant sprintStart = null;
+                java.time.Instant sprintEnd = null;
+                var sprintArray = fieldsNode.path("customfield_10020");
+                if (sprintArray.isArray() && sprintArray.size() > 0) {
+                    var lastSprint = sprintArray.get(sprintArray.size() - 1);
+                    sprintName  = lastSprint.path("name").asText(null);
+                    sprintStart = parseJiraTimestamp(lastSprint.path("startDate").asText(null));
+                    sprintEnd   = parseJiraTimestamp(lastSprint.path("endDate").asText(null));
+                }
+
                 results.add(new JiraIssueDetail(key, summary, description, status,
-                        reporter, assignee, labels, comments, attachments, updatedAt));
+                        reporter, assignee, labels, comments, attachments, updatedAt,
+                        sprintName, sprintStart, sprintEnd));
             }
             LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
             return results;
@@ -639,6 +669,101 @@ public class JiraService {
             LOG.warnf("Failed to parse remote links for %s: %s", issueKey, e.getMessage());
             return java.util.List.of();
         }
+    }
+
+    // ─── System-credential write operations (AI proposals) ────────────────────
+
+    /**
+     * Creates a new Jira issue using system credentials and returns the new issue key.
+     * Used when accepting an AI proposal for a Feature or User Story.
+     *
+     * @param projectKey  Jira project key (e.g. "PRJ")
+     * @param summary     issue summary
+     * @param description plain-text description
+     * @param issueType   Jira issue type name (e.g. "Story")
+     * @param parentKey   parent issue key, or null for top-level issues
+     * @return new issue key (e.g. "PRJ-42"), or null on failure
+     */
+    public String createIssueSystem(String projectKey, String summary,
+                                     String description, String issueType, String parentKey) {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var fields = mapper.createObjectNode();
+        fields.put("summary", summary);
+        fields.putObject("project").put("key", projectKey);
+        fields.putObject("issuetype").put("name", issueType);
+
+        // Description as ADF plain text
+        var descNode = mapper.createObjectNode();
+        descNode.put("type", "doc");
+        descNode.put("version", 1);
+        var content = descNode.putArray("content");
+        var para = content.addObject();
+        para.put("type", "paragraph");
+        para.putArray("content").addObject().put("type", "text").put("text", description != null ? description : "");
+        fields.set("description", descNode);
+
+        if (parentKey != null && !parentKey.isBlank()) {
+            fields.putObject("parent").put("key", parentKey);
+        }
+
+        var body = mapper.createObjectNode();
+        body.set("fields", fields);
+
+        String jsonBody;
+        try {
+            jsonBody = mapper.writeValueAsString(body);
+        } catch (Exception e) {
+            LOG.warnf("createIssueSystem: failed to serialize body: %s", e.getMessage());
+            return null;
+        }
+
+        String response = postForBody("/rest/api/3/issue", jsonBody, "create issue " + projectKey);
+        if (response == null) return null;
+
+        try {
+            var root = mapper.readTree(response);
+            return root.path("key").asText(null);
+        } catch (Exception e) {
+            LOG.warnf("createIssueSystem: failed to parse response: %s", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Updates an existing Jira issue's summary and description using system credentials.
+     * Used when accepting an AI proposal for an Epic.
+     *
+     * @param issueKey    issue to update (e.g. "PRJ-10")
+     * @param summary     new summary
+     * @param description new plain-text description
+     */
+    public void updateIssueSystem(String issueKey, String summary, String description) {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var fields = mapper.createObjectNode();
+        if (summary != null)     fields.put("summary", summary);
+        if (description != null) {
+            var descNode = mapper.createObjectNode();
+            descNode.put("type", "doc");
+            descNode.put("version", 1);
+            var content = descNode.putArray("content");
+            var para = content.addObject();
+            para.put("type", "paragraph");
+            para.putArray("content").addObject().put("type", "text").put("text", description);
+            fields.set("description", descNode);
+        }
+
+        var body = mapper.createObjectNode();
+        body.set("fields", fields);
+
+        String jsonBody;
+        try {
+            jsonBody = mapper.writeValueAsString(body);
+        } catch (Exception e) {
+            LOG.warnf("updateIssueSystem: failed to serialize body for %s: %s", issueKey, e.getMessage());
+            return;
+        }
+
+        putForBody("/rest/api/3/issue/" + escapeJson(issueKey), jsonBody, "update issue " + issueKey);
     }
 
     /**
@@ -817,7 +942,7 @@ public class JiraService {
                 results.add(new JiraIssueDetail(key, summary, description, status,
                         reporter, assignee, labels, comments, attachments, updatedAt));
             }
-            LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
+            LOG.infof("JIRA searchIssues(creds): found %d issues for JQL: %s", results.size(), jql);
             return results;
         } catch (Exception e) {
             LOG.warnf("Failed to parse JIRA search results: %s", e.getMessage());
@@ -1112,6 +1237,33 @@ public class JiraService {
         } catch (Exception e) {
             LOG.errorf("JIRA %s error: %s", operation, e.getMessage());
             return false;
+        }
+    }
+
+    /**
+     * PUT request using system credentials. Returns the response body string, or null on error.
+     */
+    private String putForBody(String path, String body, String operation) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
+                    .header("Authorization", "Basic " + basicAuth())
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .PUT(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                LOG.infof("JIRA %s succeeded (HTTP %d)", operation, response.statusCode());
+                return response.body();
+            } else {
+                LOG.warnf("JIRA %s failed (HTTP %d): %s", operation, response.statusCode(), response.body());
+                return null;
+            }
+        } catch (Exception e) {
+            LOG.errorf("JIRA %s error: %s", operation, e.getMessage());
+            return null;
         }
     }
 

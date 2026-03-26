@@ -1,0 +1,3 @@
+ALTER TABLE roadmap_items
+    ADD COLUMN IF NOT EXISTS assignee VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS reporter VARCHAR(255);

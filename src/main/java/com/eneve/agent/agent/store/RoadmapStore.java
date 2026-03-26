@@ -112,6 +112,58 @@ public class RoadmapStore {
         }
     }
 
+    // ─── Product links ────────────────────────────────────────────────────────
+
+    public void linkProduct(String roadmapId, String productId) {
+        String sql = """
+                INSERT INTO roadmap_products (roadmap_id, product_id)
+                VALUES (?::uuid, ?)
+                ON CONFLICT (roadmap_id, product_id) DO NOTHING
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, roadmapId);
+            ps.setString(2, productId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("RoadmapStore: failed to link product %s to roadmap %s: %s",
+                    productId, roadmapId, e.getMessage());
+            throw new RuntimeException("Failed to link product", e);
+        }
+    }
+
+    public void unlinkProduct(String roadmapId, String productId) {
+        String sql = "DELETE FROM roadmap_products WHERE roadmap_id = ?::uuid AND product_id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, roadmapId);
+            ps.setString(2, productId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("RoadmapStore: failed to unlink product %s from roadmap %s: %s",
+                    productId, roadmapId, e.getMessage());
+            throw new RuntimeException("Failed to unlink product", e);
+        }
+    }
+
+    public List<String> listLinkedProductIds(String roadmapId) {
+        String sql = "SELECT product_id FROM roadmap_products WHERE roadmap_id = ?::uuid ORDER BY created_at";
+        List<String> ids = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, roadmapId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) ids.add(rs.getString("product_id"));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("RoadmapStore: failed to list linked products for roadmap %s: %s",
+                    roadmapId, e.getMessage());
+        }
+        return ids;
+    }
+
+    // ─── Private helpers ─────────────────────────────────────────────────────
+
     private RoadmapRecord mapRow(ResultSet rs) throws SQLException {
         return new RoadmapRecord(
                 rs.getString("id"),

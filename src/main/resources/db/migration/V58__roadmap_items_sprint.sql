@@ -1,0 +1,4 @@
+ALTER TABLE roadmap_items
+    ADD COLUMN IF NOT EXISTS sprint_name  VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS sprint_start TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS sprint_end   TIMESTAMPTZ;

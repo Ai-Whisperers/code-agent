@@ -16,6 +16,20 @@ public final class ToolDefinitions {
 
     private ToolDefinitions() { }
 
+    /**
+     * Read-only tool set for the roadmap AI-improvement loop.
+     * Lets Claude research the linked product's knowledge base, code semantics,
+     * code graph, and external documentation before writing the improved issue.
+     */
+    public static List<ToolUnion> roadmapImprove() {
+        return List.of(
+                ToolUnion.ofTool(searchKnowledgeBase()),
+                ToolUnion.ofTool(semanticSearch()),
+                ToolUnion.ofTool(queryCodeGraph()),
+                ToolUnion.ofTool(fetchUrl())
+        );
+    }
+
     public static List<ToolUnion> all() {
         return List.of(
                 ToolUnion.ofTool(readFile()),

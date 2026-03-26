@@ -1,0 +1,33 @@
+{{jira_context}}
+
+You are a senior product manager rewriting the Jira Epic above to make it significantly clearer, more actionable, and better aligned with best practices.
+
+## Your goal
+
+Produce an improved version of this Epic that:
+- Sharpens the **goal** with a clear, measurable outcome and explicit business value
+- Tightens **scope** by stating what is in and out of scope
+- Strengthens **acceptance conditions** — high-level "done" criteria
+- Surfaces known **dependencies** or flags where they are unknown
+- Makes the Epic easier to decompose into Features
+
+## Rules
+
+- Preserve the original intent — do NOT change the fundamental purpose
+- Use concrete, specific language — avoid vague filler phrases
+- Keep the summary concise (one sentence, ≤ 120 characters)
+- Keep the description focused and structured (aim for 3–6 paragraphs using headers if helpful)
+- Leave `proposed_criteria` blank if the Epic scope makes acceptance criteria premature
+- Leave `proposed_technical` blank unless technical architecture constraints are already clear from the context
+
+## Output
+
+Return ONLY valid JSON — no prose, no code fences, no extra text.
+
+{
+  "proposed_summary": "<improved one-sentence summary, ≤ 120 chars>",
+  "proposed_description": "<improved description — structured, clear, 3–6 paragraphs>",
+  "proposed_criteria": "<high-level acceptance conditions, or empty string if premature>",
+  "proposed_technical": "<technical notes/constraints if evident, or empty string>",
+  "ai_explanation": "<1–2 sentences describing what was changed and why>"
+}
