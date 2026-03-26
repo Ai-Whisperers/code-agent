@@ -128,6 +128,12 @@
             <artifactId>quarkus-logging-json</artifactId>
         </dependency>
 
+        <!-- MicroProfile context propagation — provides ManagedExecutor for Quarkus-managed threads -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-context-propagation</artifactId>
+        </dependency>
+
         <!-- PostgreSQL JDBC + Connection Pool + Flyway -->
         <dependency>
             <groupId>io.quarkus</groupId>

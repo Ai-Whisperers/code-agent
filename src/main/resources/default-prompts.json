@@ -178,5 +178,17 @@
       "CUSTOMER_TOOLS_SECTION",
       "AWS_TOOLS_SECTION"
     ]
+  },
+  "review-epic": {
+    "description": "AI readiness and complexity review for a Jira Epic",
+    "placeholders": ["jira_context"]
+  },
+  "review-feature": {
+    "description": "AI readiness and complexity review for a Jira Feature",
+    "placeholders": ["jira_context"]
+  },
+  "review-userstory": {
+    "description": "AI readiness and complexity review for a Jira User Story",
+    "placeholders": ["jira_context"]
   }
 }

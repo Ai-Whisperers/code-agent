@@ -338,6 +338,30 @@ public class JobStore {
     }
 
     /**
+     * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
+     * for the given Jira issue key. Used to prevent duplicate review jobs.
+     */
+    public boolean hasActiveReviewJob(String issueKey) {
+        String sql = """
+                SELECT 1 FROM jobs
+                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
+                  AND status IN ('PENDING','QUEUED','RUNNING')
+                  AND request_payload->>'issueKey' = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, issueKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            LOG.warnf("Failed to check active review job for %s: %s", issueKey, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * No-op: the jobs table now serves as the persistent ledger for processed JIRA keys.
      * Kept for API compatibility; callers can be cleaned up over time.
      */
@@ -455,6 +479,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, MetricsJobRequest.class));
                 case QUALITY_REPORT -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, QualityReportJobRequest.class));
+                case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, JiraReviewRequest.class), jobType);
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -476,6 +502,7 @@ public class JobStore {
             case SYNC_CONFLUENCE -> job.getSyncConfluenceRequest();
             case METRICS -> job.getMetricsRequest();
             case QUALITY_REPORT -> job.getQualityReportRequest();
+            case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> job.getJiraReviewRequest();
             case CHAT -> null;
         };
         if (request == null) return "{}";

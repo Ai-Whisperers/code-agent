@@ -10,48 +10,60 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(12, values.length);
-        assertEquals(JobType.FIX, values[0]);
-        assertEquals(JobType.REVIEW, values[1]);
-        assertEquals(JobType.FIX_PR, values[2]);
-        assertEquals(JobType.REPLY, values[3]);
-        assertEquals(JobType.FIX_COMMENT, values[4]);
-        assertEquals(JobType.HOOK, values[5]);
-        assertEquals(JobType.GENERATE_TESTS, values[6]);
-        assertEquals(JobType.GENERATE_DOCS, values[7]);
-        assertEquals(JobType.SYNC_CONFLUENCE, values[8]);
-        assertEquals(JobType.METRICS, values[9]);
-        assertEquals(JobType.QUALITY_REPORT, values[10]);
+        assertEquals(15, values.length);
+        assertEquals(JobType.FIX,              values[0]);
+        assertEquals(JobType.REVIEW,           values[1]);
+        assertEquals(JobType.FIX_PR,           values[2]);
+        assertEquals(JobType.REPLY,            values[3]);
+        assertEquals(JobType.FIX_COMMENT,      values[4]);
+        assertEquals(JobType.HOOK,             values[5]);
+        assertEquals(JobType.GENERATE_TESTS,   values[6]);
+        assertEquals(JobType.GENERATE_DOCS,    values[7]);
+        assertEquals(JobType.SYNC_CONFLUENCE,  values[8]);
+        assertEquals(JobType.METRICS,          values[9]);
+        assertEquals(JobType.QUALITY_REPORT,   values[10]);
+        assertEquals(JobType.REVIEW_EPIC,      values[11]);
+        assertEquals(JobType.REVIEW_FEATURE,   values[12]);
+        assertEquals(JobType.REVIEW_USERSTORY, values[13]);
+        assertEquals(JobType.CHAT,             values[14]);
     }
 
     @Test
     void enumValuesHaveCorrectNames() {
-        assertEquals("FIX", JobType.FIX.name());
-        assertEquals("REVIEW", JobType.REVIEW.name());
-        assertEquals("FIX_PR", JobType.FIX_PR.name());
-        assertEquals("REPLY", JobType.REPLY.name());
-        assertEquals("FIX_COMMENT", JobType.FIX_COMMENT.name());
-        assertEquals("HOOK", JobType.HOOK.name());
-        assertEquals("GENERATE_TESTS", JobType.GENERATE_TESTS.name());
-        assertEquals("GENERATE_DOCS", JobType.GENERATE_DOCS.name());
-        assertEquals("SYNC_CONFLUENCE", JobType.SYNC_CONFLUENCE.name());
-        assertEquals("METRICS", JobType.METRICS.name());
-        assertEquals("QUALITY_REPORT", JobType.QUALITY_REPORT.name());
+        assertEquals("FIX",              JobType.FIX.name());
+        assertEquals("REVIEW",           JobType.REVIEW.name());
+        assertEquals("FIX_PR",           JobType.FIX_PR.name());
+        assertEquals("REPLY",            JobType.REPLY.name());
+        assertEquals("FIX_COMMENT",      JobType.FIX_COMMENT.name());
+        assertEquals("HOOK",             JobType.HOOK.name());
+        assertEquals("GENERATE_TESTS",   JobType.GENERATE_TESTS.name());
+        assertEquals("GENERATE_DOCS",    JobType.GENERATE_DOCS.name());
+        assertEquals("SYNC_CONFLUENCE",  JobType.SYNC_CONFLUENCE.name());
+        assertEquals("METRICS",          JobType.METRICS.name());
+        assertEquals("QUALITY_REPORT",   JobType.QUALITY_REPORT.name());
+        assertEquals("REVIEW_EPIC",      JobType.REVIEW_EPIC.name());
+        assertEquals("REVIEW_FEATURE",   JobType.REVIEW_FEATURE.name());
+        assertEquals("REVIEW_USERSTORY", JobType.REVIEW_USERSTORY.name());
+        assertEquals("CHAT",             JobType.CHAT.name());
     }
 
     @Test
     void enumValueOfWorks() {
-        assertEquals(JobType.FIX, JobType.valueOf("FIX"));
-        assertEquals(JobType.REVIEW, JobType.valueOf("REVIEW"));
-        assertEquals(JobType.FIX_PR, JobType.valueOf("FIX_PR"));
-        assertEquals(JobType.REPLY, JobType.valueOf("REPLY"));
-        assertEquals(JobType.FIX_COMMENT, JobType.valueOf("FIX_COMMENT"));
-        assertEquals(JobType.HOOK, JobType.valueOf("HOOK"));
-        assertEquals(JobType.GENERATE_TESTS, JobType.valueOf("GENERATE_TESTS"));
-        assertEquals(JobType.GENERATE_DOCS, JobType.valueOf("GENERATE_DOCS"));
-        assertEquals(JobType.SYNC_CONFLUENCE, JobType.valueOf("SYNC_CONFLUENCE"));
-        assertEquals(JobType.METRICS, JobType.valueOf("METRICS"));
-        assertEquals(JobType.QUALITY_REPORT, JobType.valueOf("QUALITY_REPORT"));
+        assertEquals(JobType.FIX,              JobType.valueOf("FIX"));
+        assertEquals(JobType.REVIEW,           JobType.valueOf("REVIEW"));
+        assertEquals(JobType.FIX_PR,           JobType.valueOf("FIX_PR"));
+        assertEquals(JobType.REPLY,            JobType.valueOf("REPLY"));
+        assertEquals(JobType.FIX_COMMENT,      JobType.valueOf("FIX_COMMENT"));
+        assertEquals(JobType.HOOK,             JobType.valueOf("HOOK"));
+        assertEquals(JobType.GENERATE_TESTS,   JobType.valueOf("GENERATE_TESTS"));
+        assertEquals(JobType.GENERATE_DOCS,    JobType.valueOf("GENERATE_DOCS"));
+        assertEquals(JobType.SYNC_CONFLUENCE,  JobType.valueOf("SYNC_CONFLUENCE"));
+        assertEquals(JobType.METRICS,          JobType.valueOf("METRICS"));
+        assertEquals(JobType.QUALITY_REPORT,   JobType.valueOf("QUALITY_REPORT"));
+        assertEquals(JobType.REVIEW_EPIC,      JobType.valueOf("REVIEW_EPIC"));
+        assertEquals(JobType.REVIEW_FEATURE,   JobType.valueOf("REVIEW_FEATURE"));
+        assertEquals(JobType.REVIEW_USERSTORY, JobType.valueOf("REVIEW_USERSTORY"));
+        assertEquals(JobType.CHAT,             JobType.valueOf("CHAT"));
     }
 
     @Test
@@ -68,17 +80,21 @@ class JobTypeTest {
 
     @Test
     void enumOrdinals() {
-        assertEquals(0, JobType.FIX.ordinal());
-        assertEquals(1, JobType.REVIEW.ordinal());
-        assertEquals(2, JobType.FIX_PR.ordinal());
-        assertEquals(3, JobType.REPLY.ordinal());
-        assertEquals(4, JobType.FIX_COMMENT.ordinal());
-        assertEquals(5, JobType.HOOK.ordinal());
-        assertEquals(6, JobType.GENERATE_TESTS.ordinal());
-        assertEquals(7, JobType.GENERATE_DOCS.ordinal());
-        assertEquals(8, JobType.SYNC_CONFLUENCE.ordinal());
-        assertEquals(9, JobType.METRICS.ordinal());
+        assertEquals(0,  JobType.FIX.ordinal());
+        assertEquals(1,  JobType.REVIEW.ordinal());
+        assertEquals(2,  JobType.FIX_PR.ordinal());
+        assertEquals(3,  JobType.REPLY.ordinal());
+        assertEquals(4,  JobType.FIX_COMMENT.ordinal());
+        assertEquals(5,  JobType.HOOK.ordinal());
+        assertEquals(6,  JobType.GENERATE_TESTS.ordinal());
+        assertEquals(7,  JobType.GENERATE_DOCS.ordinal());
+        assertEquals(8,  JobType.SYNC_CONFLUENCE.ordinal());
+        assertEquals(9,  JobType.METRICS.ordinal());
         assertEquals(10, JobType.QUALITY_REPORT.ordinal());
+        assertEquals(11, JobType.REVIEW_EPIC.ordinal());
+        assertEquals(12, JobType.REVIEW_FEATURE.ordinal());
+        assertEquals(13, JobType.REVIEW_USERSTORY.ordinal());
+        assertEquals(14, JobType.CHAT.ordinal());
     }
 
     @Test

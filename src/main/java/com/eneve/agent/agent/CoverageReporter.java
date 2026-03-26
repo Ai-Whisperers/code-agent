@@ -177,8 +177,8 @@ public class CoverageReporter {
     /**
      * Measures JaCoCo coverage for quality report purposes.
      * If JaCoCo is already declared in {@code pom.xml}, the existing plugin configuration
-     * is used. If not, the plugin is invoked via its fully-qualified Maven coordinates
-     * so that no pom.xml modification is required.
+     * is used. If not, the plugin configuration is injected into {@code pom.xml} so that
+     * coverage is recorded and the project retains it going forward.
      *
      * <p>Returns {@code null} if the project is not Maven-based or if measurement fails.
      * Never throws — all errors are logged as warnings.
@@ -194,15 +194,21 @@ public class CoverageReporter {
         }
 
         boolean jacocoPresent = isJacocoPresent(workspace);
-        String pluginPrefix = jacocoPresent
-                ? "jacoco"
-                : "org.jacoco:jacoco-maven-plugin:" + settings.get("quality-report.jacoco.version", "0.8.12");
+        if (!jacocoPresent) {
+            String version = settings.get("quality-report.jacoco.version", "0.8.12");
+            try {
+                injectJacocoPlugin(pom, version);
+            } catch (IOException e) {
+                LOG.warnf("CoverageReporter: failed to inject JaCoCo plugin into pom.xml: %s", e.getMessage());
+                return null;
+            }
+        }
 
         String command = ProcessHelper.mvn(workspace.getRoot())
-                + " " + pluginPrefix + ":prepare-agent test " + pluginPrefix + ":report -q";
+                + " jacoco:prepare-agent test jacoco:report -q";
 
         LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
-                jacocoPresent ? "configured" : "auto-injected", command);
+                jacocoPresent ? "configured" : "injected into pom.xml", command);
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
@@ -306,6 +312,59 @@ public class CoverageReporter {
             LOG.warnf("Failed to parse JaCoCo report: %s", e.getMessage());
             return null;
         }
+    }
+
+    // ─── POM manipulation ────────────────────────────────────────────────
+
+    /**
+     * Injects the JaCoCo Maven plugin into {@code pom.xml} when it is not already declared.
+     * Handles three cases:
+     * <ol>
+     *   <li>A {@code <plugins>} block already exists → plugin is appended inside it.</li>
+     *   <li>A {@code <build>} block exists but no {@code <plugins>} → a {@code <plugins>}
+     *       wrapper is added inside {@code <build>}.</li>
+     *   <li>Neither exists → a full {@code <build><plugins>…</plugins></build>} section is
+     *       inserted before the closing {@code </project>} tag.</li>
+     * </ol>
+     */
+    private void injectJacocoPlugin(Path pom, String version) throws IOException {
+        String content = Files.readString(pom);
+
+        String pluginXml = """
+                        <plugin>
+                            <groupId>org.jacoco</groupId>
+                            <artifactId>jacoco-maven-plugin</artifactId>
+                            <version>%s</version>
+                            <executions>
+                                <execution>
+                                    <goals>
+                                        <goal>prepare-agent</goal>
+                                    </goals>
+                                </execution>
+                                <execution>
+                                    <id>report</id>
+                                    <phase>test</phase>
+                                    <goals>
+                                        <goal>report</goal>
+                                    </goals>
+                                </execution>
+                            </executions>
+                        </plugin>
+                """.formatted(version);
+
+        String updated;
+        if (content.contains("</plugins>")) {
+            updated = content.replace("</plugins>", pluginXml + "    </plugins>");
+        } else if (content.contains("</build>")) {
+            String pluginsBlock = "    <plugins>\n" + pluginXml + "    </plugins>\n    ";
+            updated = content.replace("</build>", pluginsBlock + "</build>");
+        } else {
+            String buildBlock = "\n    <build>\n        <plugins>\n" + pluginXml + "        </plugins>\n    </build>\n";
+            updated = content.replace("</project>", buildBlock + "</project>");
+        }
+
+        Files.writeString(pom, updated);
+        LOG.infof("CoverageReporter: injected JaCoCo plugin %s into pom.xml", version);
     }
 
     // ─── Parsing ─────────────────────────────────────────────────────────

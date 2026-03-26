@@ -12,6 +12,9 @@ public enum JobType {
     SYNC_CONFLUENCE,
     METRICS,
     QUALITY_REPORT,
+    REVIEW_EPIC,
+    REVIEW_FEATURE,
+    REVIEW_USERSTORY,
     CHAT;
 
     /**
@@ -20,11 +23,12 @@ public enum JobType {
      */
     public int priority() {
         return switch (this) {
-            case HOOK, REPLY, FIX_COMMENT                        -> 1;
-            case REVIEW, FIX_PR                                  -> 2;
-            case FIX, METRICS, QUALITY_REPORT                    -> 3;
-            case GENERATE_TESTS, GENERATE_DOCS, SYNC_CONFLUENCE  -> 4;
-            case CHAT                                            -> 4;
+            case HOOK, REPLY, FIX_COMMENT                                  -> 1;
+            case REVIEW, FIX_PR                                            -> 2;
+            case FIX, METRICS, QUALITY_REPORT,
+                 REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY             -> 3;
+            case GENERATE_TESTS, GENERATE_DOCS, SYNC_CONFLUENCE            -> 4;
+            case CHAT                                                      -> 4;
         };
     }
 }

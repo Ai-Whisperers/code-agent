@@ -389,10 +389,91 @@ public class JiraService {
         }
     }
 
+    // ─── Roadmap review helpers ────────────────────────────────────────────
+
+    /**
+     * Fetch full detail for a single Jira issue using system credentials.
+     * Returns null if not found.
+     */
+    public JiraIssueDetail fetchIssueDetail(String issueKey) {
+        var results = searchIssues("key = \"" + escapeJson(issueKey) + "\"", 1);
+        return results.isEmpty() ? null : results.get(0);
+    }
+
+    /**
+     * Fetch only the current status of a single Jira issue. Lightweight.
+     */
+    public String fetchIssueStatus(String issueKey) {
+        String json = get("/rest/api/3/issue/" + escapeJson(issueKey) + "?fields=status",
+                "fetch status " + issueKey);
+        if (json == null) return null;
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            return root.path("fields").path("status").path("name").asText(null);
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse JIRA status for %s: %s", issueKey, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Search for epics linked to the given Jira label using system credentials.
+     * Uses the configurable epic issue type from settings.
+     */
+    public java.util.List<JiraIssueDetail> searchEpicsByLabel(String label) {
+        return searchEpicsByLabel(label, settingsService.get("roadmap.jira.epic-issuetype", "Epic"));
+    }
+
+    /**
+     * Search for epics with an explicit issue-type name (per-roadmap override).
+     */
+    public java.util.List<JiraIssueDetail> searchEpicsByLabel(String label, String issuetype) {
+        String jql = "issuetype = \"" + escapeJson(issuetype) + "\" AND labels = \""
+                + escapeJson(label) + "\" ORDER BY created ASC";
+        return searchIssues(jql, 100);
+    }
+
+    /**
+     * Search for features (child issues of feature type) under the given epic key.
+     * Uses the configurable feature issue type from settings.
+     */
+    public java.util.List<JiraIssueDetail> searchFeaturesForEpic(String epicKey) {
+        return searchFeaturesForEpic(epicKey, settingsService.get("roadmap.jira.feature-issuetype", "Story"));
+    }
+
+    /**
+     * Search for features with an explicit issue-type name (per-roadmap override).
+     */
+    public java.util.List<JiraIssueDetail> searchFeaturesForEpic(String epicKey, String issuetype) {
+        String jql = "issuetype = \"" + escapeJson(issuetype) + "\" AND parent = \""
+                + escapeJson(epicKey) + "\" ORDER BY created ASC";
+        return searchIssues(jql, 100);
+    }
+
+    /**
+     * Search for user stories (sub-tasks) under the given feature/parent key.
+     * Uses the configurable user story issue type from settings.
+     */
+    public java.util.List<JiraIssueDetail> searchStoriesForFeature(String featureKey) {
+        return searchStoriesForFeature(featureKey, settingsService.get("roadmap.jira.userstory-issuetype", "Sub-task"));
+    }
+
+    /**
+     * Search for user stories with an explicit issue-type name (per-roadmap override).
+     */
+    public java.util.List<JiraIssueDetail> searchStoriesForFeature(String featureKey, String issuetype) {
+        String jql = "issuetype = \"" + escapeJson(issuetype) + "\" AND parent = \""
+                + escapeJson(featureKey) + "\" ORDER BY created ASC";
+        return searchIssues(jql, 100);
+    }
+
     // ─── Knowledge-base indexing helpers ──────────────────────────────────
 
     /**
-     * Full issue detail record for knowledge indexing.
+     * Full issue detail record for knowledge indexing and roadmap reviews.
+     * {@code updatedAt} reflects the Jira {@code updated} timestamp so callers
+     * can detect whether the issue was modified after the last AI review.
      */
     public record JiraIssueDetail(
             String key,
@@ -403,7 +484,8 @@ public class JiraService {
             String assignee,
             java.util.List<String> labels,
             java.util.List<String> comments,
-            java.util.List<JiraAttachment> attachments
+            java.util.List<JiraAttachment> attachments,
+            java.time.Instant updatedAt
     ) {}
 
     /**
@@ -432,7 +514,7 @@ public class JiraService {
      */
     public java.util.List<JiraIssueDetail> searchIssues(String jql, int maxResults) {
         int cap = Math.min(Math.max(1, maxResults), 100);
-        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment");
+        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment", "updated");
 
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         var body = mapper.createObjectNode();
@@ -493,8 +575,10 @@ public class JiraService {
                     ));
                 }
 
+                java.time.Instant updatedAt = parseJiraTimestamp(fieldsNode.path("updated").asText(null));
+
                 results.add(new JiraIssueDetail(key, summary, description, status,
-                        reporter, assignee, labels, comments, attachments));
+                        reporter, assignee, labels, comments, attachments, updatedAt));
             }
             LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
             return results;
@@ -607,6 +691,23 @@ public class JiraService {
                 .replace("\t", "\\t");
     }
 
+    /**
+     * Parses a Jira timestamp string (ISO-8601 with timezone offset) to an Instant.
+     * Returns null if the input is blank or cannot be parsed.
+     */
+    private static java.time.Instant parseJiraTimestamp(String value) {
+        if (value == null || value.isBlank()) return null;
+        try {
+            return java.time.OffsetDateTime.parse(value).toInstant();
+        } catch (Exception e) {
+            try {
+                return java.time.Instant.parse(value);
+            } catch (Exception ignored) {
+                return null;
+            }
+        }
+    }
+
     // ─── Credential-based methods for MCP tools ───────────────────────────────────
 
     public record JiraCredentials(String baseUrl, String username, String apiToken) {}
@@ -649,7 +750,7 @@ public class JiraService {
      */
     public java.util.List<JiraIssueDetail> searchIssues(String jql, int maxResults, JiraCredentials creds) {
         int cap = Math.min(Math.max(1, maxResults), 100);
-        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment");
+        var fieldsList = java.util.List.of("summary", "description", "status", "reporter", "assignee", "labels", "comment", "attachment", "updated");
 
         // Build JSON body using ObjectMapper for proper formatting
         String body;
@@ -711,8 +812,10 @@ public class JiraService {
                     ));
                 }
 
+                java.time.Instant updatedAt = parseJiraTimestamp(fieldsNode.path("updated").asText(null));
+
                 results.add(new JiraIssueDetail(key, summary, description, status,
-                        reporter, assignee, labels, comments, attachments));
+                        reporter, assignee, labels, comments, attachments, updatedAt));
             }
             LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
             return results;

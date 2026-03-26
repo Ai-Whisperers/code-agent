@@ -8,7 +8,9 @@ import com.eneve.agent.agent.store.HookStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.model.HookJobRequest;
+import com.eneve.agent.model.JiraReviewRequest;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -184,6 +186,35 @@ public class HookEvaluator {
 
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
         String branchName = "agent/hook-" + hook.name() + "-" + timestamp;
+
+        // Dispatch Jira review jobs when the hook action type is a review action
+        String actionType = hook.actionType();
+        if ("review_epic".equals(actionType) || "review_feature".equals(actionType)
+                || "review_userstory".equals(actionType)) {
+            String issueKey = context != null ? context.get("issue_key") : null;
+            if (issueKey == null || issueKey.isBlank()) {
+                LOG.warnf("Hook '%s' is a review action but no issue_key found in context — skipping",
+                        hook.name());
+                return null;
+            }
+            JobType jobType = switch (actionType) {
+                case "review_epic"      -> JobType.REVIEW_EPIC;
+                case "review_feature"   -> JobType.REVIEW_FEATURE;
+                default                 -> JobType.REVIEW_USERSTORY;
+            };
+            JiraReviewRequest reviewReq = new JiraReviewRequest(null, issueKey,
+                    jobType.name().replace("REVIEW_", ""));
+            String jobId = UUID.randomUUID().toString();
+            JobRecord job = new JobRecord(jobId, reviewReq, jobType);
+            jobStore.put(job);
+            if (!jobQueue.submit(job)) {
+                LOG.warnf("Hook '%s' review job rejected: queue full", hook.name());
+                return null;
+            }
+            LOG.infof("Hook '%s' triggered %s review job %s for issue %s",
+                    hook.name(), jobType, jobId, issueKey);
+            return jobId;
+        }
 
         // Build enhanced prompt with context
         String enhancedPrompt = buildPromptWithContext(hook.prompt(), context);
