@@ -524,9 +524,9 @@ public class ClaudeToolUseLoop {
                 iteration, input, output, cacheWrite, cacheRead);
     }
 
-    private static final int MAX_TOOL_RESULT_CHARS = 12_000;
+    static final int MAX_TOOL_RESULT_CHARS = 12_000;
 
-    private static String truncateResult(String result) {
+    static String truncateResult(String result) {
         if (result == null || result.length() <= MAX_TOOL_RESULT_CHARS) return result;
         return result.substring(0, MAX_TOOL_RESULT_CHARS)
                 + "\n... [truncated " + (result.length() - MAX_TOOL_RESULT_CHARS) + " chars]";

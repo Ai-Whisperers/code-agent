@@ -123,14 +123,16 @@ public class ChatService {
                 // ── Run the streaming loop ─────────────────────────────
                 ConversationContext storedContext = conversationContextStore.getContext(conversationId).orElse(null);
                 ConversationContext effectiveContext = mergeContexts(storedContext, request.conversationContext());
-                String systemPrompt = buildSystemPrompt(
-                        request.productId(),
-                        effectiveContext,
-                        userId);
                 boolean hasCustomer = workspace.getMetadata("customerId") != null
+                        || (request.productId() != null && !request.productId().isBlank())
                         || (effectiveContext != null
                             && effectiveContext.customerIds() != null
                             && !effectiveContext.customerIds().isEmpty());
+                String systemPrompt = buildSystemPrompt(
+                        request.productId(),
+                        effectiveContext,
+                        userId,
+                        hasCustomer);
                 List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs, hasCustomer);
                 
                 // Create final reference for lambda
@@ -253,7 +255,8 @@ public class ChatService {
     // System prompt construction
     // ──────────────────────────────────────────────────────────────────────
 
-    private String buildSystemPrompt(String productId, ConversationContext conversationContext, String userId) {
+    private String buildSystemPrompt(String productId, ConversationContext conversationContext,
+                                     String userId, boolean hasCustomer) {
         String customerName = "Engineering";
         String productContext = "";
 
@@ -266,7 +269,7 @@ public class ChatService {
                 }
                 productContext = buildProductContext(product);
             }
-        } else {
+        } else if (!hasCustomer) {
             productContext = "No customer or product is pre-selected. "
                     + "If the user mentions a customer by name, call `lookup_customer_context` with `customerName` "
                     + "to resolve their environments, AWS accounts, and linked products. "
@@ -284,14 +287,35 @@ public class ChatService {
                 }
             } catch (Exception e) {
                 LOG.warnf("Failed to enrich conversation context: %s", e.getMessage());
-                // Continue without enriched context - graceful degradation
             }
+        }
+
+        String customerToolsSection;
+        String awsToolsSection;
+        if (hasCustomer) {
+            customerToolsSection = "**Customer context:** Already resolved. Use the `customerId` "
+                    + "and `environmentName` values from the active context when calling AWS or code tools.\n";
+            awsToolsSection = "**AWS infrastructure:** Use the resolved `customerId` and `environmentName` with:\n"
+                    + "- `aws_ecs` \u2014 ECS clusters, services, and task status\n"
+                    + "- `aws_cloudwatch_metrics` \u2014 CloudWatch metrics and alarms\n"
+                    + "- `aws_cloudwatch_logs` \u2014 CloudWatch log groups and log events\n"
+                    + "- `aws_rds` \u2014 RDS instances and cluster health\n";
+        } else {
+            customerToolsSection = "**Discovering context:**\n"
+                    + "- When the user mentions a customer by name, call `lookup_customer_context` with `customerName` "
+                    + "to resolve environments, AWS accounts, and linked products.\n"
+                    + "- When no customer is clear, call `lookup_customer_context` with **no parameters** "
+                    + "to list all registered customers.\n"
+                    + "- Use the returned repo slugs for code tool calls.\n";
+            awsToolsSection = "";
         }
 
         Map<String, String> templateVars = Map.of(
                 "CUSTOMER_NAME", customerName,
                 "PRODUCT_CONTEXT", productContext,
-                "CONVERSATION_CONTEXT", enrichedContext
+                "CONVERSATION_CONTEXT", enrichedContext,
+                "CUSTOMER_TOOLS_SECTION", customerToolsSection,
+                "AWS_TOOLS_SECTION", awsToolsSection
         );
 
         return promptTemplateService.resolve("chat-system", templateVars);
