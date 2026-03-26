@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 
 import io.quarkus.security.Authenticated;
+import jakarta.enterprise.context.RequestScoped;
 
 import com.eneve.agent.agent.model.AiCallRecord;
 import com.eneve.agent.agent.store.AiCallStore;
@@ -20,6 +21,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 
+@RequestScoped
 @Path("/stats/ai-calls")
 @Authenticated
 @Produces(MediaType.APPLICATION_JSON)

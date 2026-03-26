@@ -15,6 +15,7 @@ import org.jboss.logging.Logger;
 
 import io.quarkus.security.Authenticated;
 import io.quarkus.security.identity.SecurityIdentity;
+import jakarta.enterprise.context.RequestScoped;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.Path;
@@ -26,6 +27,7 @@ import jakarta.ws.rs.core.Response;
  * Returns the currently authenticated user's identity derived from the Keycloak JWT.
  * Used by the React UI to display user info (name, email, roles, permissions).
  */
+@RequestScoped
 @Path("/me")
 @Authenticated
 @Produces(MediaType.APPLICATION_JSON)
