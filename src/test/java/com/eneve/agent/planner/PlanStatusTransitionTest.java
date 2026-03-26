@@ -1,12 +1,17 @@
 package com.eneve.agent.planner;
 
+import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.store.CodeMetricsStore;
+import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.workspace.PlanWorkspaceManager;
+import jakarta.enterprise.event.Event;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -18,27 +23,34 @@ import static org.mockito.Mockito.*;
  * {@link PlanOrchestratorService}, verifying that status transitions use
  * {@code EXECUTING} exclusively (no {@code RUNNING} string literals).
  *
- * <p>The {@code PlanStore} and {@code PlanTrackedJobStore} are mocked so no
- * database or CDI container is needed.
+ * <p>All CDI dependencies are mocked via reflection so no container is needed.
  */
 class PlanStatusTransitionTest {
 
     private PlanStore planStore;
     private PlanTrackedJobStore trackedJobStore;
+    private PlanWorkspaceManager planWorkspaceManager;
     private PlanOrchestratorService orchestrator;
 
+    @SuppressWarnings("unchecked")
     @BeforeEach
     void setUp() throws Exception {
-        planStore = Mockito.mock(PlanStore.class);
-        trackedJobStore = Mockito.mock(PlanTrackedJobStore.class);
+        planStore             = Mockito.mock(PlanStore.class);
+        trackedJobStore       = Mockito.mock(PlanTrackedJobStore.class);
+        planWorkspaceManager  = Mockito.mock(PlanWorkspaceManager.class);
 
         orchestrator = new PlanOrchestratorService();
 
-        // Inject mocks via reflection (fields are package-private CDI injections)
-        injectField(orchestrator, "planStore", planStore);
-        injectField(orchestrator, "trackedJobStore", trackedJobStore);
+        injectField(orchestrator, "planStore",            planStore);
+        injectField(orchestrator, "trackedJobStore",      trackedJobStore);
+        injectField(orchestrator, "planWorkspaceManager", planWorkspaceManager);
+        injectField(orchestrator, "jobQueue",             Mockito.mock(JobQueue.class));
+        injectField(orchestrator, "codeMetricsStore",     Mockito.mock(CodeMetricsStore.class));
+        injectField(orchestrator, "platformService",      Mockito.mock(GitPlatformService.class));
+        injectField(orchestrator, "settings",             Mockito.mock(SettingsService.class));
+        injectField(orchestrator, "planCompletedEvent",   Mockito.mock(Event.class));
+        injectField(orchestrator, "orchestratorEvent",    Mockito.mock(Event.class));
 
-        // Stub rehydration on startup to do nothing
         when(trackedJobStore.findAll()).thenReturn(List.of());
     }
 
