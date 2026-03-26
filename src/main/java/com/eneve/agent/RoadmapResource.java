@@ -116,6 +116,16 @@ public class RoadmapResource {
         }
     }
 
+    @GET
+    @Path("/{id}")
+    public Response getRoadmap(@PathParam("id") String id) {
+        try {
+            return Response.ok(roadmapService.getRoadmap(id)).build();
+        } catch (RoadmapNotFoundException e) {
+            return notFound("Roadmap not found");
+        }
+    }
+
     // ─── Token stats ─────────────────────────────────────────────────────────
 
     @GET

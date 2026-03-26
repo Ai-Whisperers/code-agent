@@ -134,6 +134,11 @@ public class RoadmapService {
         return roadmapStore.findAll();
     }
 
+    public RoadmapRecord getRoadmap(String id) {
+        return roadmapStore.findById(id)
+                .orElseThrow(() -> new RoadmapNotFoundException(id));
+    }
+
     /**
      * Creates a new roadmap and immediately syncs all Jira issues.
      * Issue type names default to the three global settings values when blank.
