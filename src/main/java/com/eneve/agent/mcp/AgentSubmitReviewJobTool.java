@@ -64,7 +64,8 @@ public class AgentSubmitReviewJobTool implements ToolExecutor {
                     null, // ruleNames
                     extraRules,
                     null, // n8nWebhookUrl
-                    null  // headCommitSha
+                    null, // headCommitSha
+                    null  // prAuthor
             );
             JobRecord job = new JobRecord(jobId, request);
             jobStore.put(job);

@@ -581,7 +581,8 @@ public class PlanOrchestratorService {
                         null,  // ruleNames
                         nullIfBlank(step.prompt()),
                         null,  // n8nWebhookUrl
-                        null   // headCommitSha
+                        null,  // headCommitSha
+                        null   // prAuthor
                 ));
             }
             case "METRICS" -> {
