@@ -122,14 +122,15 @@ public class ChatService {
 
                 // ── Run the streaming loop ─────────────────────────────
                 ConversationContext storedContext = conversationContextStore.getContext(conversationId).orElse(null);
+                ConversationContext effectiveContext = mergeContexts(storedContext, request.conversationContext());
                 String systemPrompt = buildSystemPrompt(
                         request.productId(),
-                        mergeContexts(storedContext, request.conversationContext()),
+                        effectiveContext,
                         userId);
                 boolean hasCustomer = workspace.getMetadata("customerId") != null
-                        || (storedContext != null
-                            && storedContext.customerIds() != null
-                            && !storedContext.customerIds().isEmpty());
+                        || (effectiveContext != null
+                            && effectiveContext.customerIds() != null
+                            && !effectiveContext.customerIds().isEmpty());
                 List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs, hasCustomer);
                 
                 // Create final reference for lambda
