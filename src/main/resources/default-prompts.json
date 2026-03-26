@@ -190,5 +190,17 @@
   "review-userstory": {
     "description": "AI readiness and complexity review for a Jira User Story",
     "placeholders": ["jira_context"]
+  },
+  "improve-epic": {
+    "description": "AI rewrite of a Jira Epic to sharpen goal, scope, and acceptance conditions",
+    "placeholders": ["jira_context"]
+  },
+  "improve-feature": {
+    "description": "AI rewrite of a Jira Feature to be user-focused, testable, and sprint-ready",
+    "placeholders": ["jira_context"]
+  },
+  "improve-userstory": {
+    "description": "AI rewrite of a Jira User Story following Given/When/Then best practices",
+    "placeholders": ["jira_context"]
   }
 }
