@@ -328,6 +328,62 @@ public class JobQueue {
         }
     }
 
+    /**
+     * Cancel a PENDING or QUEUED job. Removes it from the in-memory queue, marks it
+     * CANCELLED, and archives it to job_history.
+     *
+     * @return true if the job was found and successfully cancelled; false otherwise
+     */
+    public boolean cancelJob(String jobId) {
+        Optional<JobRecord> opt = jobStore.get(jobId);
+        if (opt.isEmpty()) return false;
+        JobRecord job = opt.get();
+        if (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED) {
+            return false;
+        }
+        pendingQueue.removeIf(j -> j.getJobId().equals(jobId));
+        dispatchedJobIds.remove(jobId);
+        job.setStatus(JobStatus.CANCELLED);
+        job.setErrorMessage("Cancelled by user");
+        jobStore.archive(job);
+        LOG.infof("Job %s (%s) cancelled by user", jobId, job.getJobType());
+        return true;
+    }
+
+    /**
+     * Rerun a FAILED or SUCCESS job by creating a new job record with a fresh UUID but
+     * identical request payload. The new job is persisted and submitted to the queue.
+     *
+     * @return the new job ID, or {@code null} if the job type cannot be rerun
+     */
+    public String rerunJob(JobRecord original) {
+        String newJobId = UUID.randomUUID().toString();
+        JobRecord newJob = switch (original.getJobType()) {
+            case FIX -> new JobRecord(newJobId, original.getRequest());
+            case REVIEW -> new JobRecord(newJobId, original.getReviewRequest());
+            case FIX_PR -> new JobRecord(newJobId, original.getFixPrRequest());
+            case REPLY -> new JobRecord(newJobId, original.getReplyRequest(), JobType.REPLY);
+            case FIX_COMMENT -> new JobRecord(newJobId, original.getReplyRequest(), JobType.FIX_COMMENT);
+            case HOOK -> new JobRecord(newJobId, original.getHookRequest());
+            case GENERATE_TESTS -> new JobRecord(newJobId, original.getGenerateTestsRequest());
+            case GENERATE_DOCS -> new JobRecord(newJobId, original.getGenerateDocsRequest());
+            case SYNC_CONFLUENCE -> new JobRecord(newJobId, original.getSyncConfluenceRequest());
+            case METRICS -> new JobRecord(newJobId, original.getMetricsRequest());
+            case QUALITY_REPORT -> new JobRecord(newJobId, original.getQualityReportRequest());
+            case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY ->
+                    new JobRecord(newJobId, original.getJiraReviewRequest(), original.getJobType());
+            default -> null;
+        };
+        if (newJob == null) return null;
+        newJob.setWorkspace(original.getWorkspace());
+        newJob.setRepoSlug(original.getRepoSlug());
+        newJob.setPriority(original.getPriority());
+        jobStore.put(newJob);
+        submit(newJob);
+        LOG.infof("Job %s (%s) rerun as new job %s", original.getJobId(), original.getJobType(), newJobId);
+        return newJobId;
+    }
+
     private static boolean isReviewType(JobType jobType) {
         return jobType == JobType.REVIEW_EPIC
                 || jobType == JobType.REVIEW_FEATURE

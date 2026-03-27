@@ -659,6 +659,74 @@ public class RunFixResource {
         }).orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
     }
 
+    @POST
+    @Path("/jobs/{jobId}/cancel")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "cancelJob",
+            summary = "Cancel a queued job",
+            description = "Cancels a PENDING or QUEUED job, removing it from the dispatch queue."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Job cancelled",
+                    content = @Content(schema = @Schema(example = "{\"status\": \"cancelled\", \"jobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not in a cancellable state")
+    })
+    public Response cancelJob(
+            @Parameter(description = "UUID of the job to cancel", required = true)
+            @PathParam("jobId") String jobId) {
+        return jobStore.get(jobId).map(job -> {
+            if (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED) {
+                return Response.status(409)
+                        .entity(Map.of("error", "Job cannot be cancelled. Current status: " + job.getStatus()))
+                        .build();
+            }
+            boolean cancelled = jobQueue.cancelJob(jobId);
+            if (!cancelled) {
+                return Response.status(409)
+                        .entity(Map.of("error", "Failed to cancel job: " + jobId))
+                        .build();
+            }
+            auditService.log("JOBS", "JOB_CANCELLED", "job", jobId, null);
+            return Response.ok(Map.of("status", "cancelled", "jobId", jobId)).build();
+        }).orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
+    }
+
+    @POST
+    @Path("/jobs/{jobId}/rerun")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "rerunJob",
+            summary = "Rerun a failed or finished job",
+            description = "Creates a new job with the same parameters as the original and queues it for execution."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "New job queued",
+                    content = @Content(schema = @Schema(example = "{\"status\": \"queued\", \"jobId\": \"...\", \"originalJobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not in a rerunnable state")
+    })
+    public Response rerunJob(
+            @Parameter(description = "UUID of the job to rerun", required = true)
+            @PathParam("jobId") String jobId) {
+        return jobStore.get(jobId).map(job -> {
+            if (job.getStatus() != JobStatus.FAILED && job.getStatus() != JobStatus.SUCCESS) {
+                return Response.status(409)
+                        .entity(Map.of("error", "Job cannot be rerun. Current status: " + job.getStatus()))
+                        .build();
+            }
+            String newJobId = jobQueue.rerunJob(job);
+            if (newJobId == null) {
+                return Response.status(409)
+                        .entity(Map.of("error", "Job type cannot be rerun: " + job.getJobType()))
+                        .build();
+            }
+            auditService.log("JOBS", "JOB_RERUN", "job", jobId, Map.of("newJobId", newJobId));
+            return Response.ok(Map.of("status", "queued", "jobId", newJobId, "originalJobId", jobId)).build();
+        }).orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
+    }
+
     @GET
     @Path("/health")
     @Tag(name = "Health")

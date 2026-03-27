@@ -6,5 +6,6 @@ public enum JobStatus {
     RUNNING,
     SUCCESS,
     FAILED,
-    AWAITING_APPROVAL
+    AWAITING_APPROVAL,
+    CANCELLED
 }
