@@ -8,12 +8,12 @@ import static org.junit.jupiter.api.Assertions.*;
 
 /**
  * Unit tests for the aggregate-score computation logic that exists inside
- * {@link RoadmapResource#computeAggregate}.
+ * {@link ScopeService#computeAggregate}.
  *
  * The private method is mirrored here as a package-level helper so we can test
  * the logic exhaustively without needing Quarkus or any mocks.
  */
-class RoadmapAggregateScoreTest {
+class ScopeAggregateScoreTest {
 
     // ── No children: own score is returned ───────────────────────────────────
 

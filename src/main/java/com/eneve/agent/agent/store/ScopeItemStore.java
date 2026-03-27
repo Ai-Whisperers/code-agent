@@ -1,6 +1,6 @@
 package com.eneve.agent.agent.store;
 
-import com.eneve.agent.model.RoadmapItem;
+import com.eneve.agent.model.ScopeItem;
 import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -13,23 +13,23 @@ import java.util.Optional;
 
 /**
  * JDBC store for {@code roadmap_items}.
- * The table is the source of truth for the Jira issue structure within a roadmap.
+ * The table is the source of truth for the Jira issue structure within a scope.
  * It is populated by the sync step and read by tree-view and review dispatch logic.
  */
 @ApplicationScoped
-public class RoadmapItemStore {
+public class ScopeItemStore {
 
-    private static final Logger LOG = Logger.getLogger(RoadmapItemStore.class);
+    private static final Logger LOG = Logger.getLogger(ScopeItemStore.class);
 
     @Inject
     AgroalDataSource dataSource;
 
     /**
-     * Atomically replaces all items for {@code roadmapId} with the provided list.
+     * Atomically replaces all items for {@code scopeId} with the provided list.
      * Uses a single connection with a transaction: deletes existing rows then
      * batch-inserts the new ones.
      */
-    public void replaceAll(String roadmapId, List<RoadmapItem> items) {
+    public void replaceAll(String scopeId, List<ScopeItem> items) {
         String deleteSql = "DELETE FROM roadmap_items WHERE roadmap_id = ?::uuid";
         String insertSql = """
                 INSERT INTO roadmap_items
@@ -41,13 +41,13 @@ public class RoadmapItemStore {
             conn.setAutoCommit(false);
             try {
                 try (PreparedStatement del = conn.prepareStatement(deleteSql)) {
-                    del.setString(1, roadmapId);
+                    del.setString(1, scopeId);
                     del.executeUpdate();
                 }
                 if (!items.isEmpty()) {
                     try (PreparedStatement ins = conn.prepareStatement(insertSql)) {
-                        for (RoadmapItem item : items) {
-                            ins.setString(1, roadmapId);
+                        for (ScopeItem item : items) {
+                            ins.setString(1, scopeId);
                             ins.setString(2, item.issueKey());
                             ins.setString(3, item.issueType());
                             ins.setString(4, item.parentKey());
@@ -73,13 +73,13 @@ public class RoadmapItemStore {
                 conn.setAutoCommit(true);
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.replaceAll: failed for roadmap %s: %s", roadmapId, e.getMessage());
-            throw new RuntimeException("Failed to replace roadmap items", e);
+            LOG.errorf("ScopeItemStore.replaceAll: failed for scope %s: %s", scopeId, e.getMessage());
+            throw new RuntimeException("Failed to replace scope items", e);
         }
     }
 
-    /** Returns all items for a roadmap ordered by issue type then key. */
-    public List<RoadmapItem> findByRoadmap(String roadmapId) {
+    /** Returns all items for a scope ordered by issue type then key. */
+    public List<ScopeItem> findByScope(String scopeId) {
         String sql = """
                 SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
@@ -88,15 +88,15 @@ public class RoadmapItemStore {
                 WHERE roadmap_id = ?::uuid
                 ORDER BY issue_type, issue_key
                 """;
-        List<RoadmapItem> results = new ArrayList<>();
+        List<ScopeItem> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) results.add(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.findByRoadmap: failed for %s: %s", roadmapId, e.getMessage());
+            LOG.errorf("ScopeItemStore.findByScope: failed for %s: %s", scopeId, e.getMessage());
         }
         return results;
     }
@@ -105,7 +105,7 @@ public class RoadmapItemStore {
      * Returns items that have a sprint assigned, ordered by sprint_start then issue_type then issue_key.
      * Used for building the sprint/Gantt view.
      */
-    public List<RoadmapItem> findSprintItems(String roadmapId) {
+    public List<ScopeItem> findSprintItems(String scopeId) {
         String sql = """
                 SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
@@ -114,38 +114,38 @@ public class RoadmapItemStore {
                 WHERE roadmap_id = ?::uuid AND sprint_name IS NOT NULL
                 ORDER BY sprint_start NULLS LAST, issue_type, issue_key
                 """;
-        List<RoadmapItem> results = new ArrayList<>();
+        List<ScopeItem> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) results.add(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.findSprintItems: failed for %s: %s", roadmapId, e.getMessage());
+            LOG.errorf("ScopeItemStore.findSprintItems: failed for %s: %s", scopeId, e.getMessage());
         }
         return results;
     }
 
-    /** Returns the number of roadmap items whose {@code parent_key} equals {@code parentKey}. */
-    public int countChildrenByParent(String roadmapId, String parentKey) {
+    /** Returns the number of scope items whose {@code parent_key} equals {@code parentKey}. */
+    public int countChildrenByParent(String scopeId, String parentKey) {
         String sql = "SELECT COUNT(*) FROM roadmap_items WHERE roadmap_id = ?::uuid AND parent_key = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             ps.setString(2, parentKey);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return rs.getInt(1);
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.countChildrenByParent: %s / %s: %s",
-                    roadmapId, parentKey, e.getMessage());
+            LOG.errorf("ScopeItemStore.countChildrenByParent: %s / %s: %s",
+                    scopeId, parentKey, e.getMessage());
         }
         return 0;
     }
 
-    /** Returns a single item by roadmap and issue key. */
-    public Optional<RoadmapItem> findByRoadmapAndIssueKey(String roadmapId, String issueKey) {
+    /** Returns a single item by scope and issue key. */
+    public Optional<ScopeItem> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
                 SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
@@ -155,14 +155,14 @@ public class RoadmapItemStore {
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             ps.setString(2, issueKey);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return Optional.of(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.findByRoadmapAndIssueKey: %s / %s: %s",
-                    roadmapId, issueKey, e.getMessage());
+            LOG.errorf("ScopeItemStore.findByScopeAndIssueKey: %s / %s: %s",
+                    scopeId, issueKey, e.getMessage());
         }
         return Optional.empty();
     }
@@ -171,7 +171,7 @@ public class RoadmapItemStore {
      * Updates the live fields of a single item from a fresh Jira fetch.
      * Called by the refresh-on-detail-open flow.
      */
-    public void refreshLiveFields(String roadmapId, String issueKey,
+    public void refreshLiveFields(String scopeId, String issueKey,
                                    String summary, String jiraStatus,
                                    java.time.Instant jiraModifiedAt,
                                    String assignee, String reporter,
@@ -201,13 +201,13 @@ public class RoadmapItemStore {
             ps.setString(6, sprintName);
             setTimestamp(ps, 7, sprintStart);
             setTimestamp(ps, 8, sprintEnd);
-            ps.setString(9,  roadmapId);
+            ps.setString(9,  scopeId);
             ps.setString(10, issueKey);
             ps.executeUpdate();
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemStore.refreshLiveFields: %s / %s: %s",
-                    roadmapId, issueKey, e.getMessage());
-            throw new RuntimeException("Failed to refresh roadmap item", e);
+            LOG.errorf("ScopeItemStore.refreshLiveFields: %s / %s: %s",
+                    scopeId, issueKey, e.getMessage());
+            throw new RuntimeException("Failed to refresh scope item", e);
         }
     }
 
@@ -220,12 +220,12 @@ public class RoadmapItemStore {
         }
     }
 
-    private RoadmapItem mapRow(ResultSet rs) throws SQLException {
+    private ScopeItem mapRow(ResultSet rs) throws SQLException {
         Timestamp syncedAt       = rs.getTimestamp("synced_at");
         Timestamp jiraModifiedAt = rs.getTimestamp("jira_modified_at");
         Timestamp sprintStart    = rs.getTimestamp("sprint_start");
         Timestamp sprintEnd      = rs.getTimestamp("sprint_end");
-        return new RoadmapItem(
+        return new ScopeItem(
                 rs.getString("id"),
                 rs.getString("roadmap_id"),
                 rs.getString("issue_key"),

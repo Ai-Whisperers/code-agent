@@ -435,6 +435,47 @@ public class JiraService {
     }
 
     /**
+     * Search for epics matching ANY of the given labels (multi-label scope support).
+     * Returns deduplicated results ordered by creation date.
+     */
+    public java.util.List<JiraIssueDetail> searchEpicsByLabels(java.util.List<String> labels, String issuetype) {
+        if (labels == null || labels.isEmpty()) return java.util.List.of();
+        if (labels.size() == 1) return searchEpicsByLabel(labels.get(0), issuetype);
+        String labelsIn = labels.stream()
+                .map(l -> "\"" + escapeJson(l) + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
+        String jql = "issuetype = \"" + escapeJson(issuetype) + "\" AND labels in (" + labelsIn + ") ORDER BY created ASC";
+        return searchIssues(jql, 500);
+    }
+
+    /**
+     * Search for features (NOT under any epic) that have ANY of the given labels —
+     * these are "unparented technical features" that would otherwise be invisible
+     * in a top-down epic traversal.
+     */
+    public java.util.List<JiraIssueDetail> searchFeaturesByLabels(java.util.List<String> labels, String issuetype) {
+        if (labels == null || labels.isEmpty()) return java.util.List.of();
+        String labelsIn = labels.stream()
+                .map(l -> "\"" + escapeJson(l) + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
+        String jql = "issuetype = \"" + escapeJson(issuetype) + "\" AND labels in (" + labelsIn + ") ORDER BY created ASC";
+        return searchIssues(jql, 500);
+    }
+
+    /**
+     * Preview endpoint: returns all issues (any type) that match ANY of the given
+     * labels, capped at 1 000 results. Used by the scope preview table in the UI.
+     */
+    public java.util.List<JiraIssueDetail> previewIssuesByLabels(java.util.List<String> labels) {
+        if (labels == null || labels.isEmpty()) return java.util.List.of();
+        String labelsIn = labels.stream()
+                .map(l -> "\"" + escapeJson(l) + "\"")
+                .collect(java.util.stream.Collectors.joining(", "));
+        String jql = "labels in (" + labelsIn + ") ORDER BY created DESC";
+        return searchIssues(jql, 1000);
+    }
+
+    /**
      * Search for features (child issues of feature type) under the given epic key.
      * Uses the configurable feature issue type from settings.
      */

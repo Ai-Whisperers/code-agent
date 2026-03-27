@@ -7,9 +7,9 @@ import java.time.Instant;
  * Populated during the Jira sync step; AI review results are stored
  * separately in {@code jira_issue_reviews}.
  */
-public record RoadmapItem(
+public record ScopeItem(
         String id,
-        String roadmapId,
+        String scopeId,
         String issueKey,
         String issueType,
         String parentKey,

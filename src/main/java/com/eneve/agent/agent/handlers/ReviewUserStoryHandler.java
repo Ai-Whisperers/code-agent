@@ -9,7 +9,7 @@ import com.anthropic.models.messages.Model;
 import com.eneve.agent.agent.JobHandler;
 import com.eneve.agent.agent.store.JiraIssueReviewStore;
 import com.eneve.agent.agent.store.JobStore;
-import com.eneve.agent.agent.store.RoadmapItemOverrideStore;
+import com.eneve.agent.agent.store.ScopeItemOverrideStore;
 import com.eneve.agent.agent.service.JiraReviewContextBuilder;
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.jira.JiraService;
@@ -40,7 +40,7 @@ public class ReviewUserStoryHandler implements JobHandler {
     @Inject PromptTemplateService promptTemplates;
     @Inject JiraReviewContextBuilder contextBuilder;
     @Inject JiraIssueReviewStore reviewStore;
-    @Inject RoadmapItemOverrideStore overrideStore;
+    @Inject ScopeItemOverrideStore overrideStore;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject SettingsService settings;

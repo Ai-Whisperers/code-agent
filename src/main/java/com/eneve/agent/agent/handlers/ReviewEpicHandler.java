@@ -9,8 +9,8 @@ import com.anthropic.models.messages.Model;
 import com.eneve.agent.agent.JobHandler;
 import com.eneve.agent.agent.store.JiraIssueReviewStore;
 import com.eneve.agent.agent.store.JobStore;
-import com.eneve.agent.agent.store.RoadmapItemOverrideStore;
-import com.eneve.agent.agent.store.RoadmapItemStore;
+import com.eneve.agent.agent.store.ScopeItemOverrideStore;
+import com.eneve.agent.agent.store.ScopeItemStore;
 import com.eneve.agent.agent.service.JiraReviewContextBuilder;
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.jira.JiraService;
@@ -43,8 +43,8 @@ public class ReviewEpicHandler implements JobHandler {
     @Inject PromptTemplateService promptTemplates;
     @Inject JiraReviewContextBuilder contextBuilder;
     @Inject JiraIssueReviewStore reviewStore;
-    @Inject RoadmapItemOverrideStore overrideStore;
-    @Inject RoadmapItemStore roadmapItemStore;
+    @Inject ScopeItemOverrideStore overrideStore;
+    @Inject ScopeItemStore scopeItemStore;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject SettingsService settings;
@@ -69,7 +69,7 @@ public class ReviewEpicHandler implements JobHandler {
 
         String issueSummary = fetchSummary(req.issueKey());
         int featureCount = req.roadmapId() != null
-                ? roadmapItemStore.countChildrenByParent(req.roadmapId(), req.issueKey())
+                ? scopeItemStore.countChildrenByParent(req.roadmapId(), req.issueKey())
                 : -1;
         String context = contextBuilder.buildEpicContext(req.issueKey(), featureCount);
         String prompt = promptTemplates.resolve("review-epic", Map.of("jira_context", context));

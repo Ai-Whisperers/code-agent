@@ -7,9 +7,9 @@ import java.time.Instant;
  * A proposal is an AI-generated rewrite of a Jira issue that lives only in the
  * database until a user explicitly accepts it (which then pushes it to Jira).
  */
-public record RoadmapProposal(
+public record ScopeProposal(
         String id,
-        String roadmapId,
+        String scopeId,
         String issueKey,
         String issueType,
         String parentKey,

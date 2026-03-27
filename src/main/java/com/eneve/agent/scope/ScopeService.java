@@ -1,4 +1,4 @@
-package com.eneve.agent.roadmap;
+package com.eneve.agent.scope;
 
 import com.anthropic.client.AnthropicClient;
 import com.anthropic.models.messages.ContentBlock;
@@ -14,10 +14,10 @@ import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JiraIssueReviewStore;
 import com.eneve.agent.agent.store.JobStore;
-import com.eneve.agent.agent.store.RoadmapItemOverrideStore;
-import com.eneve.agent.agent.store.RoadmapItemProposalStore;
-import com.eneve.agent.agent.store.RoadmapItemStore;
-import com.eneve.agent.agent.store.RoadmapStore;
+import com.eneve.agent.agent.store.ScopeItemOverrideStore;
+import com.eneve.agent.agent.store.ScopeItemProposalStore;
+import com.eneve.agent.agent.store.ScopeItemStore;
+import com.eneve.agent.agent.store.ScopeStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.jira.JiraService.JiraIssueDetail;
 import com.eneve.agent.model.JiraIssueReview;
@@ -25,9 +25,9 @@ import com.eneve.agent.model.JiraReviewRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.ProductConfig;
-import com.eneve.agent.model.RoadmapItem;
-import com.eneve.agent.model.RoadmapProposal;
-import com.eneve.agent.model.RoadmapRecord;
+import com.eneve.agent.model.ScopeItem;
+import com.eneve.agent.model.ScopeProposal;
+import com.eneve.agent.model.ScopeRecord;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -46,11 +46,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 /**
- * Business logic for the Roadmap feature.
+ * Business logic for the Scope feature.
  *
  * <h3>Two-phase design</h3>
  * <ol>
- *   <li><b>Sync</b> ({@link #syncRoadmap}) — fetches the complete Jira issue hierarchy
+ *   <li><b>Sync</b> ({@link #syncScope}) — fetches the complete Jira issue hierarchy
  *       (epics → features → stories) and stores it in {@code roadmap_items}.
  *       Each item's {@code jira_modified_at} is recorded from the Jira {@code updated}
  *       field.</li>
@@ -60,22 +60,22 @@ import java.util.stream.Collectors;
  * </ol>
  */
 @ApplicationScoped
-public class RoadmapService {
+public class ScopeService {
 
-    private static final Logger LOG = Logger.getLogger(RoadmapService.class);
+    private static final Logger LOG = Logger.getLogger(ScopeService.class);
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
 
-    @Inject RoadmapStore roadmapStore;
-    @Inject RoadmapItemStore roadmapItemStore;
+    @Inject ScopeStore scopeStore;
+    @Inject ScopeItemStore scopeItemStore;
     @Inject JiraIssueReviewStore reviewStore;
-    @Inject RoadmapItemOverrideStore overrideStore;
+    @Inject ScopeItemOverrideStore overrideStore;
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
     @Inject SettingsService settings;
     @Inject ManagedExecutor managedExecutor;
-    @Inject RoadmapItemProposalStore proposalStore;
+    @Inject ScopeItemProposalStore proposalStore;
     @Inject JiraReviewContextBuilder contextBuilder;
     @Inject PromptTemplateService promptTemplates;
     @Inject AnthropicClient anthropicClient;
@@ -85,8 +85,8 @@ public class RoadmapService {
 
     // ─── Exception types ─────────────────────────────────────────────────────
 
-    public static final class RoadmapNotFoundException extends RuntimeException {
-        public RoadmapNotFoundException(String id) { super("Roadmap not found: " + id); }
+    public static final class ScopeNotFoundException extends RuntimeException {
+        public ScopeNotFoundException(String id) { super("Scope not found: " + id); }
     }
 
     public static final class ItemOverriddenException extends RuntimeException {
@@ -119,7 +119,7 @@ public class RoadmapService {
 
     // ─── Result records ───────────────────────────────────────────────────────
 
-    public record CreateRoadmapResult(RoadmapRecord roadmap, int itemsSynced) {}
+    public record CreateScopeResult(ScopeRecord scope, int itemsSynced) {}
 
     /**
      * @param jobsEnqueued  items queued for AI review this call
@@ -130,77 +130,103 @@ public class RoadmapService {
 
     // ─── CRUD ─────────────────────────────────────────────────────────────────
 
-    public List<RoadmapRecord> listRoadmaps() {
-        return roadmapStore.findAll();
+    public List<ScopeRecord> listScopes() {
+        return scopeStore.findAll();
     }
 
-    public RoadmapRecord getRoadmap(String id) {
-        return roadmapStore.findById(id)
-                .orElseThrow(() -> new RoadmapNotFoundException(id));
+    public ScopeRecord getScope(String id) {
+        return scopeStore.findById(id)
+                .orElseThrow(() -> new ScopeNotFoundException(id));
     }
 
     /**
-     * Creates a new roadmap and immediately syncs all Jira issues.
+     * Creates a new scope and immediately syncs all Jira issues.
      * Issue type names default to the three global settings values when blank.
+     *
+     * @param labels ordered list of Jira labels for this scope (at least one required)
      */
-    public CreateRoadmapResult createRoadmap(String name, String label,
-                                              String epicIssuetype, String featureIssuetype,
-                                              String userstoryIssuetype) {
+    public CreateScopeResult createScope(String name, List<String> labels,
+                                          String epicIssuetype, String featureIssuetype,
+                                          String userstoryIssuetype) {
         String epic    = blankFallback(epicIssuetype,    "roadmap.jira.epic-issuetype",        "Epic");
         String feature = blankFallback(featureIssuetype, "roadmap.jira.feature-issuetype",     "Story");
         String story   = blankFallback(userstoryIssuetype,"roadmap.jira.userstory-issuetype",  "Sub-task");
 
-        RoadmapRecord roadmap = roadmapStore.create(name, label, epic, feature, story);
-        int itemsSynced = syncRoadmap(roadmap.id());
-        return new CreateRoadmapResult(roadmap, itemsSynced);
+        ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story);
+        int itemsSynced = syncScope(scope.id());
+        return new CreateScopeResult(scope, itemsSynced);
     }
 
     /**
-     * Updates name, label and/or issue-type mappings for an existing roadmap.
+     * Updates name, labels and/or issue-type mappings for an existing scope.
      *
-     * @throws RoadmapNotFoundException if no roadmap with {@code id} exists
+     * @throws ScopeNotFoundException if no scope with {@code id} exists
      */
-    public RoadmapRecord updateRoadmap(String id, String name, String label,
-                                        String epicIssuetype, String featureIssuetype,
-                                        String userstoryIssuetype) {
-        RoadmapRecord existing = roadmapStore.findById(id)
-                .orElseThrow(() -> new RoadmapNotFoundException(id));
+    public ScopeRecord updateScope(String id, String name, List<String> labels,
+                                    String epicIssuetype, String featureIssuetype,
+                                    String userstoryIssuetype) {
+        ScopeRecord existing = scopeStore.findById(id)
+                .orElseThrow(() -> new ScopeNotFoundException(id));
 
         String epic    = blankFallback(epicIssuetype,    existing.epicIssuetype());
         String feature = blankFallback(featureIssuetype, existing.featureIssuetype());
         String story   = blankFallback(userstoryIssuetype, existing.userstoryIssuetype());
 
-        roadmapStore.update(id, name, label, epic, feature, story);
-        return roadmapStore.findById(id).orElseThrow(() -> new RoadmapNotFoundException(id));
+        // Fall back to existing labels when none provided
+        List<String> effectiveLabels = (labels != null && !labels.isEmpty()) ? labels : existing.labels();
+
+        scopeStore.update(id, name, effectiveLabels, epic, feature, story);
+        return scopeStore.findById(id).orElseThrow(() -> new ScopeNotFoundException(id));
     }
 
     /**
-     * Deletes a roadmap and cascades to all associated items, reviews, and overrides.
+     * Preview: returns matching Jira issues for the given labels without persisting anything.
+     * Used by the scope create/edit dialog to show a live preview table.
      *
-     * @throws RoadmapNotFoundException if no roadmap with {@code id} exists
+     * @param labels list of Jira labels to search
+     * @return list of maps with keys: issueKey, summary, status
      */
-    public void deleteRoadmap(String id) {
-        if (roadmapStore.findById(id).isEmpty()) throw new RoadmapNotFoundException(id);
-        roadmapStore.delete(id);
+    public List<Map<String, Object>> previewLabels(List<String> labels) {
+        if (labels == null || labels.isEmpty()) return List.of();
+        List<JiraService.JiraIssueDetail> issues = jiraService.previewIssuesByLabels(labels);
+        return issues.stream().map(issue -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("issueKey", issue.key());
+            m.put("summary",  issue.summary() != null ? issue.summary() : "");
+            m.put("status",   mapStatus(issue.status()));
+            return m;
+        }).collect(Collectors.toList());
+    }
+
+    /**
+     * Deletes a scope and cascades to all associated items, reviews, and overrides.
+     *
+     * @throws ScopeNotFoundException if no scope with {@code id} exists
+     */
+    public void deleteScope(String id) {
+        if (scopeStore.findById(id).isEmpty()) throw new ScopeNotFoundException(id);
+        scopeStore.delete(id);
     }
 
     // ─── Sync ─────────────────────────────────────────────────────────────────
 
     /**
-     * Fetches the full Jira issue hierarchy using this roadmap's configured issue types
+     * Fetches the full Jira issue hierarchy using this scope's configured issue types
      * and atomically replaces the stored items. Each item's {@code jira_modified_at}
-     * is set from the Jira {@code updated} timestamp.
+     * is set from the Jira {@code updated} timestamp. After replacing items, orphaned
+     * reviews and overrides for issue keys no longer in the scope are cleaned up.
      *
      * @return number of items stored
-     * @throws RoadmapNotFoundException if the roadmap does not exist
+     * @throws ScopeNotFoundException if the scope does not exist
      */
-    public int syncRoadmap(String roadmapId) {
-        RoadmapRecord roadmap = roadmapStore.findById(roadmapId)
-                .orElseThrow(() -> new RoadmapNotFoundException(roadmapId));
+    public int syncScope(String scopeId) {
+        ScopeRecord scope = scopeStore.findById(scopeId)
+                .orElseThrow(() -> new ScopeNotFoundException(scopeId));
 
-        List<RoadmapItem> items = fetchItemsFromJira(roadmapId, roadmap);
-        roadmapItemStore.replaceAll(roadmapId, items);
-        LOG.infof("RoadmapService.syncRoadmap: stored %d items for roadmap %s", items.size(), roadmapId);
+        List<ScopeItem> items = fetchItemsFromJira(scopeId, scope);
+        scopeItemStore.replaceAll(scopeId, items);
+        cleanupOrphanedData(scopeId);
+        LOG.infof("ScopeService.syncScope: stored %d items for scope %s", items.size(), scopeId);
         return items.size();
     }
 
@@ -211,39 +237,39 @@ public class RoadmapService {
      * No Jira calls are made. Each item includes staleness information:
      * {@code isStale=true} when Jira was modified after the last AI review.
      *
-     * @throws RoadmapNotFoundException if the roadmap does not exist
+     * @throws ScopeNotFoundException if the scope does not exist
      */
-    public List<Map<String, Object>> buildTree(String roadmapId) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+    public List<Map<String, Object>> buildTree(String scopeId) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
 
         int threshold    = Integer.parseInt(settings.get("roadmap.delivery.readiness-threshold", "70"));
         boolean weighted = Boolean.parseBoolean(settings.get("roadmap.delivery.complexity-weight-enabled", "true"));
 
-        List<RoadmapItem> allItems  = roadmapItemStore.findByRoadmap(roadmapId);
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(roadmapId).stream()
+        List<ScopeItem> allItems  = scopeItemStore.findByScope(scopeId);
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
-        Map<String, String> overrideMap = overrideStore.findByRoadmap(roadmapId);
+        Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
 
-        List<RoadmapItem> epics = allItems.stream()
+        List<ScopeItem> epics = allItems.stream()
                 .filter(i -> "EPIC".equals(i.issueType())).collect(Collectors.toList());
-        Map<String, List<RoadmapItem>> featuresByEpic = allItems.stream()
+        Map<String, List<ScopeItem>> featuresByEpic = allItems.stream()
                 .filter(i -> "FEATURE".equals(i.issueType()))
                 .collect(Collectors.groupingBy(i -> i.parentKey() != null ? i.parentKey() : ""));
-        Map<String, List<RoadmapItem>> storiesByFeature = allItems.stream()
+        Map<String, List<ScopeItem>> storiesByFeature = allItems.stream()
                 .filter(i -> "USERSTORY".equals(i.issueType()))
                 .collect(Collectors.groupingBy(i -> i.parentKey() != null ? i.parentKey() : ""));
 
         List<Map<String, Object>> result = new ArrayList<>();
 
-        for (RoadmapItem epic : epics) {
+        for (ScopeItem epic : epics) {
             List<int[]> featureAggregates = new ArrayList<>();
-            List<RoadmapItem> epicFeatures = featuresByEpic.getOrDefault(epic.issueKey(), List.of());
+            List<ScopeItem> epicFeatures = featuresByEpic.getOrDefault(epic.issueKey(), List.of());
 
-            for (RoadmapItem feature : epicFeatures) {
+            for (ScopeItem feature : epicFeatures) {
                 List<int[]> storyAggregates = new ArrayList<>();
-                List<RoadmapItem> featureStories = storiesByFeature.getOrDefault(feature.issueKey(), List.of());
+                List<ScopeItem> featureStories = storiesByFeature.getOrDefault(feature.issueKey(), List.of());
 
-                for (RoadmapItem story : featureStories) {
+                for (ScopeItem story : featureStories) {
                     JiraIssueReview rev = reviewMap.get(story.issueKey());
                     Map<String, Object> storyItem = buildTreeItem(story, rev, overrideMap.get(story.issueKey()));
                     Integer readiness = rev != null ? rev.readinessScore() : null;
@@ -309,19 +335,18 @@ public class RoadmapService {
      * assigned to that sprint, ordered by sprint start date.
      * Items without a sprint assignment are excluded from this view.
      *
-     * @throws RoadmapNotFoundException if the roadmap does not exist
+     * @throws ScopeNotFoundException if the scope does not exist
      */
-    public List<Map<String, Object>> buildSprintView(String roadmapId) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+    public List<Map<String, Object>> buildSprintView(String scopeId) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
 
-        List<RoadmapItem> sprintItems = roadmapItemStore.findSprintItems(roadmapId);
+        List<ScopeItem> sprintItems = scopeItemStore.findSprintItems(scopeId);
 
-        // Group by sprint name (preserving insertion order → already sorted by sprint_start)
-        Map<String, List<RoadmapItem>> bySprint = new LinkedHashMap<>();
+        Map<String, List<ScopeItem>> bySprint = new LinkedHashMap<>();
         Map<String, java.time.Instant> sprintStarts = new LinkedHashMap<>();
         Map<String, java.time.Instant> sprintEnds   = new LinkedHashMap<>();
 
-        for (RoadmapItem item : sprintItems) {
+        for (ScopeItem item : sprintItems) {
             String name = item.sprintName();
             bySprint.computeIfAbsent(name, k -> new ArrayList<>()).add(item);
             sprintStarts.putIfAbsent(name, item.sprintStart());
@@ -329,7 +354,7 @@ public class RoadmapService {
         }
 
         List<Map<String, Object>> result = new ArrayList<>();
-        for (Map.Entry<String, List<RoadmapItem>> entry : bySprint.entrySet()) {
+        for (Map.Entry<String, List<ScopeItem>> entry : bySprint.entrySet()) {
             String sprintName = entry.getKey();
             List<Map<String, Object>> itemMaps = entry.getValue().stream()
                     .map(i -> {
@@ -363,30 +388,29 @@ public class RoadmapService {
      * Fetches fresh Jira data for a single item, updates its stored live fields,
      * then returns a tree-item map in the same shape as {@link #buildTree}.
      *
-     * @throws RoadmapNotFoundException   if the roadmap does not exist
+     * @throws ScopeNotFoundException     if the scope does not exist
      * @throws JiraIssueNotFoundException if the item is not in roadmap_items
      */
-    public Map<String, Object> refreshItem(String roadmapId, String issueKey) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+    public Map<String, Object> refreshItem(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
 
-        RoadmapItem stored = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+        ScopeItem stored = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
                 .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
 
         JiraIssueDetail live = jiraService.fetchIssueDetail(issueKey);
         if (live != null) {
-            roadmapItemStore.refreshLiveFields(
-                    roadmapId, issueKey,
+            scopeItemStore.refreshLiveFields(
+                    scopeId, issueKey,
                     live.summary(), live.status(), live.updatedAt(),
                     live.assignee(), live.reporter(),
                     live.sprintName(), live.sprintStart(), live.sprintEnd());
-            // Reload so the map reflects the updated values
-            stored = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+            stored = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
                     .orElse(stored);
         }
 
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(roadmapId).stream()
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
-        Map<String, String> overrideMap = overrideStore.findByRoadmap(roadmapId);
+        Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
 
         return buildTreeItem(stored, reviewMap.get(issueKey), overrideMap.get(issueKey));
     }
@@ -400,24 +424,28 @@ public class RoadmapService {
      * is not newer than their last review are skipped — they haven't changed and
      * do not need re-reviewing. Pass {@code force=true} to re-review everything.
      *
-     * @throws RoadmapNotFoundException if the roadmap does not exist
+     * @throws ScopeNotFoundException if the scope does not exist
      */
-    public ReviewAllResult enqueueReviewAll(String roadmapId, boolean force) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
+    public ReviewAllResult enqueueReviewAll(String scopeId, boolean force) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
 
-        List<RoadmapItem> items = roadmapItemStore.findByRoadmap(roadmapId);
+        List<ScopeItem> items = scopeItemStore.findByScope(scopeId);
         if (items.isEmpty()) {
-            LOG.infof("RoadmapService.enqueueReviewAll: no items synced for roadmap %s", roadmapId);
+            LOG.infof("ScopeService.enqueueReviewAll: no items synced for scope %s", scopeId);
             return new ReviewAllResult(0, 0, 0);
         }
 
-        Map<String, String> overrideMap = overrideStore.findByRoadmap(roadmapId);
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(roadmapId).stream()
+        Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
 
         int enqueued = 0, skipped = 0, unchanged = 0;
 
-        for (RoadmapItem item : items) {
+        for (ScopeItem item : items) {
+            if (item.issueKey().startsWith("VIRTUAL-")) {
+                skipped++;
+                continue;
+            }
             if (overrideMap.containsKey(item.issueKey()) || jobStore.hasActiveReviewJob(item.issueKey())) {
                 skipped++;
                 continue;
@@ -434,12 +462,12 @@ public class RoadmapService {
                 }
             }
 
-            enqueueJob(roadmapId, item.issueKey(), resolveJobType(item.issueType()),
+            enqueueJob(scopeId, item.issueKey(), resolveJobType(item.issueType()),
                     item.parentKey(), item.grandparentKey());
             enqueued++;
         }
-        LOG.infof("RoadmapService.enqueueReviewAll: enqueued=%d skipped=%d unchanged=%d roadmap=%s",
-                enqueued, skipped, unchanged, roadmapId);
+        LOG.infof("ScopeService.enqueueReviewAll: enqueued=%d skipped=%d unchanged=%d scope=%s",
+                enqueued, skipped, unchanged, scopeId);
         return new ReviewAllResult(enqueued, skipped, unchanged);
     }
 
@@ -449,18 +477,18 @@ public class RoadmapService {
      *
      * @return the new job ID
      */
-    public String enqueueReview(String roadmapId, String issueKey) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        if (overrideStore.isOverridden(roadmapId, issueKey)) throw new ItemOverriddenException(issueKey);
+    public String enqueueReview(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        if (overrideStore.isOverridden(scopeId, issueKey)) throw new ItemOverriddenException(issueKey);
         if (jobStore.hasActiveReviewJob(issueKey)) throw new ActiveJobExistsException(issueKey);
 
-        RoadmapItem item = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+        ScopeItem item = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
                 .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
 
         String jobId = UUID.randomUUID().toString();
         JobType jobType = resolveJobType(item.issueType());
         JiraReviewRequest req = new JiraReviewRequest(
-                roadmapId, issueKey, item.issueType(), item.parentKey(), item.grandparentKey());
+                scopeId, issueKey, item.issueType(), item.parentKey(), item.grandparentKey());
         JobRecord job = new JobRecord(jobId, req, jobType);
         jobStore.put(job);
         jobQueue.submitReviewJob(job);
@@ -469,14 +497,14 @@ public class RoadmapService {
 
     // ─── Overrides ────────────────────────────────────────────────────────────
 
-    public void setOverride(String roadmapId, String issueKey, String status, String updatedBy) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        overrideStore.setOverride(roadmapId, issueKey, status, updatedBy);
+    public void setOverride(String scopeId, String issueKey, String status, String updatedBy) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        overrideStore.setOverride(scopeId, issueKey, status, updatedBy);
     }
 
-    public void clearOverride(String roadmapId, String issueKey) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        overrideStore.clearOverride(roadmapId, issueKey);
+    public void clearOverride(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        overrideStore.clearOverride(scopeId, issueKey);
     }
 
     // ─── AI Proposals ─────────────────────────────────────────────────────────
@@ -485,27 +513,27 @@ public class RoadmapService {
      * Generates an AI improvement proposal for the given issue and stores it as DRAFT.
      * Synchronous — call from a JAX-RS endpoint that can tolerate latency.
      *
-     * @throws RoadmapNotFoundException   if the roadmap does not exist
+     * @throws ScopeNotFoundException     if the scope does not exist
      * @throws JiraIssueNotFoundException if the item is not in roadmap_items
      * @throws ImprovementGenerationException if the AI call fails or returns unparseable JSON
      */
-    public RoadmapProposal improveItem(String roadmapId, String issueKey) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        RoadmapItem item = roadmapItemStore.findByRoadmapAndIssueKey(roadmapId, issueKey)
+    public ScopeProposal improveItem(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        ScopeItem item = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
                 .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
 
         String context = buildImproveContext(item);
         String promptKey = "improve-" + item.issueType().toLowerCase();
         String prompt = promptTemplates.resolve(promptKey, Map.of("jira_context", context));
 
-        List<ProductConfig> linkedProducts = roadmapStore.listLinkedProductIds(roadmapId).stream()
+        List<ProductConfig> linkedProducts = scopeStore.listLinkedProductIds(scopeId).stream()
                 .map(pid -> customerRegistryStore.getProduct(pid).orElse(null))
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
 
         String responseText = linkedProducts.isEmpty()
                 ? callClaudeForProposal(prompt, issueKey)
-                : callClaudeWithTools(prompt, issueKey, roadmapId, linkedProducts);
+                : callClaudeWithTools(prompt, issueKey, scopeId, linkedProducts);
         if (responseText == null) {
             throw new ImprovementGenerationException("AI call returned no content for " + issueKey);
         }
@@ -519,7 +547,7 @@ public class RoadmapService {
         }
 
         return proposalStore.create(
-                roadmapId, issueKey, item.issueType(), item.parentKey(),
+                scopeId, issueKey, item.issueType(), item.parentKey(),
                 root.path("proposed_summary").asText(""),
                 root.path("proposed_description").asText(""),
                 root.path("proposed_criteria").asText(""),
@@ -529,11 +557,11 @@ public class RoadmapService {
     }
 
     /**
-     * Returns all proposals for a given roadmap + issue key (newest first).
+     * Returns all proposals for a given scope + issue key (newest first).
      */
-    public List<RoadmapProposal> getProposals(String roadmapId, String issueKey) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        return proposalStore.findByRoadmapAndIssueKey(roadmapId, issueKey);
+    public List<ScopeProposal> getProposals(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        return proposalStore.findByScopeAndIssueKey(scopeId, issueKey);
     }
 
     /**
@@ -541,10 +569,10 @@ public class RoadmapService {
      *
      * @throws ProposalNotFoundException if the proposal does not exist
      */
-    public RoadmapProposal updateProposal(String roadmapId, String proposalId,
-                                           String summary, String description,
-                                           String criteria, String technical) {
-        RoadmapProposal existing = proposalStore.findById(proposalId)
+    public ScopeProposal updateProposal(String scopeId, String proposalId,
+                                         String summary, String description,
+                                         String criteria, String technical) {
+        ScopeProposal existing = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
         proposalStore.updateFields(proposalId, summary, description, criteria, technical);
         return proposalStore.findById(proposalId).orElse(existing);
@@ -561,8 +589,8 @@ public class RoadmapService {
      * @throws ProposalNotFoundException if the proposal does not exist
      * @throws ImprovementGenerationException if the Jira write fails
      */
-    public RoadmapProposal acceptProposal(String roadmapId, String proposalId) {
-        RoadmapProposal proposal = proposalStore.findById(proposalId)
+    public ScopeProposal acceptProposal(String scopeId, String proposalId) {
+        ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
 
         String jiraResultKey;
@@ -573,13 +601,12 @@ public class RoadmapService {
                     proposal.proposedDescription());
             jiraResultKey = proposal.issueKey();
         } else {
-            // Derive project key from the issue key prefix (e.g. "PRJ-10" → "PRJ")
             String projectKey = proposal.issueKey().replaceAll("-\\d+$", "");
-            RoadmapRecord roadmap = roadmapStore.findById(roadmapId)
-                    .orElseThrow(() -> new RoadmapNotFoundException(roadmapId));
+            ScopeRecord scope = scopeStore.findById(scopeId)
+                    .orElseThrow(() -> new ScopeNotFoundException(scopeId));
             String issueType = "FEATURE".equals(proposal.issueType())
-                    ? roadmap.featureIssuetype()
-                    : roadmap.userstoryIssuetype();
+                    ? scope.featureIssuetype()
+                    : scope.userstoryIssuetype();
             jiraResultKey = jiraService.createIssueSystem(
                     projectKey,
                     proposal.proposedSummary(),
@@ -602,8 +629,8 @@ public class RoadmapService {
      *
      * @throws ProposalNotFoundException if the proposal does not exist
      */
-    public RoadmapProposal rejectProposal(String roadmapId, String proposalId) {
-        RoadmapProposal proposal = proposalStore.findById(proposalId)
+    public ScopeProposal rejectProposal(String scopeId, String proposalId) {
+        ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
         proposalStore.updateStatus(proposalId, "REJECTED", null);
         return proposalStore.findById(proposalId).orElse(proposal);
@@ -614,90 +641,242 @@ public class RoadmapService {
      *
      * @throws ProposalNotFoundException if the proposal does not exist
      */
-    public void deleteProposal(String roadmapId, String proposalId) {
+    public void deleteProposal(String scopeId, String proposalId) {
         if (proposalStore.findById(proposalId).isEmpty()) throw new ProposalNotFoundException(proposalId);
         proposalStore.delete(proposalId);
     }
 
     // ─── Product links ────────────────────────────────────────────────────────
 
-    public List<ProductConfig> listLinkedProducts(String roadmapId) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        return roadmapStore.listLinkedProductIds(roadmapId).stream()
+    public List<ProductConfig> listLinkedProducts(String scopeId) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        return scopeStore.listLinkedProductIds(scopeId).stream()
                 .map(pid -> customerRegistryStore.getProduct(pid).orElse(null))
                 .filter(java.util.Objects::nonNull)
                 .collect(Collectors.toList());
     }
 
-    public void linkProduct(String roadmapId, String productId) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        roadmapStore.linkProduct(roadmapId, productId);
+    public void linkProduct(String scopeId, String productId) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        scopeStore.linkProduct(scopeId, productId);
     }
 
-    public void unlinkProduct(String roadmapId, String productId) {
-        if (roadmapStore.findById(roadmapId).isEmpty()) throw new RoadmapNotFoundException(roadmapId);
-        roadmapStore.unlinkProduct(roadmapId, productId);
+    public void unlinkProduct(String scopeId, String productId) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+        scopeStore.unlinkProduct(scopeId, productId);
+    }
+
+    // ─── Token stats ─────────────────────────────────────────────────────────
+
+    /**
+     * Returns average input/output token counts per scope review job type,
+     * computed from the {@code ai_calls} ledger.
+     */
+    public Map<String, Object> getReviewTokenStats() {
+        String sql = """
+                SELECT job_type,
+                       ROUND(AVG(input_tokens))  AS avg_input,
+                       ROUND(AVG(output_tokens)) AS avg_output,
+                       COUNT(*)                  AS sample_count
+                FROM ai_calls
+                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
+                  AND is_error = false
+                GROUP BY job_type
+                """;
+        Map<String, Object> result = new LinkedHashMap<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                Map<String, Long> stats = new LinkedHashMap<>();
+                stats.put("avgInputTokens",  rs.getLong("avg_input"));
+                stats.put("avgOutputTokens", rs.getLong("avg_output"));
+                stats.put("sampleCount",     rs.getLong("sample_count"));
+                result.put(rs.getString("job_type"), stats);
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to query review token stats: %s", e.getMessage());
+        }
+        return result;
     }
 
     // ─── Private helpers ──────────────────────────────────────────────────────
 
     /**
-     * Fetches epics → features → stories in parallel using the roadmap's
-     * per-project issue-type configuration.
+     * Fetches epics → features → stories in parallel using the scope's configured issue types.
+     *
+     * <h3>Two-pass strategy</h3>
+     * <ol>
+     *   <li>Top-down: fetch all epics matching any of the scope's labels, then fetch their
+     *       child features and grandchild stories.</li>
+     *   <li>Bottom-up: fetch ALL features matching any label directly (not via their epic).
+     *       Any feature whose epic key was NOT already fetched in pass 1 is grouped under a
+     *       synthetic "VIRTUAL-{label}" epic so the tree remains consistent in the UI.</li>
+     * </ol>
      */
-    private List<RoadmapItem> fetchItemsFromJira(String roadmapId, RoadmapRecord roadmap) {
-        List<JiraIssueDetail> epics =
-                jiraService.searchEpicsByLabel(roadmap.label(), roadmap.epicIssuetype());
+    private List<ScopeItem> fetchItemsFromJira(String scopeId, ScopeRecord scope) {
+        List<String> labels = scope.labels();
+        if (labels == null || labels.isEmpty()) return List.of();
 
-        List<CompletableFuture<List<JiraIssueDetail>>> featureFutures = epics.stream()
+        // ── Pass 1: top-down from epics ──────────────────────────────────────
+
+        List<JiraService.JiraIssueDetail> epics =
+                jiraService.searchEpicsByLabels(labels, scope.epicIssuetype());
+
+        Set<String> epicKeys = new HashSet<>();
+        for (JiraService.JiraIssueDetail e : epics) epicKeys.add(e.key());
+
+        List<CompletableFuture<List<JiraService.JiraIssueDetail>>> featureFutures = epics.stream()
                 .map(e -> CompletableFuture.supplyAsync(
-                        () -> jiraService.searchFeaturesForEpic(e.key(), roadmap.featureIssuetype()),
+                        () -> jiraService.searchFeaturesForEpic(e.key(), scope.featureIssuetype()),
                         managedExecutor))
                 .collect(Collectors.toList());
-        List<List<JiraIssueDetail>> featuresByEpic = featureFutures.stream()
+        List<List<JiraService.JiraIssueDetail>> featuresByEpic = featureFutures.stream()
                 .map(CompletableFuture::join)
                 .collect(Collectors.toList());
 
-        List<JiraIssueDetail> allFeatures = featuresByEpic.stream()
+        List<JiraService.JiraIssueDetail> allEpicFeatures = featuresByEpic.stream()
                 .flatMap(Collection::stream).collect(Collectors.toList());
-        List<CompletableFuture<List<JiraIssueDetail>>> storyFutures = allFeatures.stream()
+        Set<String> epicFeatureKeys = allEpicFeatures.stream()
+                .map(JiraService.JiraIssueDetail::key).collect(Collectors.toSet());
+
+        List<CompletableFuture<List<JiraService.JiraIssueDetail>>> storyFutures = allEpicFeatures.stream()
                 .map(f -> CompletableFuture.supplyAsync(
-                        () -> jiraService.searchStoriesForFeature(f.key(), roadmap.userstoryIssuetype()),
+                        () -> jiraService.searchStoriesForFeature(f.key(), scope.userstoryIssuetype()),
                         managedExecutor))
                 .collect(Collectors.toList());
-        List<List<JiraIssueDetail>> storiesByFeature = storyFutures.stream()
+        List<List<JiraService.JiraIssueDetail>> storiesByFeature = storyFutures.stream()
                 .map(CompletableFuture::join)
                 .collect(Collectors.toList());
 
-        List<RoadmapItem> items = new ArrayList<>();
+        // ── Pass 2: direct-label features (unparented / technical work) ───────
+
+        List<JiraService.JiraIssueDetail> allLabelFeatures =
+                jiraService.searchFeaturesByLabels(labels, scope.featureIssuetype());
+
+        // Features not already found under an epic → group under virtual epic
+        List<JiraService.JiraIssueDetail> unparentedFeatures = allLabelFeatures.stream()
+                .filter(f -> !epicFeatureKeys.contains(f.key()))
+                .collect(Collectors.toList());
+
+        // Group unparented features by their Jira parentKey (if any) or by a single
+        // virtual epic per scope (fallback for truly unparented issues)
+        Map<String, List<JiraService.JiraIssueDetail>> unparentedByVirtualEpic = new LinkedHashMap<>();
+        for (JiraService.JiraIssueDetail f : unparentedFeatures) {
+            // If the feature has a parentKey that is NOT in our epic list, it belongs to
+            // a different epic hierarchy — still inject a virtual epic grouping.
+            String virtualKey = "VIRTUAL-" + scopeId.substring(0, 8);
+            unparentedByVirtualEpic.computeIfAbsent(virtualKey, k -> new ArrayList<>()).add(f);
+        }
+
+        // ── Build item list ──────────────────────────────────────────────────
+
+        List<ScopeItem> items = new ArrayList<>();
+
+        // Epics + their features + stories
         for (int ei = 0; ei < epics.size(); ei++) {
-            JiraIssueDetail epic = epics.get(ei);
-            items.add(new RoadmapItem(null, roadmapId, epic.key(), "EPIC",
+            JiraService.JiraIssueDetail epic = epics.get(ei);
+            items.add(new ScopeItem(null, scopeId, epic.key(), "EPIC",
                     null, null, epic.summary(), epic.status(), null, epic.updatedAt(),
                     epic.assignee(), epic.reporter(), null, null, null));
 
-            List<JiraIssueDetail> features = featuresByEpic.get(ei);
-            for (JiraIssueDetail feature : features) {
-                items.add(new RoadmapItem(null, roadmapId, feature.key(), "FEATURE",
+            List<JiraService.JiraIssueDetail> features = featuresByEpic.get(ei);
+            for (JiraService.JiraIssueDetail feature : features) {
+                items.add(new ScopeItem(null, scopeId, feature.key(), "FEATURE",
                         epic.key(), null, feature.summary(), feature.status(), null, feature.updatedAt(),
                         feature.assignee(), feature.reporter(),
                         feature.sprintName(), feature.sprintStart(), feature.sprintEnd()));
 
-                int featureIdx = allFeatures.indexOf(feature);
-                List<JiraIssueDetail> stories = featureIdx >= 0
+                int featureIdx = allEpicFeatures.indexOf(feature);
+                List<JiraService.JiraIssueDetail> stories = featureIdx >= 0
                         ? storiesByFeature.get(featureIdx) : List.of();
-                for (JiraIssueDetail story : stories) {
-                    items.add(new RoadmapItem(null, roadmapId, story.key(), "USERSTORY",
+                for (JiraService.JiraIssueDetail story : stories) {
+                    items.add(new ScopeItem(null, scopeId, story.key(), "USERSTORY",
                             feature.key(), epic.key(), story.summary(), story.status(), null, story.updatedAt(),
                             story.assignee(), story.reporter(),
                             story.sprintName(), story.sprintStart(), story.sprintEnd()));
                 }
             }
         }
+
+        // Virtual epics + unparented features
+        for (Map.Entry<String, List<JiraService.JiraIssueDetail>> entry : unparentedByVirtualEpic.entrySet()) {
+            String virtualEpicKey = entry.getKey();
+            List<JiraService.JiraIssueDetail> orphanedFeatures = entry.getValue();
+            if (orphanedFeatures.isEmpty()) continue;
+
+            // Inject virtual epic row
+            items.add(new ScopeItem(null, scopeId, virtualEpicKey, "EPIC",
+                    null, null, "Technical / Unparented Work", null, null, null,
+                    null, null, null, null, null));
+
+            // Fetch stories for each unparented feature in parallel
+            List<CompletableFuture<List<JiraService.JiraIssueDetail>>> orphanStoryFutures = orphanedFeatures.stream()
+                    .map(f -> CompletableFuture.supplyAsync(
+                            () -> jiraService.searchStoriesForFeature(f.key(), scope.userstoryIssuetype()),
+                            managedExecutor))
+                    .collect(Collectors.toList());
+            List<List<JiraService.JiraIssueDetail>> orphanStoriesByFeature = orphanStoryFutures.stream()
+                    .map(CompletableFuture::join)
+                    .collect(Collectors.toList());
+
+            for (int fi = 0; fi < orphanedFeatures.size(); fi++) {
+                JiraService.JiraIssueDetail feature = orphanedFeatures.get(fi);
+                items.add(new ScopeItem(null, scopeId, feature.key(), "FEATURE",
+                        virtualEpicKey, null, feature.summary(), feature.status(), null, feature.updatedAt(),
+                        feature.assignee(), feature.reporter(),
+                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd()));
+
+                for (JiraService.JiraIssueDetail story : orphanStoriesByFeature.get(fi)) {
+                    items.add(new ScopeItem(null, scopeId, story.key(), "USERSTORY",
+                            feature.key(), virtualEpicKey, story.summary(), story.status(), null, story.updatedAt(),
+                            story.assignee(), story.reporter(),
+                            story.sprintName(), story.sprintStart(), story.sprintEnd()));
+                }
+            }
+        }
+
         return items;
     }
 
-    private Map<String, Object> buildTreeItem(RoadmapItem item, JiraIssueReview review,
+    /**
+     * Removes orphaned reviews and overrides for issue keys that are no longer
+     * present in roadmap_items for this scope, after a sync.
+     */
+    private void cleanupOrphanedData(String scopeId) {
+        String cleanReviews = """
+                DELETE FROM jira_issue_reviews
+                WHERE roadmap_id = ?::uuid
+                  AND issue_key NOT IN (
+                      SELECT issue_key FROM roadmap_items WHERE roadmap_id = ?::uuid
+                  )
+                """;
+        String cleanOverrides = """
+                DELETE FROM roadmap_item_overrides
+                WHERE roadmap_id = ?::uuid
+                  AND issue_key NOT IN (
+                      SELECT issue_key FROM roadmap_items WHERE roadmap_id = ?::uuid
+                  )
+                """;
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(cleanReviews)) {
+                ps.setString(1, scopeId);
+                ps.setString(2, scopeId);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) LOG.infof("ScopeService.cleanupOrphanedData: removed %d orphaned reviews for scope %s", deleted, scopeId);
+            }
+            try (PreparedStatement ps = conn.prepareStatement(cleanOverrides)) {
+                ps.setString(1, scopeId);
+                ps.setString(2, scopeId);
+                int deleted = ps.executeUpdate();
+                if (deleted > 0) LOG.infof("ScopeService.cleanupOrphanedData: removed %d orphaned overrides for scope %s", deleted, scopeId);
+            }
+        } catch (Exception e) {
+            LOG.warnf("ScopeService.cleanupOrphanedData: failed for scope %s: %s", scopeId, e.getMessage());
+        }
+    }
+
+    private Map<String, Object> buildTreeItem(ScopeItem item, JiraIssueReview review,
                                                String overrideStatus) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("issueKey",  item.issueKey());
@@ -720,13 +899,13 @@ public class RoadmapService {
             out.put("improvementSummary", review.improvementSummary());
             out.put("reviewedAt",         review.reviewedAt());
 
-            // isStale = Jira changed after the last AI review
             if (item.jiraModifiedAt() != null && review.reviewedAt() != null) {
                 out.put("isStale", item.jiraModifiedAt().isAfter(review.reviewedAt()));
             }
         }
 
         if (overrideStatus != null) out.put("overrideStatus", overrideStatus);
+        if (item.issueKey().startsWith("VIRTUAL-")) out.put("isVirtual", true);
         return out;
     }
 
@@ -769,11 +948,11 @@ public class RoadmapService {
         };
     }
 
-    private void enqueueJob(String roadmapId, String issueKey, JobType jobType,
+    private void enqueueJob(String scopeId, String issueKey, JobType jobType,
                              String parentKey, String grandparentKey) {
         String jobId = UUID.randomUUID().toString();
         JiraReviewRequest req = new JiraReviewRequest(
-                roadmapId, issueKey, issueType(jobType), parentKey, grandparentKey);
+                scopeId, issueKey, issueType(jobType), parentKey, grandparentKey);
         JobRecord job = new JobRecord(jobId, req, jobType);
         jobStore.put(job);
         jobQueue.submitReviewJob(job);
@@ -783,19 +962,17 @@ public class RoadmapService {
         return jt.name().replace("REVIEW_", "");
     }
 
-    /** Returns {@code value} unless blank, then falls back to the setting, then the hardcoded default. */
     private String blankFallback(String value, String settingKey, String hardDefault) {
         if (value != null && !value.isBlank()) return value.trim();
         String fromSettings = settings.get(settingKey, hardDefault);
         return fromSettings != null && !fromSettings.isBlank() ? fromSettings : hardDefault;
     }
 
-    /** Falls back to {@code fallback} when {@code value} is blank. */
     private static String blankFallback(String value, String fallback) {
         return (value != null && !value.isBlank()) ? value.trim() : fallback;
     }
 
-    private String buildImproveContext(RoadmapItem item) {
+    private String buildImproveContext(ScopeItem item) {
         return switch (item.issueType()) {
             case "EPIC"      -> contextBuilder.buildEpicContext(item.issueKey());
             case "FEATURE"   -> contextBuilder.buildFeatureContext(item.issueKey(), item.parentKey());
@@ -823,33 +1000,24 @@ public class RoadmapService {
             }
             return null;
         } catch (Exception e) {
-            LOG.errorf("RoadmapService.callClaudeForProposal: Claude call failed for %s: %s",
+            LOG.errorf("ScopeService.callClaudeForProposal: Claude call failed for %s: %s",
                     issueKey, e.getMessage());
             return null;
         }
     }
 
-    /**
-     * Runs the tool-enabled agentic loop for AI improvement when the roadmap has
-     * linked products. Claude can call search_knowledge_base, semantic_search,
-     * query_code_graph, and fetch_url to research the codebase before producing
-     * its improved issue JSON.
-     */
     private String callClaudeWithTools(String userPrompt, String issueKey,
-                                       String roadmapId, List<ProductConfig> products) {
-        // Build workspace context with product metadata so tools can scope searches
+                                       String scopeId, List<ProductConfig> products) {
         WorkspaceContext workspace;
         try {
-            workspace = WorkspaceContext.create("roadmap-improve-" + issueKey);
+            workspace = WorkspaceContext.create("scope-improve-" + issueKey);
         } catch (Exception e) {
-            LOG.warnf("RoadmapService.callClaudeWithTools: could not create workspace, falling back to simple call: %s",
+            LOG.warnf("ScopeService.callClaudeWithTools: could not create workspace, falling back to simple call: %s",
                     e.getMessage());
             return callClaudeForProposal(userPrompt, issueKey);
         }
 
         try {
-            // Populate workspace metadata from the first product's git config so
-            // code-graph and semantic search tools can resolve the correct repo scope.
             ProductConfig primary = products.get(0);
             if (primary.git() != null) {
                 if (primary.git().workspace() != null)
@@ -873,9 +1041,9 @@ public class RoadmapService {
             int maxTokens = Integer.parseInt(settings.get("roadmap.review.max-tokens", "4096"));
             int maxIterations = Integer.parseInt(settings.get("roadmap.improve.max-tool-iterations", "10"));
 
-            return toolLoop.run(systemPrompt, workspace, ToolDefinitions.roadmapImprove(),
+            return toolLoop.run(systemPrompt, workspace, ToolDefinitions.scopeImprove(),
                     userPrompt, maxIterations,
-                    "roadmap-improve-" + issueKey, "ROADMAP_IMPROVE");
+                    "scope-improve-" + issueKey, "SCOPE_IMPROVE");
         } finally {
             workspace.close();
         }
@@ -902,43 +1070,5 @@ public class RoadmapService {
             if (nl > 0 && end > nl) s = s.substring(nl + 1, end).strip();
         }
         return s;
-    }
-
-    // ─── Token stats ─────────────────────────────────────────────────────────
-
-    /**
-     * Returns average input/output token counts per roadmap review job type,
-     * computed from the {@code ai_calls} ledger.
-     *
-     * <p>The map keys are {@code REVIEW_EPIC}, {@code REVIEW_FEATURE}, and
-     * {@code REVIEW_USERSTORY}. Each value is a map with {@code avgInputTokens},
-     * {@code avgOutputTokens}, and {@code sampleCount}.
-     */
-    public Map<String, Object> getReviewTokenStats() {
-        String sql = """
-                SELECT job_type,
-                       ROUND(AVG(input_tokens))  AS avg_input,
-                       ROUND(AVG(output_tokens)) AS avg_output,
-                       COUNT(*)                  AS sample_count
-                FROM ai_calls
-                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
-                  AND is_error = false
-                GROUP BY job_type
-                """;
-        Map<String, Object> result = new LinkedHashMap<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                Map<String, Long> stats = new LinkedHashMap<>();
-                stats.put("avgInputTokens",  rs.getLong("avg_input"));
-                stats.put("avgOutputTokens", rs.getLong("avg_output"));
-                stats.put("sampleCount",     rs.getLong("sample_count"));
-                result.put(rs.getString("job_type"), stats);
-            }
-        } catch (Exception e) {
-            LOG.warnf("Failed to query review token stats: %s", e.getMessage());
-        }
-        return result;
     }
 }

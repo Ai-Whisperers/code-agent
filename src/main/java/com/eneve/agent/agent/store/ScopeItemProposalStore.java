@@ -1,6 +1,6 @@
 package com.eneve.agent.agent.store;
 
-import com.eneve.agent.model.RoadmapProposal;
+import com.eneve.agent.model.ScopeProposal;
 import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -17,9 +17,9 @@ import java.util.Optional;
  * database until a user explicitly accepts them.
  */
 @ApplicationScoped
-public class RoadmapItemProposalStore {
+public class ScopeItemProposalStore {
 
-    private static final Logger LOG = Logger.getLogger(RoadmapItemProposalStore.class);
+    private static final Logger LOG = Logger.getLogger(ScopeItemProposalStore.class);
 
     @Inject
     AgroalDataSource dataSource;
@@ -27,11 +27,11 @@ public class RoadmapItemProposalStore {
     /**
      * Inserts a new proposal and returns its generated UUID.
      */
-    public RoadmapProposal create(String roadmapId, String issueKey, String issueType,
-                                   String parentKey,
-                                   String proposedSummary, String proposedDescription,
-                                   String proposedCriteria, String proposedTechnical,
-                                   String aiExplanation) {
+    public ScopeProposal create(String scopeId, String issueKey, String issueType,
+                                 String parentKey,
+                                 String proposedSummary, String proposedDescription,
+                                 String proposedCriteria, String proposedTechnical,
+                                 String aiExplanation) {
         String sql = """
                 INSERT INTO roadmap_item_proposals
                     (roadmap_id, issue_key, issue_type, parent_key,
@@ -42,7 +42,7 @@ public class RoadmapItemProposalStore {
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             ps.setString(2, issueKey);
             ps.setString(3, issueType);
             ps.setString(4, parentKey);
@@ -56,7 +56,7 @@ public class RoadmapItemProposalStore {
                     String id = rs.getString("id");
                     Timestamp createdAt = rs.getTimestamp("created_at");
                     Timestamp updatedAt = rs.getTimestamp("updated_at");
-                    return new RoadmapProposal(id, roadmapId, issueKey, issueType, parentKey,
+                    return new ScopeProposal(id, scopeId, issueKey, issueType, parentKey,
                             proposedSummary, proposedDescription, proposedCriteria, proposedTechnical,
                             aiExplanation, "DRAFT", null,
                             createdAt != null ? createdAt.toInstant() : null,
@@ -64,14 +64,14 @@ public class RoadmapItemProposalStore {
                 }
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.create: %s / %s: %s", roadmapId, issueKey, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.create: %s / %s: %s", scopeId, issueKey, e.getMessage());
             throw new RuntimeException("Failed to create proposal", e);
         }
         throw new RuntimeException("Insert did not return a row for proposal " + issueKey);
     }
 
-    /** Returns all proposals for a roadmap + issue key, newest first. */
-    public List<RoadmapProposal> findByRoadmapAndIssueKey(String roadmapId, String issueKey) {
+    /** Returns all proposals for a scope + issue key, newest first. */
+    public List<ScopeProposal> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
                 SELECT id, roadmap_id, issue_key, issue_type, parent_key,
                        proposed_summary, proposed_description, proposed_criteria, proposed_technical,
@@ -80,23 +80,23 @@ public class RoadmapItemProposalStore {
                 WHERE roadmap_id = ?::uuid AND issue_key = ?
                 ORDER BY created_at DESC
                 """;
-        List<RoadmapProposal> results = new ArrayList<>();
+        List<ScopeProposal> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             ps.setString(2, issueKey);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) results.add(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.findByRoadmapAndIssueKey: %s / %s: %s",
-                    roadmapId, issueKey, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.findByScopeAndIssueKey: %s / %s: %s",
+                    scopeId, issueKey, e.getMessage());
         }
         return results;
     }
 
     /** Returns a single proposal by its UUID. */
-    public Optional<RoadmapProposal> findById(String proposalId) {
+    public Optional<ScopeProposal> findById(String proposalId) {
         String sql = """
                 SELECT id, roadmap_id, issue_key, issue_type, parent_key,
                        proposed_summary, proposed_description, proposed_criteria, proposed_technical,
@@ -111,7 +111,7 @@ public class RoadmapItemProposalStore {
                 if (rs.next()) return Optional.of(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.findById: %s: %s", proposalId, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.findById: %s: %s", proposalId, e.getMessage());
         }
         return Optional.empty();
     }
@@ -140,7 +140,7 @@ public class RoadmapItemProposalStore {
             ps.setString(5, proposalId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.updateFields: %s: %s", proposalId, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.updateFields: %s: %s", proposalId, e.getMessage());
             throw new RuntimeException("Failed to update proposal fields", e);
         }
     }
@@ -164,7 +164,7 @@ public class RoadmapItemProposalStore {
             ps.setString(3, proposalId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.updateStatus: %s → %s: %s", proposalId, status, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.updateStatus: %s → %s: %s", proposalId, status, e.getMessage());
             throw new RuntimeException("Failed to update proposal status", e);
         }
     }
@@ -179,15 +179,15 @@ public class RoadmapItemProposalStore {
             ps.setString(1, proposalId);
             ps.executeUpdate();
         } catch (SQLException e) {
-            LOG.errorf("RoadmapItemProposalStore.delete: %s: %s", proposalId, e.getMessage());
+            LOG.errorf("ScopeItemProposalStore.delete: %s: %s", proposalId, e.getMessage());
             throw new RuntimeException("Failed to delete proposal", e);
         }
     }
 
-    private RoadmapProposal mapRow(ResultSet rs) throws SQLException {
+    private ScopeProposal mapRow(ResultSet rs) throws SQLException {
         Timestamp createdAt = rs.getTimestamp("created_at");
         Timestamp updatedAt = rs.getTimestamp("updated_at");
-        return new RoadmapProposal(
+        return new ScopeProposal(
                 rs.getString("id"),
                 rs.getString("roadmap_id"),
                 rs.getString("issue_key"),
