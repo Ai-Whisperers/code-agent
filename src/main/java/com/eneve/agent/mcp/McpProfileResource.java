@@ -89,7 +89,7 @@ public class McpProfileResource {
         }
 
         if (!isValidProvider(provider)) {
-            return badRequest("Provider must be 'jira' or 'confluence'");
+            return badRequest("Provider must be 'jira', 'confluence', or 'xray'");
         }
 
         Optional<LinkedAccountService.AccountView> account = linkedAccountService.findForUser(userId, provider);
@@ -128,7 +128,7 @@ public class McpProfileResource {
         }
 
         if (!isValidProvider(provider)) {
-            return badRequest("Provider must be 'jira' or 'confluence'");
+            return badRequest("Provider must be 'jira', 'confluence', or 'xray'");
         }
 
         if (request == null || request.baseUrl() == null || request.baseUrl().isBlank()
@@ -183,7 +183,7 @@ public class McpProfileResource {
         }
 
         if (!isValidProvider(provider)) {
-            return badRequest("Provider must be 'jira' or 'confluence'");
+            return badRequest("Provider must be 'jira', 'confluence', or 'xray'");
         }
 
         boolean deleted = linkedAccountService.delete(userId, provider);
@@ -226,7 +226,7 @@ public class McpProfileResource {
         }
 
         if (!isValidProvider(provider)) {
-            return badRequest("Provider must be 'jira' or 'confluence'");
+            return badRequest("Provider must be 'jira', 'confluence', or 'xray'");
         }
 
         boolean hasCredentials = request != null
@@ -236,14 +236,23 @@ public class McpProfileResource {
 
         boolean ok;
         if (hasCredentials) {
-            ok = "jira".equals(provider)
-                    ? linkedAccountService.testJiraConnection(request.baseUrl().trim(), request.username().trim(), request.apiToken())
-                    : linkedAccountService.testConfluenceConnection(request.baseUrl().trim(), request.username().trim(), request.apiToken());
+            ok = switch (provider) {
+                case "jira"       -> linkedAccountService.testJiraConnection(
+                        request.baseUrl().trim(), request.username().trim(), request.apiToken());
+                case "confluence" -> linkedAccountService.testConfluenceConnection(
+                        request.baseUrl().trim(), request.username().trim(), request.apiToken());
+                case "xray"       -> linkedAccountService.testXrayConnection(
+                        request.baseUrl().trim(), request.username().trim(), request.apiToken());
+                default           -> false;
+            };
         } else {
             // No credentials supplied — test the already-stored account
-            java.util.Optional<Boolean> stored = "jira".equals(provider)
-                    ? linkedAccountService.testStoredJiraConnection(userId)
-                    : linkedAccountService.testStoredConfluenceConnection(userId);
+            java.util.Optional<Boolean> stored = switch (provider) {
+                case "jira"       -> linkedAccountService.testStoredJiraConnection(userId);
+                case "confluence" -> linkedAccountService.testStoredConfluenceConnection(userId);
+                case "xray"       -> linkedAccountService.testStoredXrayConnection(userId);
+                default           -> java.util.Optional.empty();
+            };
             if (stored.isEmpty()) {
                 return badRequest("No stored credentials for provider '" + provider + "'. Please save an account first.");
             }
@@ -288,6 +297,9 @@ public class McpProfileResource {
                 "confluence", Map.of(
                         "baseUrl", settings.get("confluence.base.url", ""),
                         "username", email
+                ),
+                "xray", Map.of(
+                        "baseUrl", settings.get("xray.base-url", "https://xray.cloud.getxray.app")
                 )
         )).build();
     }
@@ -313,7 +325,7 @@ public class McpProfileResource {
     }
 
     private boolean isValidProvider(String provider) {
-        return "jira".equals(provider) || "confluence".equals(provider);
+        return "jira".equals(provider) || "confluence".equals(provider) || "xray".equals(provider);
     }
 
     private Response forbidden(String message) {

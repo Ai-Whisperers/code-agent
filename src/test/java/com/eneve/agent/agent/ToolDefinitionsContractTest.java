@@ -36,7 +36,8 @@ class ToolDefinitionsContractTest {
                 Arguments.of("docsGeneration",  ToolDefinitions.docsGeneration()),
                 Arguments.of("planExecution",   ToolDefinitions.planExecution()),
                 Arguments.of("chat",            ToolDefinitions.chat(false, false)),
-                Arguments.of("chatAdmin",       ToolDefinitions.chat(true, true))
+                Arguments.of("chatAdmin",       ToolDefinitions.chat(true, true)),
+                Arguments.of("xrayTools",       ToolDefinitions.xrayTools())
         );
     }
 
