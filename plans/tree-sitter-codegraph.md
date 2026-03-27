@@ -67,26 +67,6 @@ Tree-sitter is preferred over ANTLR4 because adding a new language is a single M
     <artifactId>tree-sitter-python</artifactId>
     <version>0.23.2</version>
 </dependency>
-<dependency>
-    <groupId>io.github.tree-sitter</groupId>
-    <artifactId>tree-sitter-go</artifactId>
-    <version>0.23.4</version>
-</dependency>
-<dependency>
-    <groupId>io.github.tree-sitter</groupId>
-    <artifactId>tree-sitter-rust</artifactId>
-    <version>0.23.2</version>
-</dependency>
-<dependency>
-    <groupId>io.github.tree-sitter</groupId>
-    <artifactId>tree-sitter-kotlin</artifactId>
-    <version>0.23.1</version>
-</dependency>
-<dependency>
-    <groupId>io.github.tree-sitter</groupId>
-    <artifactId>tree-sitter-ruby</artifactId>
-    <version>0.23.0</version>
-</dependency>
 ```
 
 ### 2. Create a `TreeSitterLanguageDriver` abstraction

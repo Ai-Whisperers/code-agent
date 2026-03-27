@@ -15,8 +15,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
+import com.github.javaparser.JavaParser;
 import com.github.javaparser.ParserConfiguration;
-import com.github.javaparser.StaticJavaParser;
+import com.github.javaparser.ParseResult;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
@@ -32,10 +33,8 @@ import org.jboss.logging.Logger;
 @ApplicationScoped
 public class CodeGraphIndexer {
 
-    static {
-        StaticJavaParser.getParserConfiguration()
-                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
-    }
+    private static final JavaParser JAVA_PARSER = new JavaParser(
+            new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17));
 
     private static final Logger LOG = Logger.getLogger(CodeGraphIndexer.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
@@ -219,7 +218,11 @@ public class CodeGraphIndexer {
 
     private void indexJavaFile(Path file, String relativePath, String wsName, String repoSlug)
             throws Exception {
-        CompilationUnit cu = StaticJavaParser.parse(file);
+        ParseResult<CompilationUnit> parseResult = JAVA_PARSER.parse(file);
+        if (!parseResult.isSuccessful() || parseResult.getResult().isEmpty()) {
+            throw new RuntimeException("Parse failed: " + parseResult.getProblems());
+        }
+        CompilationUnit cu = parseResult.getResult().get();
 
         cu.findAll(ClassOrInterfaceDeclaration.class).forEach(decl -> {
             String name = decl.getNameAsString();

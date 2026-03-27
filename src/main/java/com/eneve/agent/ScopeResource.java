@@ -65,6 +65,9 @@ public class ScopeResource {
         if (name.isBlank() || labels.isEmpty()) {
             return badRequest("name and at least one label are required");
         }
+        for (String lbl : labels) {
+            if (hasInvalidChars(lbl)) return badRequest("label contains invalid characters");
+        }
 
         ScopeService.CreateScopeResult result = scopeService.createScope(
                 name, labels,
@@ -75,7 +78,11 @@ public class ScopeResource {
         auditService.log("SCOPE", "SCOPE_CREATED", "scope", result.scope().id(),
                 Map.of("name", name, "labels", labels, "itemsSynced", result.itemsSynced()));
 
-        return Response.status(201).entity(scopeResponse(result.scope(), result.itemsSynced())).build();
+        Map<String, Object> resp = scopeResponse(result.scope(), result.itemsSynced());
+        if (result.itemsSynced() == 0) {
+            resp.put("warning", "No epics found for the given labels");
+        }
+        return Response.status(201).entity(resp).build();
     }
 
     @PUT
@@ -84,7 +91,7 @@ public class ScopeResource {
         String name = strOf(body, "name");
         List<String> labels = labelsOf(body);
         if (name.isBlank()) {
-            return badRequest("name is required");
+            return badRequest("name and label are required");
         }
         try {
             Object updated = scopeService.updateScope(id, name, labels,
@@ -463,6 +470,10 @@ public class ScopeResource {
 
     private static boolean isValidIssueKey(String key) {
         return key != null && (ISSUE_KEY_PATTERN.matcher(key).matches() || key.startsWith("VIRTUAL-"));
+    }
+
+    private static boolean hasInvalidChars(String s) {
+        return s.contains("\"") || s.contains("'") || s.contains(";") || s.contains("\\");
     }
 
     /** Safely extracts a trimmed string value from a loosely-typed JSON body map. */

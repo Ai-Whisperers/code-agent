@@ -40,7 +40,7 @@ class ScopeResourceTest {
 
     private static final String SCOPE_ID = "rm-001";
     private static final ScopeRecord SAMPLE_SCOPE =
-            new ScopeRecord(SCOPE_ID, "Q1 Scope", "scope-q1", "Epic", "Story", "Sub-task", Instant.now());
+            new ScopeRecord(SCOPE_ID, "Q1 Scope", List.of("scope-q1"), "Epic", "Story", "Sub-task", Instant.now());
 
     // ── GET /api/scope ──────────────────────────────────────────────────────
 
@@ -145,7 +145,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void createScope_validInput_returns201WithWarningOnEmptyEpics() {
-        when(scopeService.createScope("My Scope", "my-label", "", "", ""))
+        when(scopeService.createScope("My Scope", List.of("my-label"), "", "", ""))
                 .thenReturn(new CreateScopeResult(SAMPLE_SCOPE, 0));
 
         given()
@@ -163,7 +163,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void createScope_withEpics_returnsItemsSynced() {
-        when(scopeService.createScope("My Scope", "my-label", "", "", ""))
+        when(scopeService.createScope("My Scope", List.of("my-label"), "", "", ""))
                 .thenReturn(new CreateScopeResult(SAMPLE_SCOPE, 3));
 
         given()
@@ -182,7 +182,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void updateScope_notFound_returns404() {
-        when(scopeService.updateScope(eq("unknown"), anyString(), anyString(), any(), any(), any()))
+        when(scopeService.updateScope(eq("unknown"), anyString(), anyList(), any(), any(), any()))
                 .thenThrow(new ScopeNotFoundException("unknown"));
 
         given()

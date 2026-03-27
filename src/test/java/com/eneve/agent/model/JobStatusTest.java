@@ -10,13 +10,14 @@ class JobStatusTest {
     void enumHasExpectedValues() {
         JobStatus[] values = JobStatus.values();
         
-        assertEquals(6, values.length);
+        assertEquals(7, values.length);
         assertEquals(JobStatus.PENDING, values[0]);
         assertEquals(JobStatus.QUEUED, values[1]);
         assertEquals(JobStatus.RUNNING, values[2]);
         assertEquals(JobStatus.SUCCESS, values[3]);
         assertEquals(JobStatus.FAILED, values[4]);
         assertEquals(JobStatus.AWAITING_APPROVAL, values[5]);
+        assertEquals(JobStatus.CANCELLED, values[6]);
     }
 
     @Test
@@ -27,6 +28,7 @@ class JobStatusTest {
         assertEquals("SUCCESS", JobStatus.SUCCESS.name());
         assertEquals("FAILED", JobStatus.FAILED.name());
         assertEquals("AWAITING_APPROVAL", JobStatus.AWAITING_APPROVAL.name());
+        assertEquals("CANCELLED", JobStatus.CANCELLED.name());
     }
 
     @Test
@@ -37,6 +39,7 @@ class JobStatusTest {
         assertEquals(JobStatus.SUCCESS, JobStatus.valueOf("SUCCESS"));
         assertEquals(JobStatus.FAILED, JobStatus.valueOf("FAILED"));
         assertEquals(JobStatus.AWAITING_APPROVAL, JobStatus.valueOf("AWAITING_APPROVAL"));
+        assertEquals(JobStatus.CANCELLED, JobStatus.valueOf("CANCELLED"));
     }
 
     @Test
@@ -59,6 +62,7 @@ class JobStatusTest {
         assertEquals(3, JobStatus.SUCCESS.ordinal());
         assertEquals(4, JobStatus.FAILED.ordinal());
         assertEquals(5, JobStatus.AWAITING_APPROVAL.ordinal());
+        assertEquals(6, JobStatus.CANCELLED.ordinal());
     }
 
     @Test
