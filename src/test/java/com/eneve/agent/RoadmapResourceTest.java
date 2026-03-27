@@ -1,5 +1,6 @@
 package com.eneve.agent;
 
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.RoadmapRecord;
 import com.eneve.agent.roadmap.RoadmapService;
 import com.eneve.agent.roadmap.RoadmapService.ActiveJobExistsException;
@@ -33,6 +34,9 @@ class RoadmapResourceTest {
 
     @InjectMock
     RoadmapService roadmapService;
+
+    @InjectMock
+    JobStore jobStore;
 
     private static final String ROADMAP_ID = "rm-001";
     private static final RoadmapRecord SAMPLE_ROADMAP =
@@ -152,13 +156,13 @@ class RoadmapResourceTest {
         .then()
             .statusCode(201)
             .body("id",          equalTo(ROADMAP_ID))
-            .body("jobsEnqueued", equalTo(0))
+            .body("itemsSynced", equalTo(0))
             .body("warning",     containsString("No epics found"));
     }
 
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
-    void createRoadmap_withEpics_returnsJobCount() {
+    void createRoadmap_withEpics_returnsItemsSynced() {
         when(roadmapService.createRoadmap("My Roadmap", "my-label", "", "", ""))
                 .thenReturn(new CreateRoadmapResult(SAMPLE_ROADMAP, 3));
 
@@ -169,8 +173,8 @@ class RoadmapResourceTest {
             .post("/api/roadmap")
         .then()
             .statusCode(201)
-            .body("jobsEnqueued", equalTo(3))
-            .body("warning",      nullValue());
+            .body("itemsSynced", equalTo(3))
+            .body("warning",     nullValue());
     }
 
     // ── PUT /api/roadmap/{id} ─────────────────────────────────────────────────
@@ -416,5 +420,75 @@ class RoadmapResourceTest {
             .delete("/api/roadmap/" + ROADMAP_ID + "/items/PROJ-1/override")
         .then()
             .statusCode(404);
+    }
+
+    // ── GET /api/roadmap/{id}/active-review-count ─────────────────────────────
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"app_staff"})
+    void activeReviewCount_unknownRoadmap_returns404() {
+        when(roadmapService.getRoadmap("unknown"))
+                .thenThrow(new RoadmapNotFoundException("unknown"));
+
+        given()
+        .when()
+            .get("/api/roadmap/unknown/active-review-count")
+        .then()
+            .statusCode(404)
+            .body("error", containsString("not found"));
+    }
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"app_staff"})
+    void activeReviewCount_knownRoadmap_returnsCount() {
+        when(roadmapService.getRoadmap(ROADMAP_ID)).thenReturn(SAMPLE_ROADMAP);
+        when(jobStore.countActiveReviewJobsForRoadmap(ROADMAP_ID)).thenReturn(7L);
+
+        given()
+        .when()
+            .get("/api/roadmap/" + ROADMAP_ID + "/active-review-count")
+        .then()
+            .statusCode(200)
+            .body("count", equalTo(7));
+    }
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"app_staff"})
+    void activeReviewCount_zeroJobs_returnsZero() {
+        when(roadmapService.getRoadmap(ROADMAP_ID)).thenReturn(SAMPLE_ROADMAP);
+        when(jobStore.countActiveReviewJobsForRoadmap(ROADMAP_ID)).thenReturn(0L);
+
+        given()
+        .when()
+            .get("/api/roadmap/" + ROADMAP_ID + "/active-review-count")
+        .then()
+            .statusCode(200)
+            .body("count", equalTo(0));
+    }
+
+    @Test
+    @TestSecurity(user = "staff", roles = {"app_staff"})
+    void activeReviewCount_storeThrows_returns500WithGenericMessage() {
+        when(roadmapService.getRoadmap(ROADMAP_ID)).thenReturn(SAMPLE_ROADMAP);
+        when(jobStore.countActiveReviewJobsForRoadmap(ROADMAP_ID))
+                .thenThrow(new RuntimeException("DB connection failed: password=s3cr3t!"));
+
+        given()
+        .when()
+            .get("/api/roadmap/" + ROADMAP_ID + "/active-review-count")
+        .then()
+            .statusCode(500)
+            // Generic message — must not leak internal exception details
+            .body("error", equalTo("Failed to retrieve active review count"))
+            .body("error", not(containsString("password")));
+    }
+
+    @Test
+    void activeReviewCount_unauthenticated_returns401or403() {
+        given()
+        .when()
+            .get("/api/roadmap/" + ROADMAP_ID + "/active-review-count")
+        .then()
+            .statusCode(anyOf(equalTo(401), equalTo(403)));
     }
 }

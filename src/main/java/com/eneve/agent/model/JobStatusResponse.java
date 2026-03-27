@@ -10,7 +10,7 @@ public record JobStatusResponse(
         @Schema(description = "Unique job identifier", example = "550e8400-e29b-41d4-a716-446655440000")
         String jobId,
 
-        @Schema(description = "Type of the job", enumeration = {"FIX", "REVIEW", "FIX_PR", "REPLY", "FIX_COMMENT", "HOOK", "GENERATE_TESTS", "GENERATE_DOCS", "SYNC_CONFLUENCE", "METRICS", "QUALITY_REPORT"})
+        @Schema(description = "Type of the job", enumeration = {"FIX", "REVIEW", "FIX_PR", "REPLY", "FIX_COMMENT", "HOOK", "GENERATE_TESTS", "GENERATE_DOCS", "SYNC_CONFLUENCE", "METRICS", "QUALITY_REPORT", "REVIEW_EPIC", "REVIEW_FEATURE", "REVIEW_USERSTORY"})
         JobType jobType,
 
         @Schema(description = "Current job status", enumeration = {"PENDING", "QUEUED", "RUNNING", "SUCCESS", "FAILED", "AWAITING_APPROVAL"})
@@ -35,7 +35,13 @@ public record JobStatusResponse(
         int linesChanged,
 
         @Schema(description = "Position in the execution queue (1-based). 0 if not queued (running or completed).")
-        int queuePosition
+        int queuePosition,
+
+        @Schema(description = "Dispatch priority (1-100, higher = dispatched first)")
+        int priority,
+
+        @Schema(description = "Jira issue key associated with this job, if applicable")
+        String jiraKey
 ) {
     public static JobStatusResponse from(JobRecord record, int queuePosition) {
         return new JobStatusResponse(
@@ -48,7 +54,9 @@ public record JobStatusResponse(
                 record.getPrUrl(),
                 record.getFilesChanged(),
                 record.getLinesChanged(),
-                queuePosition
+                queuePosition,
+                record.getPriority(),
+                null
         );
     }
 }

@@ -38,8 +38,8 @@ public class JobStore {
                 INSERT INTO jobs
                     (job_id, job_type, status, request_payload, created_at, updated_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     pr_author, workspace, repo_slug, priority)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -60,6 +60,7 @@ public class JobStore {
             setNullable(ps, 14, job.getPrAuthor());
             setNullable(ps, 15, job.getWorkspace());
             setNullable(ps, 16, job.getRepoSlug());
+            ps.setInt(17, job.getPriority());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to insert job %s: %s", job.getJobId(), e.getMessage());
@@ -77,8 +78,8 @@ public class JobStore {
                 INSERT INTO job_history
                     (job_id, job_type, status, request_payload, created_at, updated_at, archived_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     pr_author, workspace, repo_slug, priority)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -101,6 +102,7 @@ public class JobStore {
                 setNullable(ins, 14, job.getPrAuthor());
                 setNullable(ins, 15, job.getWorkspace());
                 setNullable(ins, 16, job.getRepoSlug());
+                ins.setInt(17, job.getPriority());
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -128,7 +130,8 @@ public class JobStore {
                     pr_url        = ?,
                     pr_id         = ?,
                     files_changed = ?,
-                    lines_changed = ?
+                    lines_changed = ?,
+                    priority      = ?
                 WHERE job_id = ?
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -141,7 +144,8 @@ public class JobStore {
             setNullable(ps, 6, job.getPrId());
             ps.setInt(7, job.getFilesChanged());
             ps.setInt(8, job.getLinesChanged());
-            ps.setString(9, job.getJobId());
+            ps.setInt(9, job.getPriority());
+            ps.setString(10, job.getJobId());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to update job %s: %s", job.getJobId(), e.getMessage());
@@ -172,7 +176,7 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug
+                       pr_author, workspace, repo_slug, priority
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -281,13 +285,13 @@ public class JobStore {
 
         String cte = """
                 SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
                 FROM jobs WHERE 1=1
                 """ + where + """
 
                 UNION ALL
                 SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
                 FROM job_history WHERE 1=1
                 """ + where;
 
@@ -327,7 +331,9 @@ public class JobStore {
                             rs.getString("pr_url"),
                             rs.getInt("files_changed"),
                             rs.getInt("lines_changed"),
-                            0
+                            0,
+                            rs.getInt("priority"),
+                            rs.getString("jira_key")
                     ));
                 }
             }
@@ -362,6 +368,67 @@ public class JobStore {
     }
 
     /**
+     * Returns up to {@code limit} QUEUED roadmap review jobs ordered by priority DESC,
+     * created_at ASC, excluding any job IDs already in the in-memory dispatch queue.
+     * Used by the refill scheduler in JobQueue.
+     */
+    public List<JobRecord> findQueuedReviewJobs(Set<String> excludeJobIds, int limit) {
+        String sql = """
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority
+                FROM jobs
+                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
+                  AND status = 'QUEUED'
+                ORDER BY priority DESC, created_at ASC
+                LIMIT ?
+                """;
+        List<JobRecord> results = new ArrayList<>();
+        long safeLimitLong = (long) limit + excludeJobIds.size();
+        int safeLimit = safeLimitLong > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) safeLimitLong;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, safeLimit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next() && results.size() < limit) {
+                    String jobId = rs.getString("job_id");
+                    if (excludeJobIds.contains(jobId)) continue;
+                    JobRecord job = mapRow(rs);
+                    if (job != null) {
+                        results.add(job);
+                    }
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query queued review jobs: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Counts QUEUED or RUNNING roadmap review jobs associated with the given roadmap ID.
+     * Used by the /roadmap/{id}/active-review-count endpoint.
+     */
+    public long countActiveReviewJobsForRoadmap(String roadmapId) {
+        String sql = """
+                SELECT COUNT(*) FROM jobs
+                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
+                  AND status IN ('PENDING','QUEUED','RUNNING')
+                  AND request_payload->>'roadmapId' = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, roadmapId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getLong(1);
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to count active review jobs for roadmap %s: %s", roadmapId, e.getMessage());
+        }
+        return 0;
+    }
+
+    /**
      * No-op: the jobs table now serves as the persistent ledger for processed JIRA keys.
      * Kept for API compatibility; callers can be cleaned up over time.
      */
@@ -386,7 +453,7 @@ public class JobStore {
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + " pr_author, workspace, repo_slug"
+                + " pr_author, workspace, repo_slug, priority"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -449,6 +516,10 @@ public class JobStore {
         job.setPrAuthor(rs.getString("pr_author"));
         job.setWorkspace(rs.getString("workspace"));
         job.setRepoSlug(rs.getString("repo_slug"));
+        int priority = rs.getInt("priority");
+        if (!rs.wasNull()) {
+            job.setPriority(priority);
+        }
         return job;
     }
 
@@ -518,6 +589,7 @@ public class JobStore {
         if (job.getRequest() != null) return job.getRequest().jiraKey();
         if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
         if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
+        if (job.getJiraReviewRequest() != null) return job.getJiraReviewRequest().issueKey();
         return null;
     }
 

@@ -411,7 +411,6 @@ public class RoadmapService {
             return new ReviewAllResult(0, 0, 0);
         }
 
-        int maxJobs = Integer.parseInt(settings.get("roadmap.review.max-jobs-per-review-all", "50"));
         Map<String, String> overrideMap = overrideStore.findByRoadmap(roadmapId);
         Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(roadmapId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
@@ -419,8 +418,6 @@ public class RoadmapService {
         int enqueued = 0, skipped = 0, unchanged = 0;
 
         for (RoadmapItem item : items) {
-            if (enqueued >= maxJobs) break;
-
             if (overrideMap.containsKey(item.issueKey()) || jobStore.hasActiveReviewJob(item.issueKey())) {
                 skipped++;
                 continue;
@@ -466,7 +463,7 @@ public class RoadmapService {
                 roadmapId, issueKey, item.issueType(), item.parentKey(), item.grandparentKey());
         JobRecord job = new JobRecord(jobId, req, jobType);
         jobStore.put(job);
-        jobQueue.submit(job);
+        jobQueue.submitReviewJob(job);
         return jobId;
     }
 
@@ -777,8 +774,9 @@ public class RoadmapService {
         String jobId = UUID.randomUUID().toString();
         JiraReviewRequest req = new JiraReviewRequest(
                 roadmapId, issueKey, issueType(jobType), parentKey, grandparentKey);
-        jobStore.put(new JobRecord(jobId, req, jobType));
-        jobQueue.submit(new JobRecord(jobId, req, jobType));
+        JobRecord job = new JobRecord(jobId, req, jobType);
+        jobStore.put(job);
+        jobQueue.submitReviewJob(job);
     }
 
     private static String issueType(JobType jt) {

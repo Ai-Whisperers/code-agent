@@ -19,6 +19,7 @@ public class JobRecord {
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
+    private volatile int priority;
     private volatile String summary;
     private volatile String errorMessage;
     private volatile String prUrl;
@@ -46,6 +47,7 @@ public class JobRecord {
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.FIX.defaultPriority();
     }
 
     public JobRecord(String jobId, ReviewPrRequest reviewRequest) {
@@ -64,6 +66,7 @@ public class JobRecord {
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.REVIEW.defaultPriority();
     }
 
     public JobRecord(String jobId, FixPrRequest fixPrRequest) {
@@ -82,6 +85,7 @@ public class JobRecord {
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.FIX_PR.defaultPriority();
     }
 
     public JobRecord(String jobId, ReplyCommentRequest replyRequest) {
@@ -104,6 +108,7 @@ public class JobRecord {
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = jobType.defaultPriority();
     }
 
     public JobRecord(String jobId, HookJobRequest hookRequest) {
@@ -122,6 +127,7 @@ public class JobRecord {
         this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.HOOK.defaultPriority();
     }
 
     public JobRecord(String jobId, GenerateTestsRequest generateTestsRequest) {
@@ -140,6 +146,7 @@ public class JobRecord {
         this.jobType = JobType.GENERATE_TESTS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.GENERATE_TESTS.defaultPriority();
     }
 
     public JobRecord(String jobId, GenerateDocsRequest generateDocsRequest) {
@@ -158,6 +165,7 @@ public class JobRecord {
         this.jobType = JobType.GENERATE_DOCS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.GENERATE_DOCS.defaultPriority();
     }
 
     public JobRecord(String jobId, SyncConfluenceRequest syncConfluenceRequest) {
@@ -176,6 +184,7 @@ public class JobRecord {
         this.jobType = JobType.SYNC_CONFLUENCE;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.SYNC_CONFLUENCE.defaultPriority();
     }
 
     public JobRecord(String jobId, MetricsJobRequest metricsRequest) {
@@ -194,6 +203,7 @@ public class JobRecord {
         this.jobType = JobType.METRICS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.METRICS.defaultPriority();
     }
 
     public JobRecord(String jobId, QualityReportJobRequest qualityReportRequest) {
@@ -212,6 +222,7 @@ public class JobRecord {
         this.jobType = JobType.QUALITY_REPORT;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = JobType.QUALITY_REPORT.defaultPriority();
     }
 
     public JobRecord(String jobId, JiraReviewRequest jiraReviewRequest, JobType jobType) {
@@ -230,6 +241,7 @@ public class JobRecord {
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
+        this.priority = jobType.defaultPriority();
     }
 
     public String getJobId() { return jobId; }
@@ -249,6 +261,9 @@ public class JobRecord {
 
     public JobStatus getStatus() { return status; }
     public void setStatus(JobStatus status) { this.status = status; }
+
+    public int getPriority() { return priority; }
+    public void setPriority(int priority) { this.priority = priority; }
 
     public String getSummary() { return summary; }
     public void setSummary(String summary) { this.summary = summary; }

@@ -1,5 +1,6 @@
 package com.eneve.agent;
 
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.roadmap.RoadmapService;
 import com.eneve.agent.roadmap.RoadmapService.ActiveJobExistsException;
@@ -11,6 +12,7 @@ import com.eneve.agent.roadmap.RoadmapService.RoadmapNotFoundException;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
+import org.jboss.logging.Logger;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -32,6 +34,7 @@ import java.util.regex.Pattern;
 @RolesAllowed({"app_staff", "app_developer", "app_admin"})
 public class RoadmapResource {
 
+    private static final Logger LOG = Logger.getLogger(RoadmapResource.class);
     private static final Pattern ISSUE_KEY_PATTERN = Pattern.compile("^[A-Z][A-Z0-9_]+-[0-9]+$");
 
     @Inject
@@ -39,6 +42,9 @@ public class RoadmapResource {
 
     @Inject
     AuditService auditService;
+
+    @Inject
+    JobStore jobStore;
 
     // ─── CRUD ───────────────────────────────────────────────────────────────
 
@@ -233,6 +239,23 @@ public class RoadmapResource {
             return Response.ok(resp).build();
         } catch (RoadmapNotFoundException e) {
             return notFound("Roadmap not found");
+        }
+    }
+
+    @GET
+    @Path("/{id}/active-review-count")
+    public Response activeReviewCount(@PathParam("id") String roadmapId) {
+        try {
+            roadmapService.getRoadmap(roadmapId);
+        } catch (RoadmapNotFoundException e) {
+            return notFound("Roadmap not found");
+        }
+        try {
+            long count = jobStore.countActiveReviewJobsForRoadmap(roadmapId);
+            return Response.ok(Map.of("count", count)).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to count active review jobs for roadmap %s: %s", roadmapId, e.getMessage());
+            return Response.serverError().entity(Map.of("error", "Failed to retrieve active review count")).build();
         }
     }
 
