@@ -12,78 +12,92 @@ import static org.junit.jupiter.api.Assertions.*;
 class GitPlatformProducerTest {
 
     private GitPlatformProducer producer;
+    private BitbucketPlatformService mockBitbucketService;
+    private AzureDevOpsPlatformService mockAzureDevOpsService;
 
     @BeforeEach
     void setUp() {
         producer = new GitPlatformProducer();
-        // We'll use null services since we're only testing the platform selection logic
-        producer.bitbucket = null;
-        producer.azureDevOps = null;
+        
+        // Create mock services to simulate properly injected CDI beans
+        mockBitbucketService = new BitbucketPlatformService();
+        mockAzureDevOpsService = new AzureDevOpsPlatformService();
+        
+        // Inject the mock services instead of setting to null
+        producer.bitbucket = mockBitbucketService;
+        producer.azureDevOps = mockAzureDevOpsService;
     }
 
     @Test
     void produceBitbucketPlatformServiceWithBitbucket() throws Exception {
         setPlatform("bitbucket");
         
-        // We expect this to select the bitbucket service (null in our test setup)
-        // The actual service injection is handled by CDI in runtime
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
     void produceBitbucketPlatformServiceWithUppercase() throws Exception {
         setPlatform("BITBUCKET");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
     void produceBitbucketPlatformServiceWithWhitespace() throws Exception {
         setPlatform("  bitbucket  ");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithAzuredevops() throws Exception {
         setPlatform("azuredevops");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithAzureDashDevops() throws Exception {
         setPlatform("azure-devops");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithAzure() throws Exception {
         setPlatform("azure");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithUppercase() throws Exception {
         setPlatform("AZUREDEVOPS");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithMixedCase() throws Exception {
         setPlatform("AzUrE-DevOps");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
     void produceAzureDevOpsPlatformServiceWithWhitespace() throws Exception {
         setPlatform("  azure-devops  ");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockAzureDevOpsService, result);
     }
 
     @Test
@@ -141,21 +155,24 @@ class GitPlatformProducerTest {
         // When platform is not set, it should default to bitbucket based on the @ConfigProperty annotation
         setPlatform("bitbucket"); // This simulates the default value
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
     void platformValueTrimmedBeforeSwitchEvaluation() throws Exception {
         setPlatform("\t\n  bitbucket\r\n  ");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
     void caseInsensitiveMatching() throws Exception {
         setPlatform("BitBucket");
         
-        assertDoesNotThrow(() -> producer.gitPlatformService());
+        GitPlatformService result = producer.gitPlatformService();
+        assertSame(mockBitbucketService, result);
     }
 
     @Test
@@ -170,16 +187,22 @@ class GitPlatformProducerTest {
 
     @Test
     void switchStatementHandlesAllCases() throws Exception {
-        // Test all the known cases to ensure they don't throw exceptions (even with null services)
-        String[] validPlatforms = {
-            "bitbucket", "BITBUCKET", "BitBucket",
-            "azuredevops", "AZUREDEVOPS", "azure-devops", "AZURE-DEVOPS", "azure", "AZURE"
-        };
+        // Test all the known cases to ensure they return the correct service instances
+        String[] bitbucketPlatforms = {"bitbucket", "BITBUCKET", "BitBucket"};
+        String[] azurePlatforms = {"azuredevops", "AZUREDEVOPS", "azure-devops", "AZURE-DEVOPS", "azure", "AZURE"};
         
-        for (String platform : validPlatforms) {
+        for (String platform : bitbucketPlatforms) {
             setPlatform(platform);
-            assertDoesNotThrow(() -> producer.gitPlatformService(), 
-                "Platform '" + platform + "' should be handled without throwing exception");
+            GitPlatformService result = producer.gitPlatformService();
+            assertSame(mockBitbucketService, result, 
+                "Platform '" + platform + "' should return BitbucketPlatformService");
+        }
+        
+        for (String platform : azurePlatforms) {
+            setPlatform(platform);
+            GitPlatformService result = producer.gitPlatformService();
+            assertSame(mockAzureDevOpsService, result,
+                "Platform '" + platform + "' should return AzureDevOpsPlatformService");
         }
     }
 
