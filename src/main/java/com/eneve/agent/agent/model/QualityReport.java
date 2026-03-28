@@ -1,6 +1,7 @@
 package com.eneve.agent.agent.model;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -40,8 +41,20 @@ public record QualityReport(
             int methodsCovered,
             int methodsMissed,
             int classesCovered,
-            int classesMissed
+            int classesMissed,
+            List<PackageLineCoverage> packages
     ) {}
+
+    /**
+     * Per-package (Java) or per-namespace (.NET) line coverage summary.
+     * Stored inline within {@link CoverageSection} in the JSONB report.
+     */
+    public record PackageLineCoverage(String name, int linesCovered, int linesMissed) {
+        public double lineRate() {
+            int total = linesCovered + linesMissed;
+            return total > 0 ? 100.0 * linesCovered / total : 0.0;
+        }
+    }
 
     public record LinterSection(
             int totalFindings,

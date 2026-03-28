@@ -18,7 +18,7 @@ RUN mvn -B dependency:go-offline -q
 COPY src src
 RUN mvn -B package -DskipTests -q
 
-# Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK
+# Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK 9
 FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57
 
 RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
@@ -51,15 +51,21 @@ RUN apt-get update && \
         libxcomposite1 libxdamage1 libxrandr2 xdg-utils && \
     # Mermaid CLI for local diagram rendering
     npm install -g @mermaid-js/mermaid-cli && \
-    # .NET SDK 8.0 (for dotnet format)
+    # .NET SDK 9.0 (for dotnet format + code coverage)
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
     chmod +x /tmp/dotnet-install.sh && \
-    /tmp/dotnet-install.sh --channel 8.0 --install-dir /usr/share/dotnet && \
+    /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet && \
     ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet && \
     rm /tmp/dotnet-install.sh && \
     # Cleanup
     apt-get purge -y gnupg && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
+
+# Install dotnet global tools to a shared system path accessible by all users
+ENV DOTNET_TOOLS=/usr/share/dotnet-tools
+RUN mkdir -p $DOTNET_TOOLS && \
+    DOTNET_ROOT=/usr/share/dotnet dotnet tool install --tool-path $DOTNET_TOOLS dotnet-reportgenerator-globaltool
+ENV PATH="${DOTNET_TOOLS}:${PATH}"
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
     mkdir -p /home/appuser/.m2 /opt/maven-settings && \

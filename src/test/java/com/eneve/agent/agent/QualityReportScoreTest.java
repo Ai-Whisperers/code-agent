@@ -24,7 +24,7 @@ class QualityReportScoreTest {
         int total = linesCovered + linesMissed;
         double lineRate = total > 0 ? 100.0 * linesCovered / total : 0.0;
         return new CoverageSection(lineRate, 0.0, 0.0, 0.0,
-                linesCovered, linesMissed, 0, 0, 0, 0, 0, 0);
+                linesCovered, linesMissed, 0, 0, 0, 0, 0, 0, java.util.List.of());
     }
 
     /** testFiles / sourceFiles = ratio (e.g. tests(80,100) → 0.8) */

@@ -8,6 +8,7 @@ import java.util.UUID;
 
 import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.model.QualityReport.*;
+import java.util.stream.Collectors;
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.agent.store.CommentFeedbackStore;
@@ -44,6 +45,7 @@ public class QualityReportCollector {
     @Inject CommentStore commentStore;
     @Inject CommentFeedbackStore feedbackStore;
     @Inject CoverageReporter coverageReporter;
+    @Inject DotnetCoverageReporter dotnetCoverageReporter;
     @Inject SettingsService settingsService;
 
     /**
@@ -201,14 +203,25 @@ public class QualityReportCollector {
             return null;
         }
         try {
+            // Try Maven/JaCoCo first; fall back to .NET/Coverlet if the project is not Maven-based
             CoverageSnapshot snap = coverageReporter.measureCoverageWithFallback(workspace, coverageTimeoutMinutes);
+            if (snap == null && dotnetCoverageReporter.isApplicable(workspace)) {
+                LOG.infof("QualityReportCollector: no Maven coverage for %s/%s — trying .NET coverage",
+                        workspaceName, repoSlug);
+                snap = dotnetCoverageReporter.measureCoverage(workspace, coverageTimeoutMinutes);
+            }
             if (snap == null) return null;
+            List<PackageLineCoverage> packages = snap.packages() == null ? List.of()
+                    : snap.packages().stream()
+                            .map(p -> new PackageLineCoverage(p.name(), p.linesCovered(), p.linesMissed()))
+                            .collect(Collectors.toList());
             return new CoverageSection(
                     snap.lineRate(), snap.branchRate(), snap.methodRate(), snap.classRate(),
                     snap.linesCovered(), snap.linesMissed(),
                     snap.branchesCovered(), snap.branchesMissed(),
                     snap.methodsCovered(), snap.methodsMissed(),
-                    snap.classesCovered(), snap.classesMissed()
+                    snap.classesCovered(), snap.classesMissed(),
+                    packages
             );
         } catch (Exception e) {
             LOG.warnf("QualityReportCollector: coverage collection failed for %s/%s: %s",

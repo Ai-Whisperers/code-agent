@@ -81,7 +81,7 @@ interface TreeSitterLanguageDriver {
 }
 ```
 
-Implementations: `CSharpDriver`, `TypeScriptDriver`, `PhpDriver`, `PythonDriver`, `GoDriver`, etc.
+Implementations: `CSharpDriver`, `TypeScriptDriver`, `PhpDriver`, `PythonDriver`, etc.
 
 ### 3. Replace `dispatchIndex` in `CodeGraphIndexer`
 
@@ -112,12 +112,9 @@ Use the [Tree-sitter Playground](https://ts-playground.vercel.app) to inspect th
 | C# | `class_declaration`, `method_declaration`, `using_directive`, `invocation_expression` |
 | PHP | `class_declaration`, `method_declaration`, `namespace_use_declaration`, `function_call_expression` |
 | Python | `class_definition`, `function_definition`, `import_statement`, `call` |
-| Go | `type_spec`, `function_declaration`, `method_declaration`, `import_declaration`, `call_expression` |
-| Rust | `struct_item`, `impl_item`, `fn_item`, `use_declaration`, `call_expression` |
-| Kotlin | `class_declaration`, `function_declaration`, `import_directive`, `call_expression` |
 
 ## Caveats
-
+- Update docker to include installation of treesitter for typescript, c#, php and python. 
 - **JNI / native binaries**: `jtreesitter` ships pre-built native libraries for `linux/amd64`, `linux/aarch64`, `darwin/arm64`, and `windows/amd64`. Works out of the box for JVM deployments. If a Quarkus native image build is ever added, native library inclusion will need to be configured.
 - **JavaParser stays**: Tree-sitter's Java grammar is less feature-rich than JavaParser for symbol resolution. Keep JavaParser for `.java` files.
 - **File size cap**: The existing 200 KB file size guard in `indexFull` is still valid and should be kept.
