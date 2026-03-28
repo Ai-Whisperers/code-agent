@@ -47,7 +47,10 @@ public record JobStatusResponse(
         String sourceBranch,
 
         @Schema(description = "Target branch the pull request will merge into")
-        String targetBranch
+        String targetBranch,
+
+        @Schema(description = "Before/after coverage snapshots captured during a GENERATE_TESTS job")
+        JobCoverageData coverageData
 ) {
     public static JobStatusResponse from(JobRecord record, int queuePosition) {
         String sourceBranch = null;
@@ -81,7 +84,8 @@ public record JobStatusResponse(
                 record.getPriority(),
                 null,
                 sourceBranch,
-                targetBranch
+                targetBranch,
+                record.getCoverageData()
         );
     }
 }

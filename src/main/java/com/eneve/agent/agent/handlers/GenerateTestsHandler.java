@@ -10,6 +10,8 @@ import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
+
+import java.util.stream.Collectors;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -179,6 +181,21 @@ public class GenerateTestsHandler implements JobHandler {
                             "Build validation failed (generated tests did not pass): " + e.getMessage());
                     return;
                 }
+            } else if (jsCoverageReporter.isApplicable(workspace)) {
+                try {
+                    LOG.info("GenerateTests: measuring post-generation JS/TS coverage...");
+                    long coverageTimeout = Long.parseLong(
+                            settings.get("generate-tests.coverage-timeout-minutes", "20"));
+                    afterCoverage = jsCoverageReporter.measureCoverage(workspace, coverageTimeout);
+                    if (afterCoverage != null) {
+                        LOG.infof("GenerateTests: JS after — lines %.1f%%, branches %.1f%%",
+                                afterCoverage.lineRate(), afterCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    lifecycle.failGenerateTests(job,
+                            "Build validation failed (generated tests did not pass): " + e.getMessage());
+                    return;
+                }
             } else {
                 if (!buildAndLintHelper.runBuildWithRetry(workspace, job)) {
                     lifecycle.failGenerateTests(job,
@@ -190,6 +207,13 @@ public class GenerateTestsHandler implements JobHandler {
             String coverageSummary = "";
             if (afterCoverage != null) {
                 coverageSummary = "\n\n" + afterCoverage.formatMarkdownComparison(baselineCoverage);
+            }
+
+            // Persist before/after coverage snapshots on the job for UI display.
+            if (baselineCoverage != null || afterCoverage != null) {
+                job.setCoverageData(new JobCoverageData(
+                        toSection(baselineCoverage),
+                        toSection(afterCoverage)));
             }
 
             boolean hasChanges;
@@ -352,6 +376,26 @@ public class GenerateTestsHandler implements JobHandler {
                     job.getJobId(), e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Converts a live {@link CoverageReporter.CoverageSnapshot} into the
+     * {@link QualityReport.CoverageSection} shape used for persistent storage.
+     * Returns {@code null} when the snapshot is {@code null}.
+     */
+    private static QualityReport.CoverageSection toSection(CoverageReporter.CoverageSnapshot s) {
+        if (s == null) return null;
+        List<QualityReport.PackageLineCoverage> pkgs = s.packages() == null ? List.of()
+                : s.packages().stream()
+                        .map(p -> new QualityReport.PackageLineCoverage(p.name(), p.linesCovered(), p.linesMissed()))
+                        .collect(Collectors.toList());
+        return new QualityReport.CoverageSection(
+                s.lineRate(), s.branchRate(), s.methodRate(), s.classRate(),
+                s.linesCovered(), s.linesMissed(),
+                s.branchesCovered(), s.branchesMissed(),
+                s.methodsCovered(), s.methodsMissed(),
+                s.classesCovered(), s.classesMissed(),
+                pkgs);
     }
 
     /**

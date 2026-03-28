@@ -1,6 +1,7 @@
 package com.eneve.agent.agent.store;
 
 import com.eneve.agent.model.*;
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -25,7 +26,8 @@ public class JobStore {
     @Inject
     AgroalDataSource dataSource;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = new ObjectMapper()
+            .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
     /** In-memory cache for fast access to recently seen / active jobs. */
     private final Map<String, JobRecord> cache = new ConcurrentHashMap<>();
@@ -38,8 +40,8 @@ public class JobStore {
                 INSERT INTO jobs
                     (job_id, job_type, status, request_payload, created_at, updated_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug, priority)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     pr_author, workspace, repo_slug, priority, coverage_data)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -61,6 +63,7 @@ public class JobStore {
             setNullable(ps, 15, job.getWorkspace());
             setNullable(ps, 16, job.getRepoSlug());
             ps.setInt(17, job.getPriority());
+            setNullable(ps, 18, serializeCoverageData(job));
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to insert job %s: %s", job.getJobId(), e.getMessage());
@@ -78,8 +81,8 @@ public class JobStore {
                 INSERT INTO job_history
                     (job_id, job_type, status, request_payload, created_at, updated_at, archived_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug, priority)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     pr_author, workspace, repo_slug, priority, coverage_data)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -103,6 +106,7 @@ public class JobStore {
                 setNullable(ins, 15, job.getWorkspace());
                 setNullable(ins, 16, job.getRepoSlug());
                 ins.setInt(17, job.getPriority());
+                setNullable(ins, 18, serializeCoverageData(job));
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -131,7 +135,8 @@ public class JobStore {
                     pr_id         = ?,
                     files_changed = ?,
                     lines_changed = ?,
-                    priority      = ?
+                    priority      = ?,
+                    coverage_data = ?::jsonb
                 WHERE job_id = ?
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -145,7 +150,8 @@ public class JobStore {
             ps.setInt(7, job.getFilesChanged());
             ps.setInt(8, job.getLinesChanged());
             ps.setInt(9, job.getPriority());
-            ps.setString(10, job.getJobId());
+            setNullable(ps, 10, serializeCoverageData(job));
+            ps.setString(11, job.getJobId());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to update job %s: %s", job.getJobId(), e.getMessage());
@@ -176,7 +182,7 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority
+                       pr_author, workspace, repo_slug, priority, coverage_data
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -335,6 +341,7 @@ public class JobStore {
                             rs.getInt("priority"),
                             rs.getString("jira_key"),
                             null,
+                            null,
                             null
                     ));
                 }
@@ -378,7 +385,7 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority
+                       pr_author, workspace, repo_slug, priority, coverage_data
                 FROM jobs
                 WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
                   AND status = 'QUEUED'
@@ -455,7 +462,7 @@ public class JobStore {
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + " pr_author, workspace, repo_slug, priority"
+                + " pr_author, workspace, repo_slug, priority, coverage_data"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -521,6 +528,14 @@ public class JobStore {
         int priority = rs.getInt("priority");
         if (!rs.wasNull()) {
             job.setPriority(priority);
+        }
+        try {
+            String coverageJson = rs.getString("coverage_data");
+            if (coverageJson != null) {
+                job.setCoverageData(objectMapper.readValue(coverageJson, JobCoverageData.class));
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to deserialize coverage_data for job %s (non-fatal): %s", jobId, e.getMessage());
         }
         return job;
     }
@@ -593,6 +608,16 @@ public class JobStore {
         if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
         if (job.getJiraReviewRequest() != null) return job.getJiraReviewRequest().issueKey();
         return null;
+    }
+
+    private String serializeCoverageData(JobRecord job) {
+        if (job.getCoverageData() == null) return null;
+        try {
+            return objectMapper.writeValueAsString(job.getCoverageData());
+        } catch (Exception e) {
+            LOG.warnf("Failed to serialize coverage_data for job %s: %s", job.getJobId(), e.getMessage());
+            return null;
+        }
     }
 
     private static void setNullable(PreparedStatement ps, int index, String value) throws SQLException {

@@ -30,6 +30,7 @@ public class JobRecord {
     private volatile String prAuthor;
     private volatile String workspace;
     private volatile String repoSlug;
+    private volatile JobCoverageData coverageData;
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
@@ -294,4 +295,7 @@ public class JobRecord {
 
     public String getRepoSlug() { return repoSlug; }
     public void setRepoSlug(String repoSlug) { this.repoSlug = repoSlug; }
+
+    public JobCoverageData getCoverageData() { return coverageData; }
+    public void setCoverageData(JobCoverageData coverageData) { this.coverageData = coverageData; }
 }
