@@ -181,7 +181,7 @@ public class PrSummaryGenerator {
 
     private String callClaude(String prompt, String jobId) {
         String modelName = settings.get("anthropic.summary-model",
-                settings.get("anthropic.fast-model", "claude-3-5-haiku-20241022"));
+                settings.get("anthropic.fast-model", "claude-haiku-4-5"));
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
                 .maxTokens(4096)

@@ -92,7 +92,7 @@ public class LearningExtractor {
     }
 
     private Optional<String> extractLearning(List<ThreadComment> thread, CommentContext ctx) {
-        String fastModelName = settingsService.get("anthropic.fast-model", "claude-3-5-haiku-20241022");
+        String fastModelName = settingsService.get("anthropic.fast-model", "claude-haiku-4-5");
         StringBuilder conversationText = new StringBuilder();
         for (ThreadComment tc : thread) {
             String role = tc.isAgent() ? "AI Reviewer" : "Developer (" + tc.author() + ")";

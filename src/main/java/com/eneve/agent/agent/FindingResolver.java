@@ -71,7 +71,7 @@ public class FindingResolver {
     SettingsService settings;
 
     private String fastModelName() {
-        return settings.get("anthropic.fast-model", "claude-3-5-haiku-20241022");
+        return settings.get("anthropic.fast-model", "claude-haiku-4-5");
     }
 
     private record FindingCandidate(OpenFinding finding, String contextSnippet) {}

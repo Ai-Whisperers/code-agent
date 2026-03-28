@@ -10,6 +10,8 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.CommentFeedbackEntry;
+import com.eneve.agent.agent.store.CommentFeedbackStore;
 import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.audit.AuditService;
@@ -91,6 +93,9 @@ public class JobsResource {
 
     @Inject
     CommentStore commentStore;
+
+    @Inject
+    CommentFeedbackStore commentFeedbackStore;
 
     @GET
     @Operation(
@@ -531,6 +536,164 @@ public class JobsResource {
                 Map.of("fixCommentJobId", fixCommentJobId, "commentId", String.valueOf(commentId)));
 
         return Response.accepted(Map.of("fixCommentJobId", fixCommentJobId)).build();
+    }
+
+    // ── Comment action endpoints ───────────────────────────────────────────
+
+    @POST
+    @Path("/{jobId}/resolve-comment")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "resolveComment", summary = "Resolve a review comment",
+               description = "Marks a bot review comment as resolved both in the platform SCM and in the local store.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Comment resolved"),
+            @APIResponse(responseCode = "400", description = "Missing commentId"),
+            @APIResponse(responseCode = "404", description = "Job not found")
+    })
+    public Response resolveComment(@PathParam("jobId") String jobId, Map<String, Object> body) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        Object rawId = body != null ? body.get("commentId") : null;
+        if (rawId == null) {
+            return Response.status(400).entity(Map.of("error", "commentId is required")).build();
+        }
+        long commentId;
+        try {
+            commentId = ((Number) rawId).longValue();
+        } catch (ClassCastException e) {
+            return Response.status(400).entity(Map.of("error", "commentId must be a number")).build();
+        }
+
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            gitPlatformService.resolveComment(coords.organization(), coords.project(), coords.repository(),
+                    job.getPrId(), commentId);
+        } catch (Exception e) {
+            LOG.warnf("SCM resolveComment failed for comment %d: %s", commentId, e.getMessage());
+        }
+        commentStore.markResolved(commentId, "API User");
+
+        auditService.log("JOBS", "COMMENT_RESOLVED", "job", jobId,
+                Map.of("commentId", String.valueOf(commentId)));
+
+        return Response.ok(Map.of("resolved", true)).build();
+    }
+
+    @POST
+    @Path("/{jobId}/false-positive")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "markFalsePositive", summary = "Mark a review comment as a false positive",
+               description = "Records false-positive feedback, resolves the comment, and posts a reply to the PR thread.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Marked as false positive"),
+            @APIResponse(responseCode = "400", description = "Missing commentId"),
+            @APIResponse(responseCode = "404", description = "Job not found")
+    })
+    public Response markFalsePositive(@PathParam("jobId") String jobId, Map<String, Object> body) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        Object rawId = body != null ? body.get("commentId") : null;
+        if (rawId == null) {
+            return Response.status(400).entity(Map.of("error", "commentId is required")).build();
+        }
+        long commentId;
+        try {
+            commentId = ((Number) rawId).longValue();
+        } catch (ClassCastException e) {
+            return Response.status(400).entity(Map.of("error", "commentId must be a number")).build();
+        }
+
+        var ctx = commentStore.find(commentId);
+        String category = ctx.map(c -> c.category()).orElse(null);
+        String findingText = ctx.map(c -> c.findingText()).orElse(null);
+        String prId = job.getPrId() != null ? job.getPrId() : ctx.map(c -> c.prId()).orElse("");
+        String workspace;
+        String repoSlug;
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            workspace = coords.organization();
+            repoSlug = coords.repository();
+        } catch (Exception e) {
+            workspace = ctx.map(c -> c.organization()).orElse("");
+            repoSlug = ctx.map(c -> c.repository()).orElse("");
+        }
+
+        CommentFeedbackEntry feedback = CommentFeedbackEntry.falsePositive(
+                commentId, prId, workspace, repoSlug, category, findingText, "API User");
+        commentFeedbackStore.save(feedback);
+
+        commentStore.markResolved(commentId, "API User");
+
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            gitPlatformService.resolveComment(coords.organization(), coords.project(), coords.repository(),
+                    job.getPrId(), commentId);
+            gitPlatformService.replyToComment(coords.organization(), coords.project(), coords.repository(),
+                    job.getPrId(), commentId,
+                    "This finding has been marked as a false positive and will be suppressed in future reviews.");
+        } catch (Exception e) {
+            LOG.warnf("SCM false-positive actions failed for comment %d: %s", commentId, e.getMessage());
+        }
+
+        auditService.log("JOBS", "COMMENT_FALSE_POSITIVE", "job", jobId,
+                Map.of("commentId", String.valueOf(commentId)));
+
+        return Response.ok(Map.of("falsePositive", true)).build();
+    }
+
+    @POST
+    @Path("/{jobId}/reply-comment")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "replyToComment", summary = "Reply to a review comment",
+               description = "Posts a reply to a bot review comment on the pull request.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Reply posted"),
+            @APIResponse(responseCode = "400", description = "Missing commentId or message"),
+            @APIResponse(responseCode = "404", description = "Job not found")
+    })
+    public Response replyToComment(@PathParam("jobId") String jobId, Map<String, Object> body) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        Object rawId = body != null ? body.get("commentId") : null;
+        Object rawMsg = body != null ? body.get("message") : null;
+        if (rawId == null) {
+            return Response.status(400).entity(Map.of("error", "commentId is required")).build();
+        }
+        if (rawMsg == null || rawMsg.toString().isBlank()) {
+            return Response.status(400).entity(Map.of("error", "message is required")).build();
+        }
+
+        long commentId;
+        try {
+            commentId = ((Number) rawId).longValue();
+        } catch (ClassCastException e) {
+            return Response.status(400).entity(Map.of("error", "commentId must be a number")).build();
+        }
+        String message = rawMsg.toString().trim();
+
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            long replyId = gitPlatformService.replyToComment(coords.organization(), coords.project(), coords.repository(),
+                    job.getPrId(), commentId, message);
+            auditService.log("JOBS", "COMMENT_REPLY_POSTED", "job", jobId,
+                    Map.of("commentId", String.valueOf(commentId), "replyId", String.valueOf(replyId)));
+            return Response.ok(Map.of("replyId", replyId)).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to post reply for comment %d: %s", commentId, e.getMessage());
+            return Response.status(500).entity(Map.of("error", "Failed to post reply: " + e.getMessage())).build();
+        }
     }
 
     // ── Evidence endpoint ─────────────────────────────────────────────────

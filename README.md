@@ -439,7 +439,7 @@ All config via environment variables (or `application.properties` for local dev)
 | `ANTHROPIC_API_KEY` | Anthropic API key | (required) |
 | `ANTHROPIC_MODEL` | Claude model ID | `claude-sonnet-4-20250514` |
 | `ANTHROPIC_MAX_TOKENS` | Max tokens per API call | `8192` |
-| `ANTHROPIC_FAST_MODEL` | Faster model for binary decisions (intent classification, finding resolution, learning extraction) | `claude-3-5-haiku-20241022` |
+| `ANTHROPIC_FAST_MODEL` | Faster model for binary decisions (intent classification, finding resolution, learning extraction) | `claude-haiku-4-5` |
 | `ANTHROPIC_TOKENS_PER_MINUTE` | Rate-limit budget (tokens/min for your API tier) | `80000` |
 | `ANTHROPIC_RATE_LIMIT_SAFETY_MARGIN` | Fraction of budget to stay under (proactive throttling) | `0.80` |
 | `ANTHROPIC_PRICING_INPUT` | USD per million input tokens | `3.0` |

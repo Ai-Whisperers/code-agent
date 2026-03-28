@@ -18,6 +18,7 @@ import java.util.TreeSet;
 
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.ThreadComment;
+import com.eneve.agent.diff.DiffFilter;
 import com.eneve.agent.diff.DiffFormatter;
 import com.eneve.agent.diff.DiffParser;
 import com.eneve.agent.diff.ParsedDiffFile;
@@ -105,9 +106,16 @@ public class AgentPromptBuilder {
 
         List<ParsedDiffFile> parsedFiles = DiffParser.parse(diff);
 
-        int maxDiffChars = 80_000;
-        List<ParsedDiffFile> displayFiles = DiffFormatter.truncateAtFileBoundary(parsedFiles, maxDiffChars);
-        boolean diffTruncated = displayFiles.size() < parsedFiles.size();
+        List<ParsedDiffFile> reviewableFiles = DiffFilter.filterReviewable(parsedFiles);
+        if (reviewableFiles.size() < parsedFiles.size()) {
+            LOG.infof("Diff filter: excluded %d non-reviewable file(s) from %d total (lock files, " +
+                            "coverage reports, build artifacts). Reviewable: %d",
+                    parsedFiles.size() - reviewableFiles.size(), parsedFiles.size(), reviewableFiles.size());
+        }
+
+        int maxDiffChars = Integer.parseInt(this.settings.get("review.max-diff-chars", "60000"));
+        List<ParsedDiffFile> displayFiles = DiffFormatter.truncateAtFileBoundary(reviewableFiles, maxDiffChars);
+        boolean diffTruncated = displayFiles.size() < reviewableFiles.size();
 
         String annotatedDiff = DiffFormatter.toAnnotated(displayFiles);
         Map<String, TreeSet<Integer>> commentableLines = DiffFormatter.buildCommentableLines(displayFiles);
