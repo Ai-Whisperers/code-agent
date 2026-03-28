@@ -126,6 +126,34 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     @Override
+    public String getPullRequestDiff(String org, String project, String repo, String prId) {
+        String projectPath = encodedProjectPath(org, repo);
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId + "/diffs";
+        try {
+            String responseBody = getAndReturn(url, "get MR diff !" + prId);
+            JsonNode diffs = objectMapper.readTree(responseBody);
+            if (!diffs.isArray()) return "";
+
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode file : diffs) {
+                String oldPath = file.path("old_path").asText("");
+                String newPath = file.path("new_path").asText("");
+                String diff = file.path("diff").asText("");
+                if (diff.isBlank()) continue;
+                sb.append("diff --git a/").append(oldPath).append(" b/").append(newPath).append("\n");
+                sb.append("--- a/").append(oldPath).append("\n");
+                sb.append("+++ b/").append(newPath).append("\n");
+                sb.append(diff);
+                if (!diff.endsWith("\n")) sb.append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            LOG.warnf("GitLab get MR diff error for MR !%s: %s", prId, e.getMessage());
+            return "";
+        }
+    }
+
+    @Override
     public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
         String projectPath = encodedProjectPath(org, repo);
         String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId + "/notes";

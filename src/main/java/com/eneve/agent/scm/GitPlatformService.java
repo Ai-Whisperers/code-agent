@@ -35,6 +35,16 @@ public interface GitPlatformService {
     Map<String, String> getPullRequestInfo(String org, String project, String repo, String prId);
 
     /**
+     * Fetch the unified diff for the given pull request / merge request.
+     * Returns a standard unified diff string (as produced by {@code git diff}).
+     * <p>
+     * Implementations that do not support this API return an empty string.
+     */
+    default String getPullRequestDiff(String org, String project, String repo, String prId) {
+        return "";
+    }
+
+    /**
      * Add a general comment to a pull request.
      * @return the platform comment ID
      */

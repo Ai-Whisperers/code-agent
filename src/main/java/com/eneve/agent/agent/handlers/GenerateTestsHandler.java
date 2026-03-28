@@ -26,6 +26,7 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject AgentPromptBuilder promptBuilder;
     @Inject GitPlatformService platformService;
     @Inject CoverageReporter coverageReporter;
+    @Inject JsCoverageReporter jsCoverageReporter;
     @Inject BuildAndLintHelper buildAndLintHelper;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobStore jobStore;
@@ -105,14 +106,31 @@ public class GenerateTestsHandler implements JobHandler {
 
             if (baselineCoverage == null && coverageReporter.isJacocoPresent(workspace)) {
                 try {
-                    LOG.info("GenerateTests: no stored baseline — measuring coverage live...");
+                    LOG.info("GenerateTests: no stored baseline — measuring Java coverage live...");
                     baselineCoverage = coverageReporter.measureCoverage(workspace);
                     if (baselineCoverage != null) {
-                        LOG.infof("GenerateTests: baseline — lines %.1f%%, branches %.1f%%",
+                        LOG.infof("GenerateTests: Java baseline — lines %.1f%%, branches %.1f%%",
                                 baselineCoverage.lineRate(), baselineCoverage.branchRate());
                     }
                 } catch (Exception e) {
-                    LOG.warnf("Baseline coverage measurement failed (non-fatal): %s", e.getMessage());
+                    LOG.warnf("GenerateTests: baseline Java coverage measurement failed (non-fatal): %s",
+                            e.getMessage());
+                }
+            }
+
+            if (baselineCoverage == null && jsCoverageReporter.isApplicable(workspace)) {
+                try {
+                    LOG.info("GenerateTests: no stored baseline — measuring JS/TS coverage live...");
+                    long coverageTimeout = Long.parseLong(
+                            settings.get("generate-tests.coverage-timeout-minutes", "20"));
+                    baselineCoverage = jsCoverageReporter.measureCoverage(workspace, coverageTimeout);
+                    if (baselineCoverage != null) {
+                        LOG.infof("GenerateTests: JS baseline — lines %.1f%%, branches %.1f%%",
+                                baselineCoverage.lineRate(), baselineCoverage.branchRate());
+                    }
+                } catch (Exception e) {
+                    LOG.warnf("GenerateTests: baseline JS/TS coverage measurement failed (non-fatal): %s",
+                            e.getMessage());
                 }
             }
 

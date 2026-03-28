@@ -121,6 +121,30 @@ public class GitHubPlatformService implements GitPlatformService {
     }
 
     @Override
+    public String getPullRequestDiff(String org, String project, String repo, String prId) {
+        try {
+            String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId;
+            requireTrustedUrl(url);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", "Bearer " + token())
+                    .header("Accept", "application/vnd.github.diff")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+            LOG.warnf("GitHub get PR diff failed (HTTP %d) for PR #%s", response.statusCode(), prId);
+            return "";
+        } catch (Exception e) {
+            LOG.warnf("GitHub get PR diff error for PR #%s: %s", prId, e.getMessage());
+            return "";
+        }
+    }
+
+    @Override
     public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
         String url = baseUrl() + "/repos/" + org + "/" + repo + "/issues/" + prId + "/comments";
         String body = """

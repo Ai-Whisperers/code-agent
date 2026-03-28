@@ -333,7 +333,9 @@ public class JobStore {
                             rs.getInt("lines_changed"),
                             0,
                             rs.getInt("priority"),
-                            rs.getString("jira_key")
+                            rs.getString("jira_key"),
+                            null,
+                            null
                     ));
                 }
             }

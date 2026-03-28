@@ -24,7 +24,6 @@ import com.eneve.agent.model.RejectRequest;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
-
 import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;

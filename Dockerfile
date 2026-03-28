@@ -51,6 +51,8 @@ RUN apt-get update && \
         libxcomposite1 libxdamage1 libxrandr2 xdg-utils && \
     # Mermaid CLI for local diagram rendering
     npm install -g @mermaid-js/mermaid-cli && \
+    # pnpm and yarn — required for JS/TS coverage in projects that use these package managers
+    npm install -g pnpm yarn && \
     # .NET SDK 9.0 (for dotnet format + code coverage)
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
     chmod +x /tmp/dotnet-install.sh && \

@@ -123,6 +123,33 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     @Override
+    public String getPullRequestDiff(String org, String project, String repo, String prId) {
+        try {
+            String url = baseUrl() + "/repositories/" + org + "/" + repo + "/pullrequests/" + prId + "/diff";
+            requireTrustedUrl(url);
+            // Bitbucket Cloud may 302-redirect to the actual diff file; use NORMAL redirect policy.
+            HttpClient redirectingClient = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", authHeader())
+                    .header("Accept", "text/plain")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = redirectingClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+            LOG.warnf("Bitbucket get PR diff failed (HTTP %d) for PR #%s", response.statusCode(), prId);
+            return "";
+        } catch (Exception e) {
+            LOG.warnf("Bitbucket get PR diff error for PR #%s: %s", prId, e.getMessage());
+            return "";
+        }
+    }
+
+    @Override
     public long addPrComment(String org, String project, String repo, String prId, String commentBody) {
         String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments";

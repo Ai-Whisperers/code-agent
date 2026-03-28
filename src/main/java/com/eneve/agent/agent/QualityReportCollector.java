@@ -49,6 +49,7 @@ public class QualityReportCollector {
     @Inject CommentFeedbackStore feedbackStore;
     @Inject CoverageReporter coverageReporter;
     @Inject DotnetCoverageReporter dotnetCoverageReporter;
+    @Inject JsCoverageReporter jsCoverageReporter;
     @Inject SettingsService settingsService;
 
     /**
@@ -235,12 +236,17 @@ public class QualityReportCollector {
             return null;
         }
         try {
-            // Try Maven/JaCoCo first; fall back to .NET/Coverlet if the project is not Maven-based
+            // Fallback chain: Maven/JaCoCo → .NET/Coverlet → JS/TS (Jest/Vitest)
             CoverageSnapshot snap = coverageReporter.measureCoverageWithFallback(workspace, coverageTimeoutMinutes);
             if (snap == null && dotnetCoverageReporter.isApplicable(workspace)) {
                 LOG.infof("QualityReportCollector: no Maven coverage for %s/%s — trying .NET coverage",
                         workspaceName, repoSlug);
                 snap = dotnetCoverageReporter.measureCoverage(workspace, coverageTimeoutMinutes);
+            }
+            if (snap == null && jsCoverageReporter.isApplicable(workspace)) {
+                LOG.infof("QualityReportCollector: no Maven/.NET coverage for %s/%s — trying JS/TS coverage",
+                        workspaceName, repoSlug);
+                snap = jsCoverageReporter.measureCoverage(workspace, coverageTimeoutMinutes);
             }
             if (snap == null) return null;
             List<PackageLineCoverage> packages = snap.packages() == null ? List.of()

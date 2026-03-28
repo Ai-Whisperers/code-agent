@@ -41,9 +41,32 @@ public record JobStatusResponse(
         int priority,
 
         @Schema(description = "Jira issue key associated with this job, if applicable")
-        String jiraKey
+        String jiraKey,
+
+        @Schema(description = "Source branch of the pull request (feature branch)")
+        String sourceBranch,
+
+        @Schema(description = "Target branch the pull request will merge into")
+        String targetBranch
 ) {
     public static JobStatusResponse from(JobRecord record, int queuePosition) {
+        String sourceBranch = null;
+        String targetBranch = null;
+
+        if (record.getRequest() != null) {
+            sourceBranch = record.getRequest().branchName();
+            targetBranch = record.getRequest().targetBranchOrDefault();
+        } else if (record.getGenerateTestsRequest() != null) {
+            sourceBranch = record.getGenerateTestsRequest().branchName();
+            targetBranch = record.getGenerateTestsRequest().targetBranchOrDefault();
+        } else if (record.getGenerateDocsRequest() != null) {
+            sourceBranch = record.getGenerateDocsRequest().branchName();
+            targetBranch = record.getGenerateDocsRequest().targetBranchOrDefault();
+        } else if (record.getHookRequest() != null) {
+            sourceBranch = record.getHookRequest().branchName();
+            targetBranch = record.getHookRequest().targetBranch();
+        }
+
         return new JobStatusResponse(
                 record.getJobId(),
                 record.getJobType(),
@@ -56,7 +79,9 @@ public record JobStatusResponse(
                 record.getLinesChanged(),
                 queuePosition,
                 record.getPriority(),
-                null
+                null,
+                sourceBranch,
+                targetBranch
         );
     }
 }
