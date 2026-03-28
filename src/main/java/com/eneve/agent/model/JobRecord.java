@@ -4,6 +4,10 @@ import java.time.Instant;
 
 public class JobRecord {
 
+    // ── SOC II / SLA fields (populated at submission time from Jira) ─────────
+    // Kept volatile so they can be set after construction without synchronization.
+
+
     private final String jobId;
     private final RunFixRequest request;
     private final ReviewPrRequest reviewRequest;
@@ -31,6 +35,21 @@ public class JobRecord {
     private volatile String workspace;
     private volatile String repoSlug;
     private volatile JobCoverageData coverageData;
+
+    // Jira metadata cached at submission time so approve() needs zero external calls
+    private volatile String jiraIssueType;
+    private volatile String jiraPriority;
+    private volatile Instant jiraCreatedAt;
+
+    // Set after a develop→main promotion PR/job is auto-created
+    private volatile String promotionJobId;
+
+    // Optional Aikido vulnerability issue ID (set via webhook or manual link)
+    private volatile String aikidoIssueId;
+
+    // Scytale evidence upload tracking
+    private volatile String scytaleEvidenceRef;
+    private volatile Instant scytaleUploadedAt;
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
@@ -298,4 +317,25 @@ public class JobRecord {
 
     public JobCoverageData getCoverageData() { return coverageData; }
     public void setCoverageData(JobCoverageData coverageData) { this.coverageData = coverageData; }
+
+    public String getJiraIssueType() { return jiraIssueType; }
+    public void setJiraIssueType(String jiraIssueType) { this.jiraIssueType = jiraIssueType; }
+
+    public String getJiraPriority() { return jiraPriority; }
+    public void setJiraPriority(String jiraPriority) { this.jiraPriority = jiraPriority; }
+
+    public Instant getJiraCreatedAt() { return jiraCreatedAt; }
+    public void setJiraCreatedAt(Instant jiraCreatedAt) { this.jiraCreatedAt = jiraCreatedAt; }
+
+    public String getPromotionJobId() { return promotionJobId; }
+    public void setPromotionJobId(String promotionJobId) { this.promotionJobId = promotionJobId; }
+
+    public String getAikidoIssueId() { return aikidoIssueId; }
+    public void setAikidoIssueId(String aikidoIssueId) { this.aikidoIssueId = aikidoIssueId; }
+
+    public String getScytaleEvidenceRef() { return scytaleEvidenceRef; }
+    public void setScytaleEvidenceRef(String scytaleEvidenceRef) { this.scytaleEvidenceRef = scytaleEvidenceRef; }
+
+    public Instant getScytaleUploadedAt() { return scytaleUploadedAt; }
+    public void setScytaleUploadedAt(Instant scytaleUploadedAt) { this.scytaleUploadedAt = scytaleUploadedAt; }
 }

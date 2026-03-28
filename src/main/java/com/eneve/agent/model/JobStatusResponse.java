@@ -1,6 +1,8 @@
 package com.eneve.agent.model;
 
 import java.time.Instant;
+import java.util.Arrays;
+import java.util.List;
 
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
 
@@ -25,7 +27,7 @@ public record JobStatusResponse(
         @Schema(description = "Error message if the job failed")
         String errorMessage,
 
-        @Schema(description = "URL of the created pull request in Bitbucket Cloud")
+        @Schema(description = "URL of the created pull request")
         String prUrl,
 
         @Schema(description = "Number of files changed by the agent")
@@ -50,15 +52,52 @@ public record JobStatusResponse(
         String targetBranch,
 
         @Schema(description = "Before/after coverage snapshots captured during a GENERATE_TESTS job")
-        JobCoverageData coverageData
+        JobCoverageData coverageData,
+
+        // ── SOC II / SLA fields ───────────────────────────────────────────────
+
+        @Schema(description = "Pull request identifier (numeric or slug, platform-specific)")
+        String prId,
+
+        @Schema(description = "Jira issue type cached at submission time, e.g. Bug, Task")
+        String jiraIssueType,
+
+        @Schema(description = "Jira priority cached at submission time, e.g. Critical, High")
+        String jiraPriority,
+
+        @Schema(description = "Timestamp when the Jira ticket was created (SLA clock start)")
+        Instant jiraCreatedAt,
+
+        @Schema(description = "SLA deadline derived from Jira creation date + configured SLA days for this priority")
+        Instant slaDeadline,
+
+        @Schema(description = "SLA status: ON_TRACK, AT_RISK, OVERDUE, MET, MISSED, NOT_APPLICABLE")
+        String slaStatus,
+
+        @Schema(description = "Optional Aikido vulnerability issue ID linked to this job")
+        String aikidoIssueId,
+
+        @Schema(description = "True when this job is SOC II-applicable (Bug-type Jira ticket on a protected branch)")
+        boolean soc2Protected,
+
+        @Schema(description = "Scytale evidence reference ID, set after successful SOC II evidence upload")
+        String scytaleEvidenceRef,
+
+        @Schema(description = "True when Scytale integration is configured in system settings")
+        boolean scytaleEnabled
 ) {
-    public static JobStatusResponse from(JobRecord record, int queuePosition) {
+    public static JobStatusResponse from(JobRecord record, int queuePosition,
+                                         int criticalDays, int highDays,
+                                         List<String> bugIssueTypes,
+                                         boolean scytaleEnabled) {
         String sourceBranch = null;
         String targetBranch = null;
+        String jiraKey = null;
 
         if (record.getRequest() != null) {
             sourceBranch = record.getRequest().branchName();
             targetBranch = record.getRequest().targetBranchOrDefault();
+            jiraKey = record.getRequest().jiraKey();
         } else if (record.getGenerateTestsRequest() != null) {
             sourceBranch = record.getGenerateTestsRequest().branchName();
             targetBranch = record.getGenerateTestsRequest().targetBranchOrDefault();
@@ -68,7 +107,46 @@ public record JobStatusResponse(
         } else if (record.getHookRequest() != null) {
             sourceBranch = record.getHookRequest().branchName();
             targetBranch = record.getHookRequest().targetBranch();
+        } else if (record.getReviewRequest() != null) {
+            jiraKey = record.getReviewRequest().jiraKey();
+        } else if (record.getFixPrRequest() != null) {
+            jiraKey = record.getFixPrRequest().jiraKey();
         }
+
+        // SLA computation
+        Instant slaDeadline = null;
+        String slaStatus = "NOT_APPLICABLE";
+        String priority = record.getJiraPriority();
+        Instant jiraCreatedAt = record.getJiraCreatedAt();
+
+        if (priority != null && jiraCreatedAt != null) {
+            int slaDays = 0;
+            if ("Critical".equalsIgnoreCase(priority)) {
+                slaDays = criticalDays;
+            } else if ("High".equalsIgnoreCase(priority)) {
+                slaDays = highDays;
+            }
+            if (slaDays > 0) {
+                slaDeadline = jiraCreatedAt.plusSeconds((long) slaDays * 86400);
+                Instant now = Instant.now();
+                long secondsLeft = slaDeadline.getEpochSecond() - now.getEpochSecond();
+                boolean merged = record.getStatus() == JobStatus.SUCCESS;
+
+                if (merged) {
+                    slaStatus = secondsLeft >= 0 ? "MET" : "MISSED";
+                } else if (secondsLeft < 0) {
+                    slaStatus = "OVERDUE";
+                } else if (secondsLeft <= 2L * 86400) {
+                    slaStatus = "AT_RISK";
+                } else {
+                    slaStatus = "ON_TRACK";
+                }
+            }
+        }
+
+        // SOC II protection flag
+        boolean soc2Protected = record.getJiraIssueType() != null
+                && bugIssueTypes.stream().anyMatch(t -> t.equalsIgnoreCase(record.getJiraIssueType()));
 
         return new JobStatusResponse(
                 record.getJobId(),
@@ -82,10 +160,34 @@ public record JobStatusResponse(
                 record.getLinesChanged(),
                 queuePosition,
                 record.getPriority(),
-                null,
+                jiraKey,
                 sourceBranch,
                 targetBranch,
-                record.getCoverageData()
+                record.getCoverageData(),
+                record.getPrId(),
+                record.getJiraIssueType(),
+                record.getJiraPriority(),
+                jiraCreatedAt,
+                slaDeadline,
+                slaStatus,
+                record.getAikidoIssueId(),
+                soc2Protected,
+                record.getScytaleEvidenceRef(),
+                scytaleEnabled
+        );
+    }
+
+    /** Backward-compatible overload used by the search listing (no SLA computation needed). */
+    public static JobStatusResponse fromSearch(String jobId, JobType jobType, JobStatus status,
+                                               Instant createdAt, String summary, String errorMessage,
+                                               String prUrl, int filesChanged, int linesChanged,
+                                               int priority, String jiraKey) {
+        return new JobStatusResponse(
+                jobId, jobType, status, createdAt, summary, errorMessage,
+                prUrl, filesChanged, linesChanged, 0, priority, jiraKey,
+                null, null, null,
+                null, null, null, null, null, "NOT_APPLICABLE",
+                null, false, null, false
         );
     }
 }

@@ -299,6 +299,8 @@ public class ReviewHandler implements JobHandler {
             job.setSummary(reviewSummary);
             job.setPrUrl(prInfo.getOrDefault("prUrl", ""));
             jobStore.archive(job);
+            lifecycle.auditLog("JOBS", "REVIEW_COMPLETED", "job", job.getJobId(),
+                    java.util.Map.of("prId", request.prId()));
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 lifecycle.safeJira(() -> jiraService.commentSuccess(request.jiraKey(),

@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.audit.AuditEntry;
+import com.eneve.agent.audit.AuditStore;
 import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
@@ -41,6 +43,26 @@ public class JobLifecycleHelper {
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject GitPlatformService platformService;
     @Inject com.eneve.agent.settings.SettingsService settings;
+    @Inject AuditStore auditStore;
+
+    /** Fires an audit event asynchronously from the application-scoped lifecycle helper. */
+    public void auditLog(String category, String action, String resourceType, String resourceId, java.util.Map<String, Object> detail) {
+        String detailJson = null;
+        if (detail != null && !detail.isEmpty()) {
+            try {
+                detailJson = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(detail);
+            } catch (Exception ignored) {}
+        }
+        final String d = detailJson;
+        Thread.ofVirtual().name("audit-lifecycle-" + action).start(() -> {
+            try {
+                auditStore.save(new AuditEntry(null, "system", category, action,
+                        resourceType, resourceId, d, java.time.Instant.now()));
+            } catch (Exception e) {
+                LOG.warnf("Async lifecycle audit write failed [%s/%s]: %s", category, action, e.getMessage());
+            }
+        });
+    }
 
     // ─── Failure handlers ───────────────────────────────────────────────
 
@@ -49,6 +71,7 @@ public class JobLifecycleHelper {
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
         jobStore.archive(job);
+        auditLog("JOBS", "JOB_FAILED", "job", job.getJobId(), java.util.Map.of("errorMessage", message));
 
         RunFixRequest request = job.getRequest();
         safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
@@ -63,6 +86,7 @@ public class JobLifecycleHelper {
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
         jobStore.archive(job);
+        auditLog("JOBS", "REVIEW_FAILED", "job", job.getJobId(), java.util.Map.of("errorMessage", message));
 
         ReviewPrRequest request = job.getReviewRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {

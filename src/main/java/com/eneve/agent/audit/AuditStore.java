@@ -98,6 +98,35 @@ public class AuditStore {
         return results;
     }
 
+    /**
+     * Returns audit entries for a specific resource (e.g. a job), ordered by
+     * {@code occurred_at ASC} so callers get a chronological audit trail.
+     */
+    public List<AuditEntry> findByResourceId(String resourceId, int limit) {
+        int safeLimit = Math.min(limit, MAX_LIMIT);
+        String sql = """
+                SELECT id, actor, category, action, resource_type, resource_id, detail, occurred_at
+                FROM audit_log
+                WHERE resource_id = ?
+                ORDER BY occurred_at ASC
+                LIMIT ?
+                """;
+        List<AuditEntry> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, resourceId);
+            ps.setInt(2, safeLimit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to find audit entries for resource %s: %s", resourceId, e.getMessage());
+        }
+        return results;
+    }
+
     // ─── Private helpers ────────────────────────────────────────────────
 
     private AuditEntry mapRow(ResultSet rs) throws SQLException {

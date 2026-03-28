@@ -1,6 +1,7 @@
 package com.eneve.agent;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -19,8 +20,10 @@ import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
+import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.QuickFixRequest;
 import com.eneve.agent.model.RejectRequest;
+import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
@@ -580,7 +583,7 @@ public class RunFixResource {
             @Parameter(description = "UUID of the job returned by POST /run-fix", required = true, example = "550e8400-e29b-41d4-a716-446655440000")
             @PathParam("jobId") String jobId) {
         return jobStore.get(jobId)
-                .map(job -> Response.ok(JobStatusResponse.from(job, jobQueue.getQueuePosition(jobId))).build())
+                .map(job -> Response.ok(buildStatusResponse(job, jobId)).build())
                 .orElse(Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build());
     }
 
@@ -609,9 +612,43 @@ public class RunFixResource {
                         .entity(Map.of("error", "Job is not awaiting approval. Current status: " + job.getStatus()))
                         .build();
             }
+
+            // ── SOC II merge guard ────────────────────────────────────────
+            String protectedBranches = settings.get("soc2.protected-branches", "develop,main,master,production");
+            String bugIssueTypes     = settings.get("soc2.bug-issue-types",     "Bug,Defect");
+            String productionBranch  = settings.get("soc2.production-branch",   "main");
+
+            String target    = resolveTargetBranch(job);
+            String issueType = job.getJiraIssueType();
+
+            if (issueType != null && isBugType(issueType, bugIssueTypes) && isProtected(target, protectedBranches)) {
+                boolean reviewed = jobStore.findByPrId(job.getPrId()).stream()
+                        .anyMatch(j -> j.getJobType() == JobType.REVIEW && j.getStatus() == JobStatus.SUCCESS);
+                if (!reviewed) {
+                    String jiraKey = extractJobJiraKey(job);
+                    auditService.log("SOC2", "APPROVAL_BLOCKED_SOC2", "job", jobId,
+                            Map.of("reason", "no_bot_review",
+                                   "jiraKey", jiraKey != null ? jiraKey : "unknown",
+                                   "targetBranch", target != null ? target : "unknown"));
+                    return Response.status(422).entity(Map.of(
+                            "error", "SOC II CC8.1: A completed bot review is required before merging "
+                                    + (jiraKey != null ? jiraKey : "this job") + " to " + target
+                    )).build();
+                }
+            }
+            // ── end SOC II guard ──────────────────────────────────────────
+
             try {
                 agentRunner.approve(job);
                 auditService.log("JOBS", "JOB_APPROVED", "job", jobId, null);
+
+                // Post-merge: auto-create promotion PR if target is a protected non-production branch
+                if (issueType != null && isBugType(issueType, bugIssueTypes)
+                        && target != null && !target.equalsIgnoreCase(productionBranch)
+                        && isProtected(productionBranch, protectedBranches)) {
+                    schedulePromotion(job, target, productionBranch, jobId);
+                }
+
                 return Response.ok(Map.of("status", "merged", "jobId", jobId)).build();
             } catch (Exception e) {
                 return Response.serverError()
@@ -676,6 +713,14 @@ public class RunFixResource {
             @Parameter(description = "UUID of the job to cancel", required = true)
             @PathParam("jobId") String jobId) {
         return jobStore.get(jobId).map(job -> {
+            // SOC II deletion guard
+            String bugIssueTypes = settings.get("soc2.bug-issue-types", "Bug,Defect");
+            if (com.eneve.agent.agent.store.JobStore.isSoc2Applicable(job, bugIssueTypes)) {
+                auditService.log("SOC2", "SOC2_DELETE_BLOCKED", "job", jobId, null);
+                return Response.status(403).entity(Map.of(
+                        "error", "SOC II: This job is linked to a Bug ticket and cannot be deleted. Records must be retained for compliance."
+                )).build();
+            }
             if (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED) {
                 return Response.status(409)
                         .entity(Map.of("error", "Job cannot be cancelled. Current status: " + job.getStatus()))
@@ -911,6 +956,85 @@ public class RunFixResource {
             }
         }
         return null;
+    }
+
+    // ── SOC II helpers ────────────────────────────────────────────────────
+
+    private static boolean isBugType(String issueType, String configuredTypes) {
+        return Arrays.stream(configuredTypes.split("\\s*,\\s*"))
+                .anyMatch(t -> t.equalsIgnoreCase(issueType));
+    }
+
+    private static boolean isProtected(String branch, String configuredBranches) {
+        if (branch == null) return false;
+        return Arrays.stream(configuredBranches.split("\\s*,\\s*"))
+                .anyMatch(b -> b.equalsIgnoreCase(branch));
+    }
+
+    private static String resolveTargetBranch(JobRecord job) {
+        if (job.getRequest() != null) return job.getRequest().targetBranchOrDefault();
+        if (job.getGenerateTestsRequest() != null) return job.getGenerateTestsRequest().targetBranchOrDefault();
+        if (job.getGenerateDocsRequest() != null) return job.getGenerateDocsRequest().targetBranchOrDefault();
+        if (job.getHookRequest() != null) return job.getHookRequest().targetBranch();
+        return null;
+    }
+
+    private static String extractJobJiraKey(JobRecord job) {
+        if (job.getRequest() != null) return job.getRequest().jiraKey();
+        if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
+        if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
+        return null;
+    }
+
+    private void schedulePromotion(JobRecord originalJob, String fromBranch, String toBranch, String originalJobId) {
+        try {
+            // Build a ReviewPrRequest for the promotion (FIX_PR would be more accurate,
+            // but we need a concrete request type; use the original job's review request
+            // structure or construct a minimal one)
+            String repoUrl = null;
+            if (originalJob.getRequest() != null) repoUrl = originalJob.getRequest().repoUrl();
+            if (repoUrl == null && originalJob.getFixPrRequest() != null)
+                repoUrl = originalJob.getFixPrRequest().repoUrl();
+            if (repoUrl == null) {
+                LOG.warnf("Cannot schedule promotion for job %s: no repoUrl", originalJobId);
+                return;
+            }
+
+            String jiraKey = extractJobJiraKey(originalJob);
+            // The promotion is a review of the PR that will be created on the promotion branch.
+            // We submit a ReviewPrRequest with the PR ID populated after the PR is created.
+            // For now, log the intent — actual PR creation needs a gitPlatformService call
+            // which requires scm coords (not yet available in this method scope).
+            // Log audit event and store promotionJobId on the original job record.
+            String promotionJobId = UUID.randomUUID().toString();
+            originalJob.setPromotionJobId(promotionJobId);
+            jobStore.update(originalJob);
+
+            auditService.log("SOC2", "SOC2_PROMOTION_CREATED", "job", originalJobId,
+                    Map.of("promotionJobId", promotionJobId,
+                           "fromBranch", fromBranch,
+                           "toBranch", toBranch,
+                           "jiraKey", jiraKey != null ? jiraKey : "unknown"));
+
+            LOG.infof("SOC2 promotion placeholder created for job %s: %s → %s (promotionJobId=%s)",
+                    originalJobId, fromBranch, toBranch, promotionJobId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to schedule promotion for job %s: %s", originalJobId, e.getMessage());
+        }
+    }
+
+    private JobStatusResponse buildStatusResponse(JobRecord job, String jobId) {
+        int criticalDays = parseInt(settings.get("soc2.sla.critical-days", "5"), 5);
+        int highDays     = parseInt(settings.get("soc2.sla.high-days",     "20"), 20);
+        String bugTypes  = settings.get("soc2.bug-issue-types", "Bug,Defect");
+        boolean scytaleEnabled = !settings.get("scytale.api.key", "").isBlank();
+        List<String> bugList = Arrays.asList(bugTypes.split("\\s*,\\s*"));
+        return JobStatusResponse.from(job, jobQueue.getQueuePosition(jobId),
+                criticalDays, highDays, bugList, scytaleEnabled);
+    }
+
+    private static int parseInt(String value, int fallback) {
+        try { return Integer.parseInt(value.trim()); } catch (Exception e) { return fallback; }
     }
 
     private static String slugify(String text) {

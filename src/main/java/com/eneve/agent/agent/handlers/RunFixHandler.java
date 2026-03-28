@@ -239,6 +239,8 @@ public class RunFixHandler implements JobHandler {
                 job.setPrUrl(prUrl);
                 job.setPrId(prId);
                 jobStore.update(job);
+                lifecycle.auditLog("JOBS", "JOB_AWAITING_APPROVAL", "job", job.getJobId(),
+                        java.util.Map.of("prUrl", prUrl, "prId", prId));
 
                 if (linterDiffReport != null && linterService.getConfig().isReportOnPr()) {
                     final String capturedPrId = prId;
@@ -345,6 +347,8 @@ public class RunFixHandler implements JobHandler {
             job.setPrUrl(prUrl);
             job.setPrId(prId);
             jobStore.update(job);
+            lifecycle.auditLog("JOBS", "JOB_AWAITING_APPROVAL", "job", job.getJobId(),
+                    java.util.Map.of("prUrl", prUrl, "prId", prId));
 
             RunResult result = lifecycle.buildResult(job, true);
             lifecycle.notifyResult(result, request.n8nWebhookUrl());

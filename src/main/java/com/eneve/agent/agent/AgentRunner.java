@@ -1,18 +1,23 @@
 package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.audit.AuditStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scytale.ScytaleService;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import org.jboss.logging.MDC;
 
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -31,6 +36,9 @@ public class AgentRunner {
     @Inject JiraService jiraService;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
+    @Inject ScytaleService scytaleService;
+    @Inject SettingsService settings;
+    @Inject AuditStore auditStore;
 
     private volatile Map<JobType, JobHandler> handlers;
 
@@ -77,14 +85,73 @@ public class AgentRunner {
                     coords.organization(), coords.project(), coords.repository(), job.getPrId());
             job.setStatus(JobStatus.SUCCESS);
             jobStore.archive(job);
+            lifecycle.auditLog("JOBS", "MERGE_COMPLETED", "job", job.getJobId(),
+                    Map.of("prId", job.getPrId() != null ? job.getPrId() : "unknown",
+                           "targetBranch", job.getPrUrl() != null ? job.getPrUrl() : "unknown"));
             if (jiraKey != null && !jiraKey.isBlank()) {
                 lifecycle.safeJira(() -> jiraService.commentMerged(jiraKey));
                 lifecycle.safeJira(() -> jiraService.transitionToDone(jiraKey));
             }
+
+            // Auto-upload SOC II evidence to Scytale when merging a Bug-fix to the production branch
+            tryScytaleAutoUpload(job);
+
             LOG.infof("Job %s approved and merged", job.getJobId());
         } catch (Exception e) {
             LOG.errorf("Failed to merge PR for job %s: %s", job.getJobId(), e.getMessage());
             throw new RuntimeException("Merge failed: " + e.getMessage(), e);
+        }
+    }
+
+    // ── Scytale auto-upload ─────────────────────────────────────────────
+
+    private void tryScytaleAutoUpload(JobRecord job) {
+        try {
+            String apiKey      = settings.get("scytale.api.key",        "");
+            String bugTypes    = settings.get("soc2.bug-issue-types",    "Bug,Defect");
+            String productionBranch = settings.get("soc2.production-branch", "main");
+
+            if (apiKey.isBlank()) return;
+            if (!JobStore.isSoc2Applicable(job, bugTypes)) return;
+
+            // Only auto-upload when merging to the production branch
+            String target = null;
+            if (job.getRequest() != null)      target = job.getRequest().targetBranchOrDefault();
+            else if (job.getHookRequest() != null) target = job.getHookRequest().targetBranch();
+            if (target == null || !target.equalsIgnoreCase(productionBranch)) return;
+
+            List<com.eneve.agent.audit.AuditEntry> rawEntries = auditStore.findByResourceId(job.getJobId(), 200);
+            List<Map<String, Object>> checksPayload = List.of(
+                    Map.of("name", "Bot code review completed",
+                            "passed", rawEntries.stream().anyMatch(e -> "REVIEW_COMPLETED".equals(e.action()))),
+                    Map.of("name", "Human approval obtained",
+                            "passed", rawEntries.stream().anyMatch(e -> "JOB_APPROVED".equals(e.action()))),
+                    Map.of("name", "Merged to production",
+                            "passed", true)
+            );
+            List<Map<String, Object>> auditPayload = rawEntries.stream()
+                    .map(e -> Map.<String, Object>of(
+                            "timestamp", e.occurredAt().toString(),
+                            "actor",     e.actor(),
+                            "action",    e.action(),
+                            "detail",    e.detail() != null ? e.detail() : ""))
+                    .toList();
+
+            ScytaleService.ScytaleUploadResult result = scytaleService.upload(job, checksPayload, auditPayload);
+            if (result.success()) {
+                job.setScytaleEvidenceRef(result.ref());
+                job.setScytaleUploadedAt(Instant.now());
+                jobStore.update(job);
+                lifecycle.auditLog("SOC2", "SOC2_EVIDENCE_UPLOADED", "job", job.getJobId(),
+                        Map.of("scytaleRef", result.ref(), "trigger", "auto-upload-on-merge"));
+            } else {
+                lifecycle.auditLog("SOC2", "SOC2_EVIDENCE_UPLOAD_FAILED", "job", job.getJobId(),
+                        Map.of("error", result.errorMessage() != null ? result.errorMessage() : "unknown",
+                               "trigger", "auto-upload-on-merge"));
+                LOG.warnf("Scytale auto-upload failed for job %s: %s", job.getJobId(), result.errorMessage());
+            }
+        } catch (Exception e) {
+            LOG.warnf("Scytale auto-upload error for job %s (non-fatal): %s", job.getJobId(), e.getMessage());
         }
     }
 

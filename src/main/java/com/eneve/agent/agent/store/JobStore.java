@@ -327,7 +327,7 @@ public class JobStore {
                     } catch (IllegalArgumentException e) {
                         jobStatus = JobStatus.FAILED;
                     }
-                    results.add(new JobStatusResponse(
+                    results.add(JobStatusResponse.fromSearch(
                             rs.getString("job_id"),
                             type,
                             jobStatus,
@@ -337,12 +337,8 @@ public class JobStore {
                             rs.getString("pr_url"),
                             rs.getInt("files_changed"),
                             rs.getInt("lines_changed"),
-                            0,
                             rs.getInt("priority"),
-                            rs.getString("jira_key"),
-                            null,
-                            null,
-                            null
+                            rs.getString("jira_key")
                     ));
                 }
             }
@@ -435,6 +431,125 @@ public class JobStore {
             LOG.errorf("Failed to count active review jobs for roadmap %s: %s", roadmapId, e.getMessage());
         }
         return 0;
+    }
+
+    /**
+     * Returns all jobs associated with a given pull request ID, ordered by
+     * {@code created_at DESC}. Searches both active and history tables.
+     *
+     * <p>Falls back to a {@code LIKE} match on {@code pr_url} when {@code prId}
+     * is a numeric string, to handle jobs where only {@code prUrl} was stored.
+     */
+    public List<JobRecord> findByPrId(String prId) {
+        if (prId == null || prId.isBlank()) return List.of();
+
+        String sqlExact = """
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data
+                FROM jobs WHERE pr_id = ?
+                UNION ALL
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data
+                FROM job_history WHERE pr_id = ?
+                ORDER BY created_at DESC
+                """;
+        List<JobRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sqlExact)) {
+            ps.setString(1, prId);
+            ps.setString(2, prId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    JobRecord job = mapRow(rs);
+                    if (job != null) results.add(job);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findByPrId(%s) failed: %s", prId, e.getMessage());
+        }
+
+        // Fallback: pr_url LIKE match (for older jobs where pr_id wasn't stored)
+        if (results.isEmpty()) {
+            String sqlLike = """
+                    SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                           summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                           pr_author, workspace, repo_slug, priority, coverage_data
+                    FROM jobs WHERE pr_url LIKE ?
+                    UNION ALL
+                    SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                           summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                           pr_author, workspace, repo_slug, priority, coverage_data
+                    FROM job_history WHERE pr_url LIKE ?
+                    ORDER BY created_at DESC
+                    """;
+            String pattern = "%/" + prId;
+            try (Connection conn = dataSource.getConnection();
+                 PreparedStatement ps = conn.prepareStatement(sqlLike)) {
+                ps.setString(1, pattern);
+                ps.setString(2, pattern);
+                try (ResultSet rs = ps.executeQuery()) {
+                    while (rs.next()) {
+                        JobRecord job = mapRow(rs);
+                        if (job != null) results.add(job);
+                    }
+                }
+            } catch (SQLException e) {
+                LOG.errorf("findByPrId fallback LIKE(%s) failed: %s", prId, e.getMessage());
+            }
+        }
+
+        return results;
+    }
+
+    /**
+     * Returns all jobs (active + history) that have a non-null {@code jira_issue_type},
+     * ordered newest first. The caller is responsible for filtering to the specific
+     * bug types configured for SOC II compliance.
+     */
+    public List<JobRecord> findJobsWithJiraIssueType(int limit) {
+        int safeLimit = Math.min(Math.max(1, limit), 500);
+        String sql = """
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data
+                FROM jobs
+                WHERE jira_key IS NOT NULL
+                UNION ALL
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data
+                FROM job_history
+                WHERE jira_key IS NOT NULL
+                ORDER BY created_at DESC
+                LIMIT ?
+                """;
+        List<JobRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, safeLimit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    JobRecord job = mapRow(rs);
+                    if (job != null) results.add(job);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findJobsWithJiraIssueType failed: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Returns {@code true} when the job is linked to a Jira issue type that appears in
+     * the provided comma-separated bug types list. Used by the SOC II deletion guard.
+     */
+    public static boolean isSoc2Applicable(JobRecord job, String bugIssueTypes) {
+        String issueType = job.getJiraIssueType();
+        if (issueType == null || issueType.isBlank() || bugIssueTypes == null) return false;
+        return java.util.Arrays.stream(bugIssueTypes.split("\\s*,\\s*"))
+                .anyMatch(t -> t.equalsIgnoreCase(issueType));
     }
 
     /**
