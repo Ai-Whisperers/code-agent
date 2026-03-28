@@ -159,6 +159,13 @@ public class FindingResolver {
 
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
+        String batchResponseText = null;
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                batchResponseText = block.asText().text().trim();
+                break;
+            }
+        }
         aiCallStore.save(new AiCallRecord(
                 null, jobId, "FINDING_RESOLUTION", fastModelName(), null,
                 usage.inputTokens(), usage.outputTokens(),
@@ -166,7 +173,7 @@ public class FindingResolver {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                null, null));
+                promptText, batchResponseText));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
         LOG.infof("Batch resolution: %d findings checked in %dms (tokens: in=%d out=%d)",
@@ -267,10 +274,18 @@ public class FindingResolver {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    null, null));
+                    prompt, null));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        String responseText = "";
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                responseText = block.asText().text().trim();
+                break;
+            }
+        }
 
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
@@ -281,16 +296,9 @@ public class FindingResolver {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                null, null));
+                prompt, responseText.isBlank() ? null : responseText));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
-        String responseText = "";
-        for (ContentBlock block : response.content()) {
-            if (block.isText()) {
-                responseText = block.asText().text().trim();
-                break;
-            }
-        }
         return responseText.toUpperCase(Locale.ROOT).contains("YES");
     }
 

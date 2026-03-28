@@ -27,8 +27,21 @@ Your ONLY goal is to write new or improved test files. Do NOT modify any product
 - If a test file already exists for a class, ADD missing test cases rather than replacing the file.
 - If the coverage baseline lists packages/namespaces with 0% coverage, treat those as the highest priority — they have no tests at all.
 
+## Incremental commit strategy (IMPORTANT)
+Work one package / namespace at a time in priority order (lowest coverage first).
+After the tests for each package compile and pass, **immediately commit** before moving on:
+
+```
+git add -A
+git commit -m "test: add tests for <package-or-namespace>"
+```
+
+This preserves completed work incrementally. If the session reaches its iteration limit,
+any committed packages are automatically pushed and recovered — nothing already done is lost.
+Do NOT batch all test files into a single commit at the end.
+
 ## After Writing Tests
 - Run `{{BUILD_AND_TEST_COMMAND}}` to verify the tests compile and pass.
 - If tests fail, read the error output carefully, fix the failures, and re-run.
-- Repeat until all tests pass.
+- Repeat until all tests pass, then commit that package before moving to the next.
 - Provide a summary listing which test files were created or modified, the number of test cases added for each, and an estimate of the coverage improvement for the targeted packages.

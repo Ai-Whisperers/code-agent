@@ -204,11 +204,19 @@ public class PrSummaryGenerator {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    null, null));
+                    prompt, null));
             LOG.errorf("PR summary Claude call failed: %s", e.getMessage());
             return null;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        String responseText = null;
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                responseText = block.asText().text().trim();
+                break;
+            }
+        }
 
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
@@ -219,16 +227,11 @@ public class PrSummaryGenerator {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                null, null));
+                prompt, responseText));
         LOG.infof("PR summary generated — tokens: in=%d, out=%d, duration=%dms",
                 usage.inputTokens(), usage.outputTokens(), durationMs);
 
-        for (ContentBlock block : response.content()) {
-            if (block.isText()) {
-                return block.asText().text().trim();
-            }
-        }
-        return null;
+        return responseText;
     }
 
     private Message callWithRetry(MessageCreateParams params) {

@@ -111,15 +111,23 @@ public class IntentClassifier {
             response = client.messages().create(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-        aiCallStore.save(new AiCallRecord(
-                null, null, "INTENT_CLASSIFICATION", fastModelName(), null,
-                0, 0, 0, 0,
-                null, null, durationMs,
-                true, e.getMessage(), Instant.now(),
-                null, null));
+            aiCallStore.save(new AiCallRecord(
+                    null, null, "INTENT_CLASSIFICATION", fastModelName(), null,
+                    0, 0, 0, 0,
+                    null, null, durationMs,
+                    true, e.getMessage(), Instant.now(),
+                    prompt, null));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        String responseText = "";
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                responseText = block.asText().text().trim();
+                break;
+            }
+        }
 
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(sr -> sr.toString()).orElse(null);
@@ -130,15 +138,7 @@ public class IntentClassifier {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                null, null));
-
-        String responseText = "";
-        for (ContentBlock block : response.content()) {
-            if (block.isText()) {
-                responseText = block.asText().text().trim();
-                break;
-            }
-        }
+                prompt, responseText.isBlank() ? null : responseText));
 
         LOG.infof("Intent classification response: '%s'", responseText);
 

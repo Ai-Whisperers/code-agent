@@ -330,6 +330,25 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Returns true if there are any commits reachable from HEAD that are not reachable
+     * from {@code sinceRef}. Use the SHA captured before the agent loop to detect
+     * whether the agent committed anything.
+     */
+    public boolean hasCommitsSince(String sinceRef) throws IOException, InterruptedException {
+        String output = runGitOutput(1, "log", sinceRef + "..HEAD", "--oneline");
+        return !output.isBlank();
+    }
+
+    /**
+     * Stages all changes and returns the unified diff of everything staged.
+     * Returns an empty string if the working tree is clean.
+     */
+    public String stageAndGetDiff() throws IOException, InterruptedException {
+        runGit(1, "add", "-A");
+        return runGitOutput(2, "diff", "--cached");
+    }
+
+    /**
      * Check whether a given object (commit SHA) exists in the repository.
      */
     public boolean objectExists(String sha) {

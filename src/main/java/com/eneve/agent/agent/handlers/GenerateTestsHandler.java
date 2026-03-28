@@ -91,6 +91,14 @@ public class GenerateTestsHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            // Capture initial HEAD so we can detect commits made by the agent.
+            String initialHeadSha = null;
+            try {
+                initialHeadSha = workspace.getHeadSha();
+            } catch (Exception e) {
+                LOG.warnf("GenerateTests: could not capture initial HEAD SHA (non-fatal): %s", e.getMessage());
+            }
+
             // Prefer stored quality-report coverage over live re-measurement (avoids a full test run).
             CoverageReporter.CoverageSnapshot baselineCoverage = loadStoredCoverage(
                     coords.organization(), coords.repository(), request.targetBranchOrDefault());
@@ -120,6 +128,22 @@ public class GenerateTestsHandler implements JobHandler {
                         generateTestsMaxIterations, job.getJobId(), job.getJobType().name());
             } catch (Exception e) {
                 lifecycle.failGenerateTests(job, "Agent loop error: " + e.getMessage());
+                return;
+            }
+
+            // Detect loop-limit: the summary contains a well-known sentinel phrase.
+            boolean hitLoopLimit = summary != null && summary.contains("maximum iterations");
+
+            if (hitLoopLimit) {
+                LOG.warnf("GenerateTests: agent hit loop limit for job %s — attempting partial recovery",
+                        job.getJobId());
+                if (recoverPartialWork(job, workspace, coords, request,
+                        testBranch, generateTestsTimeoutMinutes, initialHeadSha, summary)) {
+                    return; // partial PR created — handler done
+                }
+                lifecycle.failGenerateTests(job,
+                        "Agent hit loop limit and no committed work was found. "
+                                + "Increase generate-tests.max-loop-iterations or reduce the number of target packages.");
                 return;
             }
 
@@ -162,7 +186,14 @@ public class GenerateTestsHandler implements JobHandler {
                 return;
             }
 
-            if (!hasChanges) {
+            // The agent may have already committed everything per-package; that is fine.
+            boolean anyWork = hasChanges;
+            if (!anyWork && initialHeadSha != null) {
+                try { anyWork = workspace.hasCommitsSince(initialHeadSha); } catch (Exception ex) {
+                    LOG.debugf("GenerateTests: hasCommitsSince check failed (non-fatal): %s", ex.getMessage());
+                }
+            }
+            if (!anyWork) {
                 lifecycle.failGenerateTests(job,
                         "Agent completed but made no file changes. Claude summary: " + summary);
                 return;
@@ -221,6 +252,87 @@ public class GenerateTestsHandler implements JobHandler {
 
         } catch (Exception e) {
             lifecycle.failGenerateTests(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Called when the agent loop hit its iteration cap.
+     * <p>
+     * Strategy:
+     * <ol>
+     *   <li>Commit any uncommitted working-tree changes so nothing is lost.</li>
+     *   <li>Check whether the agent made any commits at all since the job started.</li>
+     *   <li>If yes → push the branch and open a PR marked as partial/incomplete so the
+     *       developer can review and continue manually.</li>
+     *   <li>If no → return {@code false} so the caller can mark the job as failed.</li>
+     * </ol>
+     *
+     * @return {@code true} if partial work was pushed and a PR was opened (job set to
+     *         {@link JobStatus#AWAITING_APPROVAL}); {@code false} if nothing was salvaged.
+     */
+    private boolean recoverPartialWork(
+            JobRecord job, WorkspaceContext workspace,
+            RepoCoordinates coords, GenerateTestsRequest request,
+            String testBranch, long timeoutMinutes,
+            String initialHeadSha, String agentSummary) {
+        try {
+            // Stage and commit anything the agent left uncommitted.
+            boolean uncommittedSaved = workspace.commitAll(
+                    "test: partial test generation — uncommitted work at loop limit");
+            if (uncommittedSaved) {
+                LOG.infof("GenerateTests recovery: committed uncommitted working-tree changes for job %s",
+                        job.getJobId());
+            }
+
+            // Check whether there are any commits to push.
+            boolean hasWork = false;
+            if (initialHeadSha != null) {
+                hasWork = workspace.hasCommitsSince(initialHeadSha);
+            } else {
+                // No initial SHA recorded — use the diff to detect changes.
+                hasWork = uncommittedSaved;
+            }
+
+            if (!hasWork) {
+                LOG.warnf("GenerateTests recovery: no commits found for job %s — nothing to push",
+                        job.getJobId());
+                return false;
+            }
+
+            workspace.push(testBranch, timeoutMinutes);
+            LOG.infof("GenerateTests recovery: pushed partial branch %s for job %s", testBranch, job.getJobId());
+
+            GitWorkspaceHelper.DiffStats stats = gitHelper.countChanges(workspace);
+            job.setFilesChanged(stats.filesChanged());
+            job.setLinesChanged(stats.linesChanged());
+
+            String title = "[PARTIAL] test: generate unit tests"
+                    + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                            ? " (" + request.jiraKey() + ")" : "");
+            String description = "⚠️ **This PR contains partial work.**\n\n"
+                    + "The agent reached its iteration limit before completing all target packages. "
+                    + "Packages that were committed are included here. "
+                    + "You can requeue a generate-tests job on the remaining packages to continue.\n\n"
+                    + (request.jiraKey() != null && !request.jiraKey().isBlank()
+                            ? "JIRA: " + request.jiraKey() + "\n\n" : "")
+                    + "---\n\n**Agent log (partial):**\n" + agentSummary;
+
+            String[] prResult = platformService.createPullRequest(
+                    coords.organization(), coords.project(), coords.repository(),
+                    testBranch, request.targetBranchOrDefault(),
+                    title, description);
+
+            job.setStatus(JobStatus.AWAITING_APPROVAL);
+            job.setSummary("[PARTIAL] " + agentSummary);
+            job.setPrUrl(prResult[0]);
+            job.setPrId(prResult[1]);
+            jobStore.update(job);
+            LOG.infof("GenerateTests recovery: partial PR created at %s for job %s", prResult[0], job.getJobId());
+            return true;
+        } catch (Exception e) {
+            LOG.errorf("GenerateTests recovery: failed to salvage partial work for job %s: %s",
+                    job.getJobId(), e.getMessage());
+            return false;
         }
     }
 

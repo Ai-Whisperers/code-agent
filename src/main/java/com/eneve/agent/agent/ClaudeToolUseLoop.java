@@ -159,7 +159,7 @@ public class ClaudeToolUseLoop {
                         0, 0, 0, 0,
                         null, null, durationMs,
                         true, e.getMessage(), Instant.now(),
-                        null, null));
+                        messages.isEmpty() ? null : contentToText(messages.get(messages.size() - 1)), null));
                 throw e;
             }
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -240,6 +240,10 @@ public class ClaudeToolUseLoop {
             String toolNamesCsv = toolNamesList.isEmpty() ? null
                     : String.join(",", toolNamesList);
 
+            String responseTextLog = textAccumulator.toString();
+            if (responseTextLog.isBlank() && toolNamesCsv != null) {
+                responseTextLog = "[tool calls: " + toolNamesCsv + "]";
+            }
             aiCallStore.save(new AiCallRecord(
                     null, jobId, jobType, modelName, iteration + 1,
                     usage.inputTokens(), usage.outputTokens(),
@@ -247,7 +251,8 @@ public class ClaudeToolUseLoop {
                     usage.cacheReadInputTokens().orElse(0L),
                     stopReason, toolNamesCsv, durationMs,
                     false, null, Instant.now(),
-                    null, null));
+                    messages.isEmpty() ? null : contentToText(messages.get(messages.size() - 1)),
+                    responseTextLog.isBlank() ? null : responseTextLog));
 
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.ASSISTANT)

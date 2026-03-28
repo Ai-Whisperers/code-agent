@@ -124,16 +124,24 @@ public class LearningExtractor {
             response = client.messages().create(params);
         } catch (Exception e) {
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
-        aiCallStore.save(new AiCallRecord(
-                null, null, "LEARNING_EXTRACTION", fastModelName, null,
-                0, 0, 0, 0,
-                null, null, durationMs,
-                true, e.getMessage(), Instant.now(),
-                null, null));
+            aiCallStore.save(new AiCallRecord(
+                    null, null, "LEARNING_EXTRACTION", fastModelName, null,
+                    0, 0, 0, 0,
+                    null, null, durationMs,
+                    true, e.getMessage(), Instant.now(),
+                    prompt, null));
             LOG.warnf("Learning extraction failed: %s", e.getMessage());
             return Optional.empty();
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        String responseText = "";
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                responseText = block.asText().text().trim();
+                break;
+            }
+        }
 
         Usage usage = response.usage();
         String stopReason = response.stopReason().map(Object::toString).orElse(null);
@@ -144,15 +152,7 @@ public class LearningExtractor {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                null, null));
-
-        String responseText = "";
-        for (ContentBlock block : response.content()) {
-            if (block.isText()) {
-                responseText = block.asText().text().trim();
-                break;
-            }
-        }
+                prompt, responseText.isBlank() ? null : responseText));
 
         LOG.debugf("Learning extraction response: '%s'", responseText);
 
