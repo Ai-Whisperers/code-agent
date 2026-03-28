@@ -331,7 +331,7 @@ public class GitLabCommentWebhookResource {
                 ctx.category(), ctx.findingText(), author);
         feedbackStore.save(feedback);
 
-        commentStore.markResolved(parentNoteId);
+        commentStore.markResolved(parentNoteId, author);
 
         try {
             platformService.resolveComment(namespace, "", repoSlug, mrIid, parentNoteId);

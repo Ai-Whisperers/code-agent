@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.github;
 
+import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
@@ -54,6 +55,8 @@ public class GitHubPlatformService implements GitPlatformService {
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
+        ensureTargetBranchExists(org, repo, targetBranch);
+
         String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls";
         String body = """
                 {
@@ -306,7 +309,7 @@ public class GitHubPlatformService implements GitPlatformService {
                         if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
                         String content = comment.path("body").asText("").trim();
                         if (!content.isEmpty()) {
-                            comments.add(new AgentComment("", 0, content));
+                            comments.add(new AgentComment(comment.path("id").asLong(0), "", 0, content));
                         }
                     }
                 }
@@ -333,7 +336,7 @@ public class GitHubPlatformService implements GitPlatformService {
                         if (content.isEmpty()) continue;
                         String filePath = comment.path("path").asText("");
                         int line = comment.path("line").asInt(0);
-                        comments.add(new AgentComment(filePath, line, content));
+                        comments.add(new AgentComment(comment.path("id").asLong(0), filePath, line, content));
                     }
                 }
                 url = nextPageUrl(response);
@@ -393,6 +396,56 @@ public class GitHubPlatformService implements GitPlatformService {
     public String buildCloneUrl(String workspace, String repoSlug) {
         String user = !agentUser().isBlank() ? agentUser() : "x-access-token";
         return "https://" + user + ":" + token() + "@github.com/" + workspace + "/" + repoSlug + ".git";
+    }
+
+    /**
+     * Ensures the given branch exists in the remote repository.
+     * If absent, it is created from the repository's default branch.
+     * Prevents a GitHub HTTP 422 "base does not exist" error when opening a PR.
+     */
+    private void ensureTargetBranchExists(String org, String repo, String branchName) {
+        try {
+            String checkUrl = baseUrl() + "/repos/" + org + "/" + repo + "/git/ref/heads/" + branchName;
+            requireTrustedUrl(checkUrl);
+            HttpRequest checkRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(checkUrl))
+                    .header("Authorization", "Bearer " + token())
+                    .header("Accept", "application/vnd.github+json")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .GET()
+                    .build();
+            HttpResponse<String> checkResponse = httpClient.send(checkRequest, HttpResponse.BodyHandlers.ofString());
+            if (checkResponse.statusCode() == 200) {
+                return;
+            }
+        } catch (Exception e) {
+            LOG.warnf("GitHub ensureTargetBranchExists: branch check error for '%s': %s", branchName, e.getMessage());
+        }
+
+        LOG.infof("Target branch '%s' not found in %s/%s — auto-creating from default branch", branchName, org, repo);
+        try {
+            String repoInfoUrl = baseUrl() + "/repos/" + org + "/" + repo;
+            String repoInfo = getAndReturn(repoInfoUrl, "get repo info");
+            String defaultBranch = objectMapper.readTree(repoInfo).path("default_branch").asText("main");
+
+            String defaultRefUrl = baseUrl() + "/repos/" + org + "/" + repo + "/git/ref/heads/" + defaultBranch;
+            String defaultRefInfo = getAndReturn(defaultRefUrl, "get default branch ref");
+            String sha = objectMapper.readTree(defaultRefInfo).path("object").path("sha").asText("");
+            if (sha.isBlank()) {
+                throw new RuntimeException("Could not resolve SHA for default branch '" + defaultBranch + "'");
+            }
+
+            String createUrl = baseUrl() + "/repos/" + org + "/" + repo + "/git/refs";
+            String createBody = """
+                    { "ref": "refs/heads/%s", "sha": "%s" }
+                    """.formatted(escapeJson(branchName), escapeJson(sha));
+            postAndReturn(createUrl, createBody, "create branch '" + branchName + "'");
+            LOG.infof("Auto-created branch '%s' from '%s' (%s) in %s/%s",
+                    branchName, defaultBranch, sha.substring(0, Math.min(8, sha.length())), org, repo);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Cannot auto-create target branch '%s' in %s/%s: %s".formatted(branchName, org, repo, e.getMessage()), e);
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
@@ -597,6 +650,56 @@ public class GitHubPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
+        // GitHub returns up to 250 commits per PR in one page
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/commits?per_page=100";
+        List<PrCommitEntry> commits = new ArrayList<>();
+        try {
+            String responseBody = getAndReturn(url, "get commits for PR #" + prId);
+            JsonNode array = objectMapper.readTree(responseBody);
+            if (array.isArray()) {
+                for (JsonNode commit : array) {
+                    String sha = commit.path("sha").asText("");
+                    String shortSha = sha.length() >= 7 ? sha.substring(0, 7) : sha;
+                    String message = commit.path("commit").path("message").asText("").trim();
+                    String authorName = commit.path("commit").path("author").path("name").asText("");
+                    String authorDate = commit.path("commit").path("author").path("date").asText("");
+                    commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to fetch commits for GitHub PR #%s: %s", prId, e.getMessage());
+        }
+        LOG.infof("Fetched %d commits for GitHub PR #%s in %s/%s", commits.size(), prId, org, repo);
+        return commits;
+    }
+
+    @Override
+    public String getCommitDiff(String org, String project, String repo, String sha) {
+        try {
+            String safeSha = sanitizeId(sha);
+            String url = baseUrl() + "/repos/" + org + "/" + repo + "/commits/" + safeSha;
+            requireTrustedUrl(url);
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", "Bearer " + token())
+                    .header("Accept", "application/vnd.github.v3.diff")
+                    .header("X-GitHub-Api-Version", "2022-11-28")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+            LOG.warnf("GitHub get commit diff failed (HTTP %d) for sha %s", response.statusCode(), sha);
+            return "";
+        } catch (Exception e) {
+            LOG.warnf("GitHub get commit diff error for sha %s: %s", sha, e.getMessage());
+            return "";
+        }
     }
 
     private static String escapeJson(String text) {

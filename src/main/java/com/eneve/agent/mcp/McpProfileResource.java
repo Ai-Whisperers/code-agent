@@ -37,6 +37,9 @@ public class McpProfileResource {
     LinkedAccountService linkedAccountService;
 
     @Inject
+    AtlassianOAuthService atlassianOAuth;
+
+    @Inject
     SecurityIdentity securityIdentity;
 
     @Inject
@@ -261,6 +264,66 @@ public class McpProfileResource {
 
         String message = ok ? "Connection successful" : "Connection failed — check your credentials";
         return Response.ok(Map.of("success", ok, "message", message)).build();
+    }
+
+    // ─── OAuth 2.0 authorization URL ────────────────────────────────────────────
+
+    @GET
+    @Path("/{provider}/oauth/authorize")
+    @Operation(
+            operationId = "getOAuthAuthorizeUrl",
+            summary = "Get the OAuth 2.0 authorization URL for a provider",
+            description = "Returns the URL the user should be redirected to in order to grant access. " +
+                    "Currently only 'jira' is supported. Requires atlassian.oauth.client-id to be configured.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Authorization URL generated"),
+            @APIResponse(responseCode = "400", description = "OAuth not supported for this provider or not configured"),
+            @APIResponse(responseCode = "403", description = "Anonymous or API-key-only access not allowed")
+    })
+    public Response getOAuthAuthorizeUrl(
+            @Parameter(description = "Provider — currently only 'jira' is supported", required = true)
+            @PathParam("provider") String provider,
+            @Parameter(description = "OAuth redirect URI — must match what is registered in Atlassian", required = true)
+            @QueryParam("redirect_uri") String redirectUri) {
+
+        String userId = resolveUserId();
+        if (userId == null) {
+            return forbidden("Profile management requires a valid OIDC Bearer token.");
+        }
+
+        if (!"jira".equals(provider)) {
+            return badRequest("OAuth authorization is only supported for the 'jira' provider.");
+        }
+
+        if (redirectUri == null || redirectUri.isBlank()) {
+            return badRequest("redirect_uri is required.");
+        }
+
+        try {
+            AtlassianOAuthService.AuthorizeResult result =
+                    atlassianOAuth.generateAuthorizationUrl(userId, redirectUri);
+            return Response.ok(Map.of("url", result.url(), "state", result.state())).build();
+        } catch (IllegalStateException e) {
+            return badRequest(e.getMessage());
+        }
+    }
+
+    // ─── OAuth configured status ─────────────────────────────────────────────────
+
+    @GET
+    @Path("/oauth/status")
+    @Operation(
+            operationId = "getOAuthStatus",
+            summary = "Check which providers have OAuth configured on the server")
+    @APIResponse(responseCode = "200", description = "Status map returned")
+    public Response getOAuthStatus() {
+        String userId = resolveUserId();
+        if (userId == null) {
+            return forbidden("Profile management requires a valid OIDC Bearer token.");
+        }
+        return Response.ok(Map.of(
+                "atlassian", atlassianOAuth.isConfigured()
+        )).build();
     }
 
     // ─── Get defaults for linking (user email from JWT, system URLs from config) ────

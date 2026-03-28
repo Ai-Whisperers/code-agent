@@ -10,6 +10,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.audit.AuditStore;
@@ -17,6 +18,7 @@ import com.eneve.agent.model.DiffFileEntry;
 import com.eneve.agent.model.DiffHunkEntry;
 import com.eneve.agent.model.DiffLineEntry;
 import com.eneve.agent.model.EvidenceEntry;
+import com.eneve.agent.model.JobCommitsResponse;
 import com.eneve.agent.model.JobDiffResponse;
 import com.eneve.agent.model.JobEvidenceResponse;
 import com.eneve.agent.model.JobRecord;
@@ -86,6 +88,9 @@ public class JobsResource {
 
     @Inject
     ScytaleService scytaleService;
+
+    @Inject
+    CommentStore commentStore;
 
     @GET
     @Operation(
@@ -202,6 +207,86 @@ public class JobsResource {
         return Response.ok(diffResponse).build();
     }
 
+    @GET
+    @Path("/{jobId}/commits")
+    @Operation(operationId = "getJobCommits", summary = "List commits in the PR for a job",
+               description = "Returns an ordered list of commits that belong to the pull request associated with this job.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Commit list"),
+            @APIResponse(responseCode = "404", description = "Job not found or has no pull request")
+    })
+    public Response getJobCommits(
+            @Parameter(description = "UUID of the job", required = true)
+            @PathParam("jobId") String jobId) {
+
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        if (job.getPrId() == null || job.getPrId().isBlank()) {
+            return Response.status(404).entity(Map.of("error", "Job has no associated pull request")).build();
+        }
+
+        RepoCoordinates coords;
+        try {
+            coords = resolveCoords(job);
+        } catch (Exception e) {
+            LOG.warnf("Cannot resolve repo coordinates for job %s: %s", jobId, e.getMessage());
+            return Response.status(404).entity(Map.of("error", "Cannot resolve repository for job: " + e.getMessage())).build();
+        }
+
+        try {
+            var commits = gitPlatformService.getPrCommits(
+                    coords.organization(), coords.project(), coords.repository(), job.getPrId());
+            return Response.ok(new JobCommitsResponse(commits)).build();
+        } catch (Exception e) {
+            LOG.warnf("Could not fetch commits for job %s: %s", jobId, e.getMessage());
+            return Response.ok(new JobCommitsResponse(List.of())).build();
+        }
+    }
+
+    @GET
+    @Path("/{jobId}/commits/{sha}/diff")
+    @Operation(operationId = "getCommitDiff", summary = "Get the diff for a single commit",
+               description = "Fetches the unified diff for the given commit SHA from the SCM. "
+                           + "Returns the same per-file diff structure as the PR diff endpoint. "
+                           + "Returns an empty file list if the platform does not support per-commit diffs.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Commit diff data"),
+            @APIResponse(responseCode = "404", description = "Job not found or has no pull request")
+    })
+    public Response getCommitDiff(
+            @Parameter(description = "UUID of the job", required = true)
+            @PathParam("jobId") String jobId,
+            @Parameter(description = "Full or abbreviated commit SHA", required = true)
+            @PathParam("sha") String sha) {
+
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        if (job.getPrId() == null || job.getPrId().isBlank()) {
+            return Response.status(404).entity(Map.of("error", "Job has no associated pull request")).build();
+        }
+
+        RepoCoordinates coords;
+        try {
+            coords = resolveCoords(job);
+        } catch (Exception e) {
+            LOG.warnf("Cannot resolve repo coordinates for job %s: %s", jobId, e.getMessage());
+            return Response.status(404).entity(Map.of("error", "Cannot resolve repository for job: " + e.getMessage())).build();
+        }
+
+        String rawDiff = gitPlatformService.getCommitDiff(
+                coords.organization(), coords.project(), coords.repository(), sha);
+        JobDiffResponse diffResponse = buildDiffResponse(sha, "parent", rawDiff);
+        return Response.ok(diffResponse).build();
+    }
+
     // ── Review endpoints ─────────────────────────────────────────────────
 
     @GET
@@ -243,14 +328,29 @@ public class JobsResource {
             reviewedAt = reviewJob.getCreatedAt();
         }
 
-        // Fetch inline comments from SCM
+        // Fetch inline comments from SCM, then enrich with resolved status from DB
         List<ReviewCommentEntry> comments = new ArrayList<>();
         try {
             RepoCoordinates coords = resolveCoords(job);
             List<AgentComment> agentComments = gitPlatformService.getAgentPrComments(
                     coords.organization(), coords.project(), coords.repository(), job.getPrId());
+
+            // Batch-lookup resolved status for all comment IDs in one DB query
+            List<Long> ids = agentComments.stream().map(AgentComment::id).toList();
+            Map<Long, CommentStore.ResolvedInfo> resolvedInfoMap = commentStore.getResolvedInfoBatch(ids);
+
             for (AgentComment c : agentComments) {
-                comments.add(new ReviewCommentEntry(c.filePath(), c.line(), c.content()));
+                // Skip internal bookmark markers posted by the bot to track review state
+                if (c.content() != null && c.content().trim().startsWith("<!-- agent-reviewed-up-to:")) {
+                    continue;
+                }
+                CommentStore.ResolvedInfo ri = resolvedInfoMap.getOrDefault(
+                        c.id(), CommentStore.ResolvedInfo.OPEN);
+                comments.add(new ReviewCommentEntry(
+                        c.id(), c.filePath(), c.line(), c.content(),
+                        ri.resolved(),
+                        ri.resolvedAt() != null ? ri.resolvedAt().toString() : null,
+                        ri.resolvedBy()));
             }
         } catch (Exception e) {
             LOG.warnf("Could not fetch PR comments for job %s: %s", jobId, e.getMessage());
@@ -315,6 +415,122 @@ public class JobsResource {
                 Map.of("reviewJobId", reviewJobId));
 
         return Response.accepted(Map.of("reviewJobId", reviewJobId)).build();
+    }
+
+    @POST
+    @Path("/{jobId}/request-fix-pr")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "requestFixPr", summary = "Request an automated fix for all PR review comments",
+               description = "Queues a FIX_PR job that addresses all open bot review comments on the PR "
+                           + "linked to this job. Returns 409 if a fix-PR job is already running.")
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Fix-PR job submitted"),
+            @APIResponse(responseCode = "404", description = "Job not found or has no PR"),
+            @APIResponse(responseCode = "409", description = "Fix-PR already running")
+    })
+    public Response requestFixPr(@PathParam("jobId") String jobId) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        if (job.getPrId() == null || job.getPrId().isBlank()) {
+            return Response.status(404).entity(Map.of("error", "Job has no associated pull request")).build();
+        }
+
+        List<JobRecord> relatedJobs = jobStore.findByPrId(job.getPrId());
+        boolean alreadyRunning = relatedJobs.stream()
+                .filter(j -> j.getJobType() == JobType.FIX_PR)
+                .anyMatch(j -> j.getStatus() == JobStatus.RUNNING || j.getStatus() == JobStatus.PENDING
+                             || j.getStatus() == JobStatus.QUEUED);
+        if (alreadyRunning) {
+            return Response.status(409).entity(Map.of("error", "A fix-PR job is already running for this PR")).build();
+        }
+
+        String repoUrl;
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            repoUrl = buildRepoUrl(coords, job);
+        } catch (Exception e) {
+            return Response.status(404).entity(Map.of("error", "Cannot resolve repository: " + e.getMessage())).build();
+        }
+
+        String jiraKey = extractJiraKey(job);
+        com.eneve.agent.model.FixPrRequest fixPrRequest = new com.eneve.agent.model.FixPrRequest(
+                repoUrl, job.getPrId(), jiraKey, null, null, null, null);
+
+        String fixPrJobId = UUID.randomUUID().toString();
+        JobRecord fixPrJob = new JobRecord(fixPrJobId, fixPrRequest);
+        jobStore.put(fixPrJob);
+        if (!jobQueue.submit(fixPrJob)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        auditService.log("JOBS", "FIX_PR_REQUESTED", "job", jobId,
+                Map.of("fixPrJobId", fixPrJobId));
+
+        return Response.accepted(Map.of("fixPrJobId", fixPrJobId)).build();
+    }
+
+    @POST
+    @Path("/{jobId}/request-fix-comment")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "requestFixComment", summary = "Request an automated fix for a single review comment",
+               description = "Queues a FIX_COMMENT job to address a specific bot review comment on the PR "
+                           + "linked to this job. Requires the SCM platform comment ID.")
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Fix-comment job submitted"),
+            @APIResponse(responseCode = "400", description = "Missing commentId"),
+            @APIResponse(responseCode = "404", description = "Job not found, has no PR, or comment not found")
+    })
+    public Response requestFixComment(@PathParam("jobId") String jobId, Map<String, Object> body) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        if (job.getPrId() == null || job.getPrId().isBlank()) {
+            return Response.status(404).entity(Map.of("error", "Job has no associated pull request")).build();
+        }
+
+        Object rawId = body != null ? body.get("commentId") : null;
+        if (rawId == null) {
+            return Response.status(400).entity(Map.of("error", "commentId is required")).build();
+        }
+        long commentId;
+        try {
+            commentId = ((Number) rawId).longValue();
+        } catch (ClassCastException e) {
+            return Response.status(400).entity(Map.of("error", "commentId must be a number")).build();
+        }
+
+        String repoUrl;
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            repoUrl = buildRepoUrl(coords, job);
+        } catch (Exception e) {
+            return Response.status(404).entity(Map.of("error", "Cannot resolve repository: " + e.getMessage())).build();
+        }
+
+        String filePath = body.containsKey("filePath") ? String.valueOf(body.get("filePath")) : "";
+        int line = body.containsKey("line") ? ((Number) body.get("line")).intValue() : 0;
+
+        com.eneve.agent.model.ReplyCommentRequest replyRequest = new com.eneve.agent.model.ReplyCommentRequest(
+                repoUrl, job.getPrId(), commentId, "Please fix this issue.", filePath, line);
+
+        String fixCommentJobId = UUID.randomUUID().toString();
+        JobRecord fixCommentJob = new JobRecord(fixCommentJobId, replyRequest, JobType.FIX_COMMENT);
+        jobStore.put(fixCommentJob);
+        if (!jobQueue.submit(fixCommentJob)) {
+            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
+        }
+
+        auditService.log("JOBS", "FIX_COMMENT_REQUESTED", "job", jobId,
+                Map.of("fixCommentJobId", fixCommentJobId, "commentId", String.valueOf(commentId)));
+
+        return Response.accepted(Map.of("fixCommentJobId", fixCommentJobId)).build();
     }
 
     // ── Evidence endpoint ─────────────────────────────────────────────────

@@ -134,7 +134,26 @@ public class ReviewHandler implements JobHandler {
                         return;
                     }
                 } else {
-                    diff = workspace.getDiff(targetBranch);
+                    // Prefer the SCM platform API diff — it reflects the exact PR state
+                    // (handles rebases, force-pushes, and platform-specific merge strategies).
+                    // Fall back to local git diff if the API is unavailable.
+                    String apiDiff = null;
+                    try {
+                        apiDiff = platformService.getPullRequestDiff(
+                                coords.organization(), coords.project(), coords.repository(), request.prId());
+                    } catch (Exception e) {
+                        LOG.warnf("Review: SCM API diff unavailable for PR #%s, will fall back to git diff: %s",
+                                request.prId(), e.getMessage());
+                    }
+
+                    if (apiDiff != null && !apiDiff.isBlank()) {
+                        LOG.infof("Review: using SCM API diff for PR #%s (%d bytes)",
+                                request.prId(), apiDiff.length());
+                        diff = apiDiff;
+                    } else {
+                        LOG.infof("Review: falling back to git diff for PR #%s", request.prId());
+                        diff = workspace.getDiff(targetBranch);
+                    }
                 }
             } catch (Exception e) {
                 lifecycle.failReview(job, "Failed to compute diff: " + e.getMessage());
@@ -178,6 +197,7 @@ public class ReviewHandler implements JobHandler {
                         List<Long> resolvedIds = findingResolver.resolveAddressedFindings(
                                 openFindings, parsedDiff, workspace, jobIdFinal);
                         int count = 0;
+                        String botActor = settings.get("review.bot-display-name", "Review Agent");
                         for (long resolvedId : resolvedIds) {
                             try {
                                 platformService.replyToComment(
@@ -191,7 +211,7 @@ public class ReviewHandler implements JobHandler {
                                 LOG.warnf("Failed to resolve comment %d on platform (non-fatal): %s",
                                         resolvedId, e.getMessage());
                             }
-                            commentStore.markResolved(resolvedId);
+                            commentStore.markResolved(resolvedId, botActor);
                             count++;
                         }
                         if (count > 0) {

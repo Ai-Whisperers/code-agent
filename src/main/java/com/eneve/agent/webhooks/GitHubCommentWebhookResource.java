@@ -378,7 +378,7 @@ public class GitHubCommentWebhookResource {
                 ctx.category(), ctx.findingText(), author);
         feedbackStore.save(feedback);
 
-        commentStore.markResolved(parentCommentId);
+        commentStore.markResolved(parentCommentId, author);
 
         try {
             platformService.resolveComment(org, "", repo, prId, parentCommentId);

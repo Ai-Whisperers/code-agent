@@ -71,7 +71,10 @@ ENV PATH="${DOTNET_TOOLS}:${PATH}"
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
     mkdir -p /home/appuser/.m2 /opt/maven-settings && \
-    chown -R appuser:appuser /home/appuser/.m2
+    chown -R appuser:appuser /home/appuser/.m2 && \
+    printf '# OS\n.DS_Store\n.DS_Store?\n._*\n.Spotlight-V100\n.Trashes\nehthumbs.db\nThumbs.db\ndesktop.ini\n\n# Editor\n.idea/\n.vscode/\n*.iml\n*.swp\n*.swo\n*~\n.project\n.classpath\n.settings/\n\n# Coverage\ncobertura-coverage.xml\n*.lcov\ncoverage/\n\n# Logs\n*.log\n\n# Secrets\n.env\n.env.local\n' > /home/appuser/.gitignore_global && \
+    printf '[core]\n\texcludesfile = /home/appuser/.gitignore_global\n' > /home/appuser/.gitconfig && \
+    chown appuser:appuser /home/appuser/.gitignore_global /home/appuser/.gitconfig
 
 # Tell Puppeteer to use the system-installed Chromium
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium

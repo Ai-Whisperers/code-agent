@@ -14,8 +14,10 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.Collections;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.UUID;
 
 @ApplicationScoped
 public class FixCommentHandler implements JobHandler {
@@ -28,6 +30,7 @@ public class FixCommentHandler implements JobHandler {
     @Inject CommentStore commentStore;
     @Inject LearningExtractor learningExtractor;
     @Inject JobStore jobStore;
+    @Inject JobQueue jobQueue;
     @Inject BuildAndLintHelper buildAndLintHelper;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
@@ -187,8 +190,72 @@ public class FixCommentHandler implements JobHandler {
             LOG.infof("FixComment job %s completed for comment #%d on PR #%s",
                     job.getJobId(), request.parentCommentId(), request.prId());
 
+            maybeScheduleFollowUpReview(job, request, commitSha);
+
         } catch (Exception e) {
             lifecycle.failFixComment(job, request, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * After a successful fix, automatically submits an incremental REVIEW job for the same PR
+     * so the bot can verify the fix actually addresses the original finding and hasn't introduced
+     * regressions. Controlled by the {@code review.auto-review-after-fix} setting (default: true).
+     */
+    private void maybeScheduleFollowUpReview(JobRecord fixJob, ReplyCommentRequest request,
+                                             String headCommitSha) {
+        boolean autoReview = Boolean.parseBoolean(
+                settings.get("review.auto-review-after-fix", "true"));
+        if (!autoReview) {
+            return;
+        }
+
+        String prId = request.prId();
+        if (prId == null || prId.isBlank()) {
+            return;
+        }
+
+        // Don't create a duplicate review if one is already queued/running for this PR
+        List<JobRecord> prJobs = jobStore.findByPrId(prId);
+        boolean alreadyPending = prJobs.stream()
+                .filter(j -> j.getJobType() == JobType.REVIEW)
+                .anyMatch(j -> j.getStatus() == JobStatus.RUNNING
+                        || j.getStatus() == JobStatus.PENDING
+                        || j.getStatus() == JobStatus.QUEUED);
+        if (alreadyPending) {
+            LOG.infof("FixComment follow-up: REVIEW already queued for PR #%s — skipping", prId);
+            return;
+        }
+
+        try {
+            ReviewPrRequest reviewRequest = new ReviewPrRequest(
+                    request.repoUrl(),
+                    prId,
+                    null,   // targetBranch — resolved by ReviewHandler from platform
+                    null,   // jiraKey
+                    null,   // rulesRepoUrl
+                    null,   // ruleNames
+                    null,   // extraRules
+                    null,   // n8nWebhookUrl
+                    headCommitSha, // headCommitSha — the fix commit; used by ReviewHandler for duplicate skip check
+                    null    // prAuthor
+            );
+
+            String reviewJobId = UUID.randomUUID().toString();
+            JobRecord reviewJob = new JobRecord(reviewJobId, reviewRequest);
+            jobStore.put(reviewJob);
+
+            if (jobQueue.submit(reviewJob)) {
+                LOG.infof("FixComment follow-up: queued REVIEW job %s for PR #%s after fix by job %s",
+                        reviewJobId, prId, fixJob.getJobId());
+            } else {
+                LOG.warnf("FixComment follow-up: job queue full — could not queue REVIEW for PR #%s", prId);
+                jobStore.archive(reviewJob); // clean up the record we just added
+            }
+        } catch (Exception e) {
+            // Follow-up review failure must not affect the already-succeeded fix job
+            LOG.warnf("FixComment follow-up: failed to schedule REVIEW for PR #%s: %s",
+                    prId, e.getMessage());
         }
     }
 }

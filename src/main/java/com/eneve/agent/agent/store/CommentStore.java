@@ -175,16 +175,68 @@ public class CommentStore {
         return 0;
     }
 
-    public void markResolved(long commentId) {
-        String sql = "UPDATE agent_comments SET resolved = true WHERE comment_id = ?";
+    /** Marks a comment resolved, recording the actor who resolved it. */
+    public void markResolved(long commentId, String resolvedBy) {
+        String sql = """
+                UPDATE agent_comments
+                SET resolved = true, resolved_at = now(), resolved_by = ?
+                WHERE comment_id = ?
+                """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setLong(1, commentId);
+            ps.setString(1, resolvedBy);
+            ps.setLong(2, commentId);
             ps.executeUpdate();
-            LOG.debugf("Marked agent comment %d as resolved", commentId);
+            LOG.debugf("Marked agent comment %d as resolved by %s", commentId, resolvedBy);
         } catch (SQLException e) {
             LOG.errorf("Failed to mark comment %d as resolved: %s", commentId, e.getMessage());
         }
+    }
+
+    /** Backward-compat overload — defaults actor to "Review Agent". */
+    public void markResolved(long commentId) {
+        markResolved(commentId, "Review Agent");
+    }
+
+    // ─── Resolved-status lookup ──────────────────────────────────────────────────
+
+    public record ResolvedInfo(boolean resolved, java.time.Instant resolvedAt, String resolvedBy) {
+        public static final ResolvedInfo OPEN = new ResolvedInfo(false, null, null);
+    }
+
+    /**
+     * Batch-retrieves resolved status for the given comment IDs.
+     * Returns a map keyed by comment ID; missing IDs map to {@link ResolvedInfo#OPEN}.
+     */
+    public java.util.Map<Long, ResolvedInfo> getResolvedInfoBatch(java.util.Collection<Long> commentIds) {
+        if (commentIds == null || commentIds.isEmpty()) {
+            return java.util.Map.of();
+        }
+        // Use ANY(?) with a BIGINT array to avoid string-based query concatenation
+        String sql = """
+                SELECT comment_id, resolved, resolved_at, resolved_by
+                FROM agent_comments
+                WHERE comment_id = ANY(?)
+                """;
+        java.util.Map<Long, ResolvedInfo> result = new java.util.HashMap<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            Long[] idsArray = commentIds.toArray(new Long[0]);
+            java.sql.Array sqlArray = conn.createArrayOf("bigint", idsArray);
+            ps.setArray(1, sqlArray);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    long cid = rs.getLong("comment_id");
+                    boolean resolved = rs.getBoolean("resolved");
+                    java.sql.Timestamp ts = rs.getTimestamp("resolved_at");
+                    String by = rs.getString("resolved_by");
+                    result.put(cid, new ResolvedInfo(resolved, ts != null ? ts.toInstant() : null, by));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to batch-lookup resolved status: %s", e.getMessage());
+        }
+        return result;
     }
 
     /**

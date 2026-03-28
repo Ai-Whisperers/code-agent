@@ -1,5 +1,7 @@
 package com.eneve.agent.scm;
 
+import com.eneve.agent.model.PrCommitEntry;
+
 import java.util.List;
 import java.util.Map;
 
@@ -41,6 +43,22 @@ public interface GitPlatformService {
      * Implementations that do not support this API return an empty string.
      */
     default String getPullRequestDiff(String org, String project, String repo, String prId) {
+        return "";
+    }
+
+    /**
+     * List all commits that belong to the given pull request / merge request.
+     * Returns an empty list if the platform does not support this API or on error.
+     */
+    default List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
+        return List.of();
+    }
+
+    /**
+     * Fetch the unified diff for a single commit (commit vs its parent).
+     * Returns a standard unified diff string, or an empty string if unsupported.
+     */
+    default String getCommitDiff(String org, String project, String repo, String sha) {
         return "";
     }
 

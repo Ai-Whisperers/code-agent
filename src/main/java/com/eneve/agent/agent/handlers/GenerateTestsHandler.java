@@ -82,11 +82,22 @@ public class GenerateTestsHandler implements JobHandler {
                 try {
                     workspace.cloneRepo(authUrl, testBranch, generateTestsTimeoutMinutes);
                 } catch (Exception e) {
-                    try {
-                        workspace.cloneAndCreateBranch(authUrl, request.targetBranchOrDefault(),
-                                testBranch, generateTestsTimeoutMinutes);
-                    } catch (Exception e2) {
-                        lifecycle.failGenerateTests(job, "Clone/branch failed: " + e2.getMessage());
+                    String[] baseCandidates = buildBaseBranchCandidates(request.targetBranchOrDefault());
+                    boolean cloned = false;
+                    Exception lastError = e;
+                    for (String base : baseCandidates) {
+                        try {
+                            workspace.cloneAndCreateBranch(authUrl, base, testBranch, generateTestsTimeoutMinutes);
+                            LOG.infof("GenerateTests: created branch '%s' from base '%s'", testBranch, base);
+                            cloned = true;
+                            break;
+                        } catch (Exception ex) {
+                            LOG.infof("GenerateTests: base branch '%s' not available, trying next: %s", base, ex.getMessage());
+                            lastError = ex;
+                        }
+                    }
+                    if (!cloned) {
+                        lifecycle.failGenerateTests(job, "Clone/branch failed: " + lastError.getMessage());
                         return;
                     }
                 }
@@ -428,5 +439,22 @@ public class GenerateTestsHandler implements JobHandler {
             LOG.warnf("GenerateTests: could not load stored coverage (non-fatal): %s", e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Returns an ordered list of candidate base branches to try when creating a new branch.
+     * The explicitly configured target branch is always first; well-known fallbacks follow
+     * so that repos without a {@code develop} branch can still be cloned from {@code main}
+     * or {@code master}.
+     */
+    private static String[] buildBaseBranchCandidates(String preferredBase) {
+        List<String> candidates = new java.util.ArrayList<>();
+        candidates.add(preferredBase);
+        for (String fallback : new String[]{"main", "master", "develop"}) {
+            if (!fallback.equals(preferredBase)) {
+                candidates.add(fallback);
+            }
+        }
+        return candidates.toArray(new String[0]);
     }
 }

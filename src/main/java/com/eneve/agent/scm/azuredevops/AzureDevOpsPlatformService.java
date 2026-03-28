@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.azuredevops;
 
+import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
@@ -53,6 +54,8 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
+        ensureTargetBranchExists(org, project, repo, targetBranch);
+
         String url = repoApiUrl(org, project, repo) + "/pullrequests?" + API_VERSION;
         String body = """
                 {
@@ -370,13 +373,14 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                         String content = c.path("content").asText("").trim();
                         if (content.isEmpty()) continue;
 
+                        long commentId = c.path("id").asLong(0);
                         JsonNode ctx = thread.path("threadContext");
                         if (!ctx.isMissingNode() && ctx.has("filePath")) {
                             String file = ctx.path("filePath").asText("");
                             int line = ctx.path("rightFileStart").path("line").asInt(0);
-                            comments.add(new AgentComment(file, line, content));
+                            comments.add(new AgentComment(commentId, file, line, content));
                         } else {
-                            comments.add(new AgentComment("", 0, content));
+                            comments.add(new AgentComment(commentId, "", 0, content));
                         }
                     }
                 }
@@ -436,6 +440,58 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
             LOG.warnf("Failed to resolve thread for comment %d: %s", commentId, e.getMessage());
         }
         return 0;
+    }
+
+    /**
+     * Ensures the given branch exists in the remote repository.
+     * If absent, it is created from the repository's default branch.
+     * Prevents an Azure DevOps HTTP 400 "Target ref does not exist" error when opening a PR.
+     */
+    private void ensureTargetBranchExists(String org, String project, String repo, String branchName) {
+        try {
+            String checkUrl = repoApiUrl(org, project, repo)
+                    + "/refs?filter=heads/" + branchName + "&" + API_VERSION;
+            requireTrustedUrl(checkUrl);
+            String checkResponse = getAndReturn(checkUrl, "check branch '" + branchName + "'");
+            JsonNode checkNode = objectMapper.readTree(checkResponse);
+            if (checkNode.path("count").asInt(0) > 0) {
+                return;
+            }
+        } catch (Exception e) {
+            LOG.warnf("Azure DevOps ensureTargetBranchExists: branch check error for '%s': %s",
+                    branchName, e.getMessage());
+        }
+
+        LOG.infof("Target branch '%s' not found in %s/%s/%s — auto-creating from default branch",
+                branchName, org, project, repo);
+        try {
+            String repoInfoUrl = repoApiUrl(org, project, repo) + "?" + API_VERSION;
+            String repoInfo = getAndReturn(repoInfoUrl, "get repo info");
+            String defaultRefFull = objectMapper.readTree(repoInfo).path("defaultBranch").asText("refs/heads/main");
+            String defaultBranch = defaultRefFull.replaceFirst("^refs/heads/", "");
+
+            String defaultRefsUrl = repoApiUrl(org, project, repo)
+                    + "/refs?filter=heads/" + defaultBranch + "&" + API_VERSION;
+            String defaultRefsInfo = getAndReturn(defaultRefsUrl, "get default branch ref");
+            JsonNode values = objectMapper.readTree(defaultRefsInfo).path("value");
+            String sha = (values.isArray() && !values.isEmpty())
+                    ? values.get(0).path("objectId").asText("") : "";
+            if (sha.isBlank()) {
+                throw new RuntimeException("Could not resolve objectId for default branch '" + defaultBranch + "'");
+            }
+
+            String createUrl = repoApiUrl(org, project, repo) + "/refs?" + API_VERSION;
+            String createBody = """
+                    [{ "name": "refs/heads/%s", "newObjectId": "%s", "oldObjectId": "0000000000000000000000000000000000000000" }]
+                    """.formatted(escapeJson(branchName), escapeJson(sha));
+            postAndReturn(createUrl, createBody, "create branch '" + branchName + "'");
+            LOG.infof("Auto-created branch '%s' from '%s' (%s) in %s/%s/%s",
+                    branchName, defaultBranch, sha.substring(0, Math.min(8, sha.length())), org, project, repo);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Cannot auto-create target branch '%s' in %s/%s/%s: %s"
+                            .formatted(branchName, org, project, repo, e.getMessage()), e);
+        }
     }
 
     private String repoApiUrl(String org, String project, String repo) {
@@ -587,6 +643,32 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
+        String url = repoApiUrl(org, project, repo)
+                + "/pullrequests/" + prId + "/commits?" + API_VERSION;
+        List<PrCommitEntry> commits = new ArrayList<>();
+        try {
+            String responseBody = getAndReturn(url, "get commits for PR #" + prId);
+            JsonNode root = objectMapper.readTree(responseBody);
+            JsonNode value = root.path("value");
+            if (value.isArray()) {
+                for (JsonNode commit : value) {
+                    String sha = commit.path("commitId").asText("");
+                    String shortSha = sha.length() >= 7 ? sha.substring(0, 7) : sha;
+                    String message = commit.path("comment").asText("").trim();
+                    String authorName = commit.path("author").path("name").asText("");
+                    String authorDate = commit.path("author").path("date").asText("");
+                    commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to fetch commits for Azure DevOps PR #%s: %s", prId, e.getMessage());
+        }
+        LOG.infof("Fetched %d commits for Azure DevOps PR #%s in %s/%s/%s", commits.size(), prId, org, project, repo);
+        return commits;
     }
 
     private static String escapeJson(String text) {

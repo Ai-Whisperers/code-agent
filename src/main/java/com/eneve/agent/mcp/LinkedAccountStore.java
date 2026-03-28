@@ -31,6 +31,8 @@ public class LinkedAccountStore {
             String baseUrl,
             String username,
             String apiTokenEnc,
+            String authType,
+            String refreshTokenEnc,
             Instant createdAt,
             Instant updatedAt
     ) {}
@@ -38,7 +40,7 @@ public class LinkedAccountStore {
     public Optional<AccountRow> findByUserAndProvider(String userId, String provider) {
         String sql = """
                 SELECT id, user_id, provider, display_name, base_url, username,
-                       api_token_enc, created_at, updated_at
+                       api_token_enc, auth_type, refresh_token_enc, created_at, updated_at
                 FROM user_linked_accounts
                 WHERE user_id = ? AND provider = ?
                 """;
@@ -60,7 +62,7 @@ public class LinkedAccountStore {
     public List<AccountRow> findByUser(String userId) {
         String sql = """
                 SELECT id, user_id, provider, display_name, base_url, username,
-                       api_token_enc, created_at, updated_at
+                       api_token_enc, auth_type, refresh_token_enc, created_at, updated_at
                 FROM user_linked_accounts
                 WHERE user_id = ?
                 ORDER BY provider
@@ -82,16 +84,25 @@ public class LinkedAccountStore {
 
     public void upsert(String userId, String provider, String displayName,
                        String baseUrl, String username, String apiTokenEnc) {
+        upsert(userId, provider, displayName, baseUrl, username, apiTokenEnc, "apitoken", null);
+    }
+
+    public void upsert(String userId, String provider, String displayName,
+                       String baseUrl, String username, String apiTokenEnc,
+                       String authType, String refreshTokenEnc) {
         String sql = """
                 INSERT INTO user_linked_accounts
-                (user_id, provider, display_name, base_url, username, api_token_enc, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, now(), now())
+                (user_id, provider, display_name, base_url, username,
+                 api_token_enc, auth_type, refresh_token_enc, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (user_id, provider)
-                DO UPDATE SET display_name   = EXCLUDED.display_name,
-                              base_url       = EXCLUDED.base_url,
-                              username       = EXCLUDED.username,
-                              api_token_enc  = EXCLUDED.api_token_enc,
-                              updated_at     = now()
+                DO UPDATE SET display_name      = EXCLUDED.display_name,
+                              base_url          = EXCLUDED.base_url,
+                              username          = EXCLUDED.username,
+                              api_token_enc     = EXCLUDED.api_token_enc,
+                              auth_type         = EXCLUDED.auth_type,
+                              refresh_token_enc = EXCLUDED.refresh_token_enc,
+                              updated_at        = now()
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -101,11 +112,38 @@ public class LinkedAccountStore {
             ps.setString(4, baseUrl);
             ps.setString(5, username);
             ps.setString(6, apiTokenEnc);
+            ps.setString(7, authType != null ? authType : "apitoken");
+            ps.setString(8, refreshTokenEnc);
             ps.executeUpdate();
-            LOG.infof("Upserted linked account for user=%s provider=%s", userId, provider);
+            LOG.infof("Upserted linked account for user=%s provider=%s authType=%s",
+                    userId, provider, authType);
         } catch (SQLException e) {
-            LOG.errorf("Failed to upsert account for user=%s provider=%s: %s", userId, provider, e.getMessage());
+            LOG.errorf("Failed to upsert account for user=%s provider=%s: %s",
+                    userId, provider, e.getMessage());
             throw new RuntimeException("Failed to save linked account: " + provider, e);
+        }
+    }
+
+    /** Updates only the OAuth tokens without touching other fields. */
+    public void updateOAuthTokens(String userId, String provider,
+                                  String accessTokenEnc, String refreshTokenEnc) {
+        String sql = """
+                UPDATE user_linked_accounts
+                SET api_token_enc     = ?,
+                    refresh_token_enc = ?,
+                    updated_at        = now()
+                WHERE user_id = ? AND provider = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, accessTokenEnc);
+            ps.setString(2, refreshTokenEnc);
+            ps.setString(3, userId);
+            ps.setString(4, provider);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to update OAuth tokens for user=%s provider=%s: %s",
+                    userId, provider, e.getMessage());
         }
     }
 
@@ -137,6 +175,8 @@ public class LinkedAccountStore {
                 rs.getString("base_url"),
                 rs.getString("username"),
                 rs.getString("api_token_enc"),
+                rs.getString("auth_type"),
+                rs.getString("refresh_token_enc"),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );

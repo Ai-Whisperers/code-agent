@@ -333,7 +333,7 @@ public class BitbucketCommentWebhookResource {
                 ctx.category(), ctx.findingText(), author);
         feedbackStore.save(feedback);
 
-        commentStore.markResolved(parentCommentId);
+        commentStore.markResolved(parentCommentId, author);
 
         try {
             platformService.resolveComment(workspace, "", repoSlug, prId, parentCommentId);

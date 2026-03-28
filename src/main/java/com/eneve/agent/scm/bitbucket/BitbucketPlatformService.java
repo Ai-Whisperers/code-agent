@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.bitbucket;
 
+import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
@@ -37,6 +38,12 @@ public class BitbucketPlatformService implements GitPlatformService {
     @Inject
     SettingsService settingsService;
 
+    @Inject
+    BitbucketTokenManager tokenManager;
+
+    @Inject
+    BitbucketBranchService branchService;
+
     private String baseUrl() { return settingsService.get("bitbucket.base.url", "https://api.bitbucket.org/2.0"); }
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
@@ -44,11 +51,21 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     /** Lazily resolved actual Bitbucket account username (distinct from the HTTP auth credential). */
     private volatile String cachedAccountUsername;
+    /** Lazily resolved Bitbucket account_id (the stable UUID-style identifier used in modern API responses). */
+    private volatile String cachedAccountId;
+    /**
+     * The OAuth access token that was active when the bot identity was last resolved.
+     * If the token manager issues a new token, this won't match and the identity cache
+     * will be cleared so {@link #getCurrentUserUsername()} re-resolves correctly.
+     */
+    private volatile String identityToken;
 
     @Override
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
+        ensureTargetBranchExists(org, repo, targetBranch);
+
         String body = """
                 {
                   "title": "%s",
@@ -319,6 +336,18 @@ public class BitbucketPlatformService implements GitPlatformService {
         String path = "/repositories/" + org + "/" + repo
                 + "/pullrequests/" + prId + "/comments?pagelen=50";
 
+        // Resolve bot identity once before iterating comments.
+        // Modern Bitbucket Cloud OAuth/SSO accounts use account_id as the primary identifier;
+        // the legacy "username" field is deprecated and may be absent. We try to match on
+        // account_id first, then fall back to username/nickname.
+        // When using a Repository/Workspace Access Token (x-token-auth), /user returns 403 and
+        // we cannot determine the bot's identity — skip author filtering in that case.
+        getCurrentUserUsername(); // populate cachedAccountId + cachedAccountUsername
+        String botAccountId = cachedAccountId;
+        String botUsername = effectiveBotUsername();
+        boolean canFilterByAuthor = (!botUsername.equals("x-token-auth") && !botUsername.isBlank())
+                || (botAccountId != null && !botAccountId.isBlank());
+
         while (path != null) {
             String responseBody = getAndReturn(path, "get agent comments for PR #" + prId);
             try {
@@ -326,10 +355,16 @@ public class BitbucketPlatformService implements GitPlatformService {
                 JsonNode values = root.path("values");
                 if (values.isArray()) {
                     for (JsonNode comment : values) {
-                        String author = comment.path("user").path("username").asText(
-                                comment.path("user").path("nickname").asText(""));
-                        if (!author.equals(effectiveBotUsername())) {
-                            continue;
+                        if (canFilterByAuthor) {
+                            JsonNode userNode = comment.path("user");
+                            String authorAccountId = userNode.path("account_id").asText("");
+                            String authorUsername = userNode.path("username").asText(
+                                    userNode.path("nickname").asText(""));
+                            boolean isBot = (!authorAccountId.isBlank() && authorAccountId.equals(botAccountId))
+                                    || (!authorUsername.isBlank() && authorUsername.equals(botUsername));
+                            if (!isBot) {
+                                continue;
+                            }
                         }
 
                         String raw = comment.path("content").path("raw").asText("").trim();
@@ -337,13 +372,14 @@ public class BitbucketPlatformService implements GitPlatformService {
                             continue;
                         }
 
+                        long commentId = comment.path("id").asLong(0);
                         JsonNode inline = comment.path("inline");
                         if (!inline.isMissingNode() && inline.has("path")) {
                             String file = inline.path("path").asText("");
                             int line = inline.path("to").asInt(inline.path("from").asInt(0));
-                            comments.add(new AgentComment(file, line, raw));
+                            comments.add(new AgentComment(commentId, file, line, raw));
                         } else {
-                            comments.add(new AgentComment("", 0, raw));
+                            comments.add(new AgentComment(commentId, "", 0, raw));
                         }
                     }
                 }
@@ -607,6 +643,32 @@ public class BitbucketPlatformService implements GitPlatformService {
         }
     }
 
+    /**
+     * Ensures the given branch exists in the remote repository.
+     * If the branch is absent, it is created from the repository's default branch (e.g. {@code main}).
+     * This prevents a Bitbucket HTTP 400 "destination: branch not found" error when opening a PR
+     * against a target branch that has never been pushed to the repository.
+     *
+     * @throws RuntimeException if the default branch cannot be resolved or the branch cannot be created
+     */
+    private void ensureTargetBranchExists(String workspace, String repo, String branchName) {
+        if (branchService.getBranchHash(workspace, repo, branchName).isPresent()) {
+            return;
+        }
+        LOG.infof("Target branch '%s' not found in %s/%s — auto-creating from default branch",
+                branchName, workspace, repo);
+        String defaultBranch = branchService.getDefaultBranch(workspace, repo).orElse("main");
+        String defaultHash = branchService.getBranchHash(workspace, repo, defaultBranch)
+                .orElseThrow(() -> new RuntimeException(
+                        "Cannot auto-create target branch '%s': default branch '%s' not found in %s/%s"
+                                .formatted(branchName, defaultBranch, workspace, repo)));
+        branchService.createBranch(workspace, repo, branchName, defaultHash);
+        LOG.infof("Auto-created branch '%s' from '%s' (%s) in %s/%s",
+                branchName, defaultBranch,
+                defaultHash.substring(0, Math.min(8, defaultHash.length())),
+                workspace, repo);
+    }
+
     // ── HTTP helpers ─────────────────────────────────────────────────────
 
     private String getAndReturn(String path, String operation) {
@@ -699,23 +761,54 @@ public class BitbucketPlatformService implements GitPlatformService {
      */
     @Override
     public String getCurrentUserUsername() {
+        // With OAuth, the token rotates every ~2 hours. If the active token has changed
+        // since the identity was cached, invalidate the cache so we re-resolve.
+        if (tokenManager.isConfigured()) {
+            String currentToken = tokenManager.getAccessToken();
+            if (currentToken != null && !currentToken.equals(identityToken)) {
+                synchronized (this) {
+                    if (currentToken != null && !currentToken.equals(identityToken)) {
+                        cachedAccountUsername = null;
+                        cachedAccountId = null;
+                        identityToken = currentToken;
+                    }
+                }
+            }
+        }
+
         if (cachedAccountUsername != null) return cachedAccountUsername;
         synchronized (this) {
             if (cachedAccountUsername != null) return cachedAccountUsername;
             try {
                 String responseBody = getAndReturn("/user", "get current user");
                 JsonNode node = objectMapper.readTree(responseBody);
+
+                // account_id is the stable UUID-style identifier used in modern Bitbucket Cloud
+                // (OAuth/SSO accounts). The legacy "username" field is deprecated. Cache both so
+                // that comment author comparisons can match either form.
+                String accountId = node.path("account_id").asText("");
+                if (!accountId.isBlank()) {
+                    cachedAccountId = accountId;
+                }
+
                 String username = node.path("username").asText(
                         node.path("nickname").asText(""));
                 if (!username.isBlank()) {
                     cachedAccountUsername = username;
-                    LOG.infof("Resolved Bitbucket account username: '%s'", username);
+                    LOG.infof("Resolved Bitbucket account: username='%s' account_id='%s'",
+                            username, accountId);
                     return username;
                 }
                 LOG.warnf("Bitbucket /user response contained no username or nickname");
             } catch (Exception e) {
                 LOG.warnf("Failed to resolve Bitbucket account username (self-filter may be impaired): %s",
                         e.getMessage());
+            }
+            // Cache the failure to prevent repeated retries.
+            // Exception: with OAuth the token auto-refreshes so a future token rotation
+            // will clear this cache and allow another attempt.
+            if (!tokenManager.isConfigured()) {
+                cachedAccountUsername = "";
             }
             return "";
         }
@@ -757,10 +850,22 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     /**
-     * Repository/Workspace Access Tokens use Bearer auth.
-     * App Passwords use Basic auth with username:password.
+     * Builds the Authorization header for Bitbucket API requests.
+     *
+     * <p>Priority order:
+     * <ol>
+     *   <li><b>OAuth 2.0 Client Credentials</b> — used when {@code bitbucket.oauth.client-id}
+     *       and {@code bitbucket.oauth.client-secret} are configured. Tokens are auto-refreshed.</li>
+     *   <li><b>Repository/Workspace Access Token</b> — used when {@code bitbucket.user} is
+     *       {@code x-token-auth}. Bearer token from {@code bitbucket.app.password}.</li>
+     *   <li><b>App Password</b> — HTTP Basic auth with username:password.</li>
+     * </ol>
      */
     private String authHeader() {
+        String oauthToken = tokenManager.getAccessToken();
+        if (oauthToken != null) {
+            return "Bearer " + oauthToken;
+        }
         String user = bbUser();
         String password = appPassword();
         if ("x-token-auth".equals(user)) {
@@ -782,6 +887,12 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
+        // For git HTTPS clones, OAuth tokens use x-token-auth as the username.
+        String oauthToken = tokenManager.getAccessToken();
+        if (oauthToken != null) {
+            return "https://x-token-auth:" + oauthToken
+                    + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
+        }
         return "https://" + bbUser() + ":" + appPassword()
                 + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
     }
@@ -812,6 +923,70 @@ public class BitbucketPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
+        List<PrCommitEntry> commits = new ArrayList<>();
+        String path = "/repositories/" + org + "/" + repo
+                + "/pullrequests/" + prId + "/commits?pagelen=50";
+
+        while (path != null) {
+            try {
+                String responseBody = getAndReturn(path, "get commits for PR #" + prId);
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode commit : values) {
+                        String sha = commit.path("hash").asText("");
+                        String shortSha = sha.length() >= 7 ? sha.substring(0, 7) : sha;
+                        String message = commit.path("message").asText("").trim();
+                        String authorRaw = commit.path("author").path("raw").asText("");
+                        // raw is "Name <email>" — extract the display name
+                        String authorName = authorRaw.contains("<")
+                                ? authorRaw.substring(0, authorRaw.indexOf('<')).trim()
+                                : authorRaw;
+                        String authorDate = commit.path("date").asText("");
+                        commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null && !next.isBlank() ? next.replace(baseUrl(), "") : null;
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch commits page for PR #%s: %s", prId, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Fetched %d commits for Bitbucket PR #%s in %s/%s", commits.size(), prId, org, repo);
+        return commits;
+    }
+
+    @Override
+    public String getCommitDiff(String org, String project, String repo, String sha) {
+        try {
+            String safeSha = sanitizeId(sha);
+            String url = baseUrl() + "/repositories/" + org + "/" + repo + "/diff/" + safeSha;
+            requireTrustedUrl(url);
+            HttpClient redirectingClient = HttpClient.newBuilder()
+                    .followRedirects(HttpClient.Redirect.NORMAL)
+                    .build();
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(url))
+                    .header("Authorization", authHeader())
+                    .header("Accept", "text/plain")
+                    .GET()
+                    .build();
+            HttpResponse<String> response = redirectingClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            }
+            LOG.warnf("Bitbucket get commit diff failed (HTTP %d) for sha %s", response.statusCode(), sha);
+            return "";
+        } catch (Exception e) {
+            LOG.warnf("Bitbucket get commit diff error for sha %s: %s", sha, e.getMessage());
+            return "";
+        }
     }
 
     private static String escapeJson(String text) {

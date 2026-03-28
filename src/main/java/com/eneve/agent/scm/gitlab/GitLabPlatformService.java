@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.gitlab;
 
+import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
@@ -54,6 +55,8 @@ public class GitLabPlatformService implements GitPlatformService {
     public String[] createPullRequest(String org, String project, String repo,
                                       String sourceBranch, String targetBranch,
                                       String title, String description) {
+        ensureTargetBranchExists(org, repo, targetBranch);
+
         String projectPath = encodedProjectPath(org, repo);
         String url = baseUrl() + "/projects/" + projectPath + "/merge_requests";
         String body = """
@@ -379,13 +382,14 @@ public class GitLabPlatformService implements GitPlatformService {
                             String content = note.path("body").asText("").trim();
                             if (content.isEmpty()) continue;
 
+                            long noteId = note.path("id").asLong(0);
                             JsonNode position = note.path("position");
                             if (!position.isMissingNode() && position.has("new_path")) {
                                 String file = position.path("new_path").asText("");
                                 int line = position.path("new_line").asInt(0);
-                                comments.add(new AgentComment(file, line, content));
+                                comments.add(new AgentComment(noteId, file, line, content));
                             } else {
-                                comments.add(new AgentComment("", 0, content));
+                                comments.add(new AgentComment(noteId, "", 0, content));
                             }
                         }
                     }
@@ -593,6 +597,49 @@ public class GitLabPlatformService implements GitPlatformService {
         }
     }
 
+    /**
+     * Ensures the given branch exists in the remote repository.
+     * If absent, it is created from the repository's default branch.
+     * Prevents a GitLab HTTP 422 "Target branch does not exist" error when opening an MR.
+     */
+    private void ensureTargetBranchExists(String org, String repo, String branchName) {
+        String projectPath = encodedProjectPath(org, repo);
+        try {
+            String checkUrl = baseUrl() + "/projects/" + projectPath + "/repository/branches/"
+                    + URLEncoder.encode(branchName, StandardCharsets.UTF_8);
+            requireTrustedUrl(checkUrl);
+            HttpRequest checkRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(checkUrl))
+                    .header("PRIVATE-TOKEN", token())
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+            HttpResponse<String> checkResponse = httpClient.send(checkRequest, HttpResponse.BodyHandlers.ofString());
+            if (checkResponse.statusCode() == 200) {
+                return;
+            }
+        } catch (Exception e) {
+            LOG.warnf("GitLab ensureTargetBranchExists: branch check error for '%s': %s", branchName, e.getMessage());
+        }
+
+        LOG.infof("Target branch '%s' not found in %s/%s — auto-creating from default branch", branchName, org, repo);
+        try {
+            String repoInfoUrl = baseUrl() + "/projects/" + projectPath;
+            String repoInfo = getAndReturn(repoInfoUrl, "get project info");
+            String defaultBranch = objectMapper.readTree(repoInfo).path("default_branch").asText("main");
+
+            String createUrl = baseUrl() + "/projects/" + projectPath + "/repository/branches";
+            String createBody = """
+                    { "branch": "%s", "ref": "%s" }
+                    """.formatted(escapeJson(branchName), escapeJson(defaultBranch));
+            postAndReturn(createUrl, createBody, "create branch '" + branchName + "'");
+            LOG.infof("Auto-created branch '%s' from '%s' in %s/%s", branchName, defaultBranch, org, repo);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Cannot auto-create target branch '%s' in %s/%s: %s".formatted(branchName, org, repo, e.getMessage()), e);
+        }
+    }
+
     private String token() {
         return settingsService.getSecret("gitlab.token");
     }
@@ -633,6 +680,62 @@ public class GitLabPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
+        String projectPath = encodedProjectPath(org, repo);
+        List<PrCommitEntry> commits = new ArrayList<>();
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests/" + prId
+                + "/commits?per_page=100";
+        try {
+            String responseBody = getAndReturn(url, "get commits for MR !" + prId);
+            JsonNode array = objectMapper.readTree(responseBody);
+            if (array.isArray()) {
+                for (JsonNode commit : array) {
+                    String sha = commit.path("id").asText("");
+                    String shortSha = commit.path("short_id").asText(
+                            sha.length() >= 7 ? sha.substring(0, 7) : sha);
+                    String message = commit.path("title").asText("").trim();
+                    String authorName = commit.path("author_name").asText("");
+                    String authorDate = commit.path("created_at").asText("");
+                    commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to fetch commits for GitLab MR !%s: %s", prId, e.getMessage());
+        }
+        LOG.infof("Fetched %d commits for GitLab MR !%s in %s/%s", commits.size(), prId, org, repo);
+        return commits;
+    }
+
+    @Override
+    public String getCommitDiff(String org, String project, String repo, String sha) {
+        String projectPath = encodedProjectPath(org, repo);
+        try {
+            String safeSha = sanitizeId(sha);
+            String url = baseUrl() + "/projects/" + projectPath + "/repository/commits/" + safeSha + "/diff";
+            String responseBody = getAndReturn(url, "get commit diff " + safeSha);
+            JsonNode diffs = objectMapper.readTree(responseBody);
+            if (!diffs.isArray()) return "";
+
+            StringBuilder sb = new StringBuilder();
+            for (JsonNode file : diffs) {
+                String oldPath = file.path("old_path").asText("");
+                String newPath = file.path("new_path").asText("");
+                String diff = file.path("diff").asText("");
+                if (diff.isBlank()) continue;
+                sb.append("diff --git a/").append(oldPath).append(" b/").append(newPath).append("\n");
+                sb.append("--- a/").append(oldPath).append("\n");
+                sb.append("+++ b/").append(newPath).append("\n");
+                sb.append(diff);
+                if (!diff.endsWith("\n")) sb.append("\n");
+            }
+            return sb.toString();
+        } catch (Exception e) {
+            LOG.warnf("GitLab get commit diff error for sha %s: %s", sha, e.getMessage());
+            return "";
+        }
     }
 
     private static String escapeJson(String text) {

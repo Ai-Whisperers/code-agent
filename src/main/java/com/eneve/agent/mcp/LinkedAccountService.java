@@ -42,13 +42,14 @@ public class LinkedAccountService {
     @Inject
     SettingsService settings;
 
-    // Use credential records from the respective services
     public record AccountView(
             String provider,
             String displayName,
             String baseUrl,
             String username,
             String apiTokenMasked,
+            /** "oauth" or "apitoken" */
+            String authType,
             String createdAt,
             String updatedAt
     ) {}
@@ -71,7 +72,39 @@ public class LinkedAccountService {
     public void upsert(String userId, String provider, String displayName,
                        String baseUrl, String username, String apiToken) {
         String encrypted = encryption.encrypt(apiToken);
-        store.upsert(userId, provider, displayName, baseUrl, username, encrypted);
+        store.upsert(userId, provider, displayName, baseUrl, username,
+                encrypted, "apitoken", null);
+    }
+
+    /** Persists an OAuth-linked account (access token + optional refresh token). */
+    public void upsertOAuth(String userId, String provider, String displayName,
+                            String baseUrl, String username,
+                            String accessToken, String refreshToken) {
+        String encAccess  = encryption.encrypt(accessToken);
+        String encRefresh = refreshToken != null ? encryption.encrypt(refreshToken) : null;
+        store.upsert(userId, provider, displayName, baseUrl, username,
+                encAccess, "oauth", encRefresh);
+    }
+
+    /** Updates only the OAuth tokens for an existing linked account (e.g. after token refresh). */
+    public void updateOAuthTokens(String userId, String provider,
+                                  String newAccessToken, String newRefreshToken) {
+        String encAccess  = encryption.encrypt(newAccessToken);
+        String encRefresh = newRefreshToken != null ? encryption.encrypt(newRefreshToken) : null;
+        store.updateOAuthTokens(userId, provider, encAccess, encRefresh);
+    }
+
+    /**
+     * Returns the decrypted refresh token for an OAuth-linked account,
+     * or {@code null} if not stored.
+     */
+    public String getRefreshToken(String userId, String provider) {
+        return store.findByUserAndProvider(userId, provider)
+                .map(row -> {
+                    String enc = row.refreshTokenEnc();
+                    return enc != null ? encryption.decrypt(enc) : null;
+                })
+                .orElse(null);
     }
 
     public boolean delete(String userId, String provider) {
@@ -302,6 +335,7 @@ public class LinkedAccountService {
                 row.baseUrl(),
                 row.username(),
                 MASKED,
+                row.authType() != null ? row.authType() : "apitoken",
                 row.createdAt() != null ? row.createdAt().toString() : null,
                 row.updatedAt() != null ? row.updatedAt().toString() : null
         );
