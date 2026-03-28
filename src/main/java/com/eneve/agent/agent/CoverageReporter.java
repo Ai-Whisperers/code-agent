@@ -242,8 +242,11 @@ public class CoverageReporter {
             }
         }
 
+        // -Dmaven.test.failure.ignore=true lets Maven continue to jacoco:report even
+        // when environment-sensitive integration tests fail in the sandbox (e.g. @QuarkusTest
+        // that cannot start the full application). Coverage from the passing tests is still valid.
         String command = ProcessHelper.mvn(workspace.getRoot())
-                + " jacoco:prepare-agent test jacoco:report -q";
+                + " jacoco:prepare-agent test jacoco:report -q -Dmaven.test.failure.ignore=true";
 
         LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
                 jacocoPresent ? "configured" : "injected into pom.xml", command);
@@ -261,9 +264,14 @@ public class CoverageReporter {
                 return null;
             }
             if (proc.exitValue() != 0) {
+                // Non-zero even with test.failure.ignore means a build/compile error — no report possible.
                 String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
-                LOG.warnf("CoverageReporter: coverage run failed (exit %d): %s", proc.exitValue(), tail);
+                LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s", proc.exitValue(), tail);
                 return null;
+            }
+            // Warn if any tests failed so callers can see it in the logs, but proceed.
+            if (output.contains("[ERROR] Tests run:") || output.contains("BUILD FAILURE")) {
+                LOG.warnf("CoverageReporter: some tests failed during coverage run — coverage reflects passing tests only");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -313,7 +321,8 @@ public class CoverageReporter {
         }
 
         LOG.info("Running JaCoCo coverage measurement...");
-        String command = ProcessHelper.mvn(workspace.getRoot()) + " jacoco:prepare-agent test jacoco:report -q";
+        String command = ProcessHelper.mvn(workspace.getRoot())
+                + " jacoco:prepare-agent test jacoco:report -q -Dmaven.test.failure.ignore=true";
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
@@ -327,9 +336,13 @@ public class CoverageReporter {
                 throw new RuntimeException("JaCoCo coverage run timed out after " + timeoutMinutes() + " minutes");
             }
             if (proc.exitValue() != 0) {
+                // Non-zero even with test.failure.ignore means a build/compile error.
                 String tail = output.length() > 3000 ? output.substring(output.length() - 3000) : output;
-                throw new RuntimeException("Tests failed during coverage measurement (exit "
+                throw new RuntimeException("Build error during coverage measurement (exit "
                         + proc.exitValue() + "):\n" + tail);
+            }
+            if (output.contains("[ERROR] Tests run:") || output.contains("BUILD FAILURE")) {
+                LOG.warnf("CoverageReporter: some tests failed — coverage reflects passing tests only");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
