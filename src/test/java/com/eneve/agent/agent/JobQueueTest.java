@@ -65,6 +65,13 @@ class JobQueueTest {
 
         queue = buildQueue();
         queue.onStart(new StartupEvent());
+
+        // The recovery thread (started by onStart) calls jobStore.findByStatus() for each of
+        // RUNNING, QUEUED, and PENDING. We must let it finish all three calls before any test
+        // body sets up additional stubs on jobStore — otherwise a concurrent findByStatus()
+        // invocation can corrupt Mockito's per-mock "in-progress stubbing" state and cause a
+        // spurious UnfinishedStubbingException in the next doAnswer(...).when(jobStore) chain.
+        verify(jobStore, timeout(1000).atLeast(3)).findByStatus(any());
     }
 
     @AfterEach

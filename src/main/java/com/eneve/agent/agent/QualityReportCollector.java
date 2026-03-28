@@ -5,6 +5,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.model.QualityReport.*;
@@ -65,30 +68,59 @@ public class QualityReportCollector {
         long coverageTimeoutMinutes = Long.parseLong(settingsService.get("quality-report.job-timeout-minutes", "30"));
         boolean coverageEnabled = Boolean.parseBoolean(settingsService.get("quality-report.coverage.enabled", "true"));
 
-        TestPresenceSection testPresenceSection = collectTestPresence(workspace, workspaceName, repoSlug);
-        LinterSection linterSection = collectLinter(workspace, workspaceName, repoSlug);
-        AikidoSection aikidoSection = collectAikido(repoSlug);
-        ComplexitySection complexitySection = collectComplexity(workspace, workspaceName, repoSlug, branch, defaultCcThreshold);
-        ReviewSection reviewSection = collectReview(workspaceName, repoSlug);
-        CoverageSection coverageSection = collectCoverage(workspace, workspaceName, repoSlug, coverageEnabled, coverageTimeoutMinutes);
+        long startMs = System.currentTimeMillis();
 
-        double score = QualityReport.computeScore(coverageSection, testPresenceSection, linterSection,
-                aikidoSection, complexitySection, reviewSection);
+        // All 6 sections are independent — run them in parallel on virtual threads.
+        // Each collectX method handles its own exceptions and returns null on failure,
+        // so futures never complete exceptionally.
+        try (ExecutorService executor = Executors.newVirtualThreadPerTaskExecutor()) {
 
-        return new QualityReport(
-                UUID.randomUUID().toString(),
-                workspaceName,
-                repoSlug,
-                branch,
-                Instant.now(),
-                score,
-                coverageSection,
-                linterSection,
-                aikidoSection,
-                complexitySection,
-                reviewSection,
-                testPresenceSection
-        );
+            CompletableFuture<TestPresenceSection> testPresenceFuture = CompletableFuture.supplyAsync(
+                    () -> collectTestPresence(workspace, workspaceName, repoSlug), executor);
+            CompletableFuture<LinterSection> linterFuture = CompletableFuture.supplyAsync(
+                    () -> collectLinter(workspace, workspaceName, repoSlug), executor);
+            CompletableFuture<AikidoSection> aikidoFuture = CompletableFuture.supplyAsync(
+                    () -> collectAikido(repoSlug), executor);
+            CompletableFuture<ComplexitySection> complexityFuture = CompletableFuture.supplyAsync(
+                    () -> collectComplexity(workspace, workspaceName, repoSlug, branch, defaultCcThreshold), executor);
+            CompletableFuture<ReviewSection> reviewFuture = CompletableFuture.supplyAsync(
+                    () -> collectReview(workspaceName, repoSlug), executor);
+            CompletableFuture<CoverageSection> coverageFuture = CompletableFuture.supplyAsync(
+                    () -> collectCoverage(workspace, workspaceName, repoSlug, coverageEnabled, coverageTimeoutMinutes), executor);
+
+            CompletableFuture.allOf(
+                    testPresenceFuture, linterFuture, aikidoFuture,
+                    complexityFuture, reviewFuture, coverageFuture
+            ).join();
+
+            TestPresenceSection testPresenceSection = testPresenceFuture.join();
+            LinterSection linterSection = linterFuture.join();
+            AikidoSection aikidoSection = aikidoFuture.join();
+            ComplexitySection complexitySection = complexityFuture.join();
+            ReviewSection reviewSection = reviewFuture.join();
+            CoverageSection coverageSection = coverageFuture.join();
+
+            LOG.infof("QualityReportCollector: all sections collected in %d ms for %s/%s",
+                    System.currentTimeMillis() - startMs, workspaceName, repoSlug);
+
+            double score = QualityReport.computeScore(coverageSection, testPresenceSection, linterSection,
+                    aikidoSection, complexitySection, reviewSection);
+
+            return new QualityReport(
+                    UUID.randomUUID().toString(),
+                    workspaceName,
+                    repoSlug,
+                    branch,
+                    Instant.now(),
+                    score,
+                    coverageSection,
+                    linterSection,
+                    aikidoSection,
+                    complexitySection,
+                    reviewSection,
+                    testPresenceSection
+            );
+        }
     }
 
     // ─── Individual collectors ────────────────────────────────────────────

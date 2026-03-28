@@ -1,7 +1,9 @@
 package com.eneve.agent.agent.handlers;
 
 import com.eneve.agent.agent.*;
+import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
 import com.eneve.agent.scm.GitPlatformService;
@@ -11,6 +13,9 @@ import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.List;
+import java.util.Optional;
 
 @ApplicationScoped
 public class GenerateTestsHandler implements JobHandler {
@@ -28,6 +33,7 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject JiraService jiraService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;
+    @Inject QualityReportStore qualityReportStore;
 
     @Override
     public JobType jobType() {
@@ -85,10 +91,13 @@ public class GenerateTestsHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
-            CoverageReporter.CoverageSnapshot baselineCoverage = null;
-            if (coverageReporter.isJacocoPresent(workspace)) {
+            // Prefer stored quality-report coverage over live re-measurement (avoids a full test run).
+            CoverageReporter.CoverageSnapshot baselineCoverage = loadStoredCoverage(
+                    coords.organization(), coords.repository(), request.targetBranchOrDefault());
+
+            if (baselineCoverage == null && coverageReporter.isJacocoPresent(workspace)) {
                 try {
-                    LOG.info("GenerateTests: measuring baseline coverage...");
+                    LOG.info("GenerateTests: no stored baseline — measuring coverage live...");
                     baselineCoverage = coverageReporter.measureCoverage(workspace);
                     if (baselineCoverage != null) {
                         LOG.infof("GenerateTests: baseline — lines %.1f%%, branches %.1f%%",
@@ -212,6 +221,38 @@ public class GenerateTestsHandler implements JobHandler {
 
         } catch (Exception e) {
             lifecycle.failGenerateTests(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Attempts to load a stored coverage baseline from the most recent quality report.
+     * Returns {@code null} if no report with package-level coverage data is available.
+     */
+    private CoverageReporter.CoverageSnapshot loadStoredCoverage(
+            String workspace, String repoSlug, String branch) {
+        try {
+            Optional<QualityReport> latest = qualityReportStore.findLatest(workspace, repoSlug, branch);
+            if (latest.isEmpty()) return null;
+
+            QualityReport.CoverageSection cs = latest.get().coverage();
+            if (cs == null || cs.packages() == null || cs.packages().isEmpty()) return null;
+
+            List<CoverageReporter.PackageCoverage> pkgs = cs.packages().stream()
+                    .map(p -> new CoverageReporter.PackageCoverage(p.name(), p.linesCovered(), p.linesMissed()))
+                    .toList();
+
+            LOG.infof("GenerateTests: reusing stored coverage from quality report (lines %.1f%%, %d packages)",
+                    cs.lineRate(), pkgs.size());
+
+            return new CoverageReporter.CoverageSnapshot(
+                    cs.linesCovered(), cs.linesMissed(),
+                    cs.branchesCovered(), cs.branchesMissed(),
+                    cs.methodsCovered(), cs.methodsMissed(),
+                    cs.classesCovered(), cs.classesMissed(),
+                    pkgs);
+        } catch (Exception e) {
+            LOG.warnf("GenerateTests: could not load stored coverage (non-fatal): %s", e.getMessage());
+            return null;
         }
     }
 }

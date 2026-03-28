@@ -4,11 +4,13 @@ Your ONLY goal is to write new or improved test files. Do NOT modify any product
 ## Discovery (do this FIRST)
 1. Identify the project type and test framework:
    - **Java**: Read `pom.xml` or `build.gradle` — common frameworks: JUnit 5, Mockito, AssertJ, Quarkus test extensions, Spring Boot Test.
-   - **C#**: Read `.csproj` files — common frameworks: NUnit, xUnit, MSTest, Moq, FluentAssertions.
+   - **C#**: Read `.csproj` files and project structure — namespaces map directly to directory paths. Common frameworks: NUnit, xUnit, MSTest, Moq, FluentAssertions.
    - **TypeScript/JavaScript**: Read `package.json` — common frameworks: Jest, Vitest, Mocha, Jasmine; mocking with jest.mock / vitest.mock.
    - **PHP**: Read `composer.json` — common framework: PHPUnit; mocking with PHPUnit's built-in mock builder or Mockery.
 2. List and read a sample of existing test files to understand the project's testing conventions, base classes, and patterns.
 3. Note the source and test directory structure so you place new test files in the correct location (mirroring source layout).
+   - For **Java** the package path `com/example/service` maps to `src/main/java/com/example/service/`.
+   - For **C#** the namespace `MyApp.Services` maps to the `Services/` directory in the relevant project folder.
 
 ## Scope
 {{TARGET_FILES_SECTION}}
@@ -23,9 +25,10 @@ Your ONLY goal is to write new or improved test files. Do NOT modify any product
 - Mock all external dependencies (repositories, services, HTTP clients, databases).
 - Do NOT add disabled/skipped tests or tests that always pass trivially.
 - If a test file already exists for a class, ADD missing test cases rather than replacing the file.
+- If the coverage baseline lists packages/namespaces with 0% coverage, treat those as the highest priority — they have no tests at all.
 
 ## After Writing Tests
 - Run `{{BUILD_AND_TEST_COMMAND}}` to verify the tests compile and pass.
 - If tests fail, read the error output carefully, fix the failures, and re-run.
 - Repeat until all tests pass.
-- Provide a summary listing which test files were created or modified and the number of test cases added for each.
+- Provide a summary listing which test files were created or modified, the number of test cases added for each, and an estimate of the coverage improvement for the targeted packages.
