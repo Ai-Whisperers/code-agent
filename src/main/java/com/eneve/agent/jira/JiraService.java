@@ -253,6 +253,15 @@ public class JiraService {
         post("/rest/api/3/issue/" + issueKey + "/comment", body, "add comment");
     }
 
+    public void transitionToInProgress(String issueKey) {
+        String transitionInProgress = settingsService.get("jira.transition.in-progress", "");
+        if (transitionInProgress.isBlank()) {
+            LOG.warnf("JIRA transition.in-progress not configured, skipping for %s", issueKey);
+            return;
+        }
+        transition(issueKey, transitionInProgress);
+    }
+
     public void transitionToInReview(String issueKey) {
         String transitionInReview = settingsService.get("jira.transition.in-review", "");
         if (transitionInReview.isBlank()) {
@@ -727,6 +736,20 @@ public class JiraService {
      */
     public String createIssueSystem(String projectKey, String summary,
                                      String description, String issueType, String parentKey) {
+        return createIssueSystem(projectKey, summary, description, issueType, parentKey,
+                java.util.Collections.emptyList(), null);
+    }
+
+    /**
+     * Creates a Jira issue using system credentials, with optional labels and due date.
+     *
+     * @param labels  list of Jira labels to apply (e.g. {@code List.of("SOCII")}); ignored when empty
+     * @param dueDate ISO-8601 date for the due date field; ignored when null
+     * @return new issue key (e.g. "PRJ-42"), or null on failure
+     */
+    public String createIssueSystem(String projectKey, String summary,
+                                     String description, String issueType, String parentKey,
+                                     java.util.List<String> labels, java.time.LocalDate dueDate) {
         var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
         var fields = mapper.createObjectNode();
         fields.put("summary", summary);
@@ -745,6 +768,15 @@ public class JiraService {
 
         if (parentKey != null && !parentKey.isBlank()) {
             fields.putObject("parent").put("key", parentKey);
+        }
+
+        if (labels != null && !labels.isEmpty()) {
+            var labelsNode = fields.putArray("labels");
+            labels.forEach(labelsNode::add);
+        }
+
+        if (dueDate != null) {
+            fields.put("duedate", dueDate.toString());
         }
 
         var body = mapper.createObjectNode();
@@ -884,6 +916,29 @@ public class JiraService {
 
     public record JiraIssue(String key, String summary, String description, String status,
                             String issueType, String projectKey) {}
+
+    /**
+     * Fetch the SLA-relevant fields (priority name, issue type name, created timestamp)
+     * for the given JIRA issue key using system credentials.
+     * Returns a simple 3-element array: [priorityName, issueTypeName, createdIso], any may be null.
+     */
+    public String[] getIssueSlaMeta(String issueKey) {
+        String json = get("/rest/api/3/issue/" + issueKey
+                + "?fields=priority,issuetype,created", "fetch SLA meta " + issueKey);
+        if (json == null) return new String[]{null, null, null};
+        try {
+            var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+            var root = mapper.readTree(json);
+            var fields = root.path("fields");
+            String priority  = fields.path("priority").path("name").asText(null);
+            String issueType = fields.path("issuetype").path("name").asText(null);
+            String created   = fields.path("created").asText(null);
+            return new String[]{priority, issueType, created};
+        } catch (Exception e) {
+            LOG.warnf("getIssueSlaMeta(%s) failed: %s", issueKey, e.getMessage());
+            return new String[]{null, null, null};
+        }
+    }
 
     /**
      * Get full issue details using provided credentials.

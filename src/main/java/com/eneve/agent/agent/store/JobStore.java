@@ -40,8 +40,9 @@ public class JobStore {
                 INSERT INTO jobs
                     (job_id, job_type, status, request_payload, created_at, updated_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug, priority, coverage_data)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                     pr_author, workspace, repo_slug, priority, coverage_data,
+                     aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -64,6 +65,15 @@ public class JobStore {
             setNullable(ps, 16, job.getRepoSlug());
             ps.setInt(17, job.getPriority());
             setNullable(ps, 18, serializeCoverageData(job));
+            setNullable(ps, 19, job.getAikidoIssueId());
+            setNullable(ps, 20, job.getFixBranchName());
+            setNullable(ps, 21, job.getJiraIssueType());
+            setNullable(ps, 22, job.getJiraPriority());
+            if (job.getJiraCreatedAt() != null) {
+                ps.setTimestamp(23, Timestamp.from(job.getJiraCreatedAt()));
+            } else {
+                ps.setNull(23, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+            }
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to insert job %s: %s", job.getJobId(), e.getMessage());
@@ -81,8 +91,10 @@ public class JobStore {
                 INSERT INTO job_history
                     (job_id, job_type, status, request_payload, created_at, updated_at, archived_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
-                     pr_author, workspace, repo_slug, priority, coverage_data)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb)
+                     pr_author, workspace, repo_slug, priority, coverage_data,
+                     aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                     promotion_job_id)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -107,6 +119,16 @@ public class JobStore {
                 setNullable(ins, 16, job.getRepoSlug());
                 ins.setInt(17, job.getPriority());
                 setNullable(ins, 18, serializeCoverageData(job));
+                setNullable(ins, 19, job.getAikidoIssueId());
+                setNullable(ins, 20, job.getFixBranchName());
+                setNullable(ins, 21, job.getJiraIssueType());
+                setNullable(ins, 22, job.getJiraPriority());
+                if (job.getJiraCreatedAt() != null) {
+                    ins.setTimestamp(23, Timestamp.from(job.getJiraCreatedAt()));
+                } else {
+                    ins.setNull(23, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+                }
+                setNullable(ins, 24, job.getPromotionJobId());
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -127,16 +149,22 @@ public class JobStore {
     public void update(JobRecord job) {
         String sql = """
                 UPDATE jobs SET
-                    status        = ?,
-                    updated_at    = ?,
-                    summary       = ?,
-                    error_message = ?,
-                    pr_url        = ?,
-                    pr_id         = ?,
-                    files_changed = ?,
-                    lines_changed = ?,
-                    priority      = ?,
-                    coverage_data = ?::jsonb
+                    status           = ?,
+                    updated_at       = ?,
+                    summary          = ?,
+                    error_message    = ?,
+                    pr_url           = ?,
+                    pr_id            = ?,
+                    files_changed    = ?,
+                    lines_changed    = ?,
+                    priority         = ?,
+                    coverage_data    = ?::jsonb,
+                    aikido_issue_id  = ?,
+                    fix_branch_name  = ?,
+                    jira_issue_type  = ?,
+                    jira_priority    = ?,
+                    jira_created_at  = ?,
+                    promotion_job_id = ?
                 WHERE job_id = ?
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -151,7 +179,17 @@ public class JobStore {
             ps.setInt(8, job.getLinesChanged());
             ps.setInt(9, job.getPriority());
             setNullable(ps, 10, serializeCoverageData(job));
-            ps.setString(11, job.getJobId());
+            setNullable(ps, 11, job.getAikidoIssueId());
+            setNullable(ps, 12, job.getFixBranchName());
+            setNullable(ps, 13, job.getJiraIssueType());
+            setNullable(ps, 14, job.getJiraPriority());
+            if (job.getJiraCreatedAt() != null) {
+                ps.setTimestamp(15, Timestamp.from(job.getJiraCreatedAt()));
+            } else {
+                ps.setNull(15, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
+            }
+            setNullable(ps, 16, job.getPromotionJobId());
+            ps.setString(17, job.getJobId());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to update job %s: %s", job.getJobId(), e.getMessage());
@@ -182,7 +220,9 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -207,6 +247,21 @@ public class JobStore {
      * Returns true if there is at least one active job (PENDING, QUEUED, RUNNING, or
      * AWAITING_APPROVAL) for the given JIRA key.
      */
+    /**
+     * Returns true if there is at least one active job (PENDING, QUEUED, RUNNING, or
+     * AWAITING_APPROVAL) for the given Aikido issue group ID.
+     * Used by AikidoTriageService to prevent duplicate fix jobs for the same vulnerability.
+     */
+    public boolean hasActiveJobForAikidoGroupId(String groupId) {
+        String sql = """
+                SELECT 1 FROM jobs
+                WHERE aikido_issue_id = ?
+                  AND status IN ('PENDING','QUEUED','RUNNING','AWAITING_APPROVAL')
+                LIMIT 1
+                """;
+        return existsQuery(sql, groupId);
+    }
+
     public boolean hasActiveJobForJiraKey(String jiraKey) {
         String sql = """
                 SELECT 1 FROM jobs
@@ -446,12 +501,16 @@ public class JobStore {
         String sqlExact = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id
                 FROM jobs WHERE pr_id = ?
                 UNION ALL
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id
                 FROM job_history WHERE pr_id = ?
                 ORDER BY created_at DESC
                 """;
@@ -475,12 +534,16 @@ public class JobStore {
             String sqlLike = """
                     SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                           pr_author, workspace, repo_slug, priority, coverage_data
+                           pr_author, workspace, repo_slug, priority, coverage_data,
+                           aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                           promotion_job_id
                     FROM jobs WHERE pr_url LIKE ?
                     UNION ALL
                     SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                           pr_author, workspace, repo_slug, priority, coverage_data
+                           pr_author, workspace, repo_slug, priority, coverage_data,
+                           aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                           promotion_job_id
                     FROM job_history WHERE pr_url LIKE ?
                     ORDER BY created_at DESC
                     """;
@@ -513,13 +576,17 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id
                 FROM jobs
                 WHERE jira_key IS NOT NULL
                 UNION ALL
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id
                 FROM job_history
                 WHERE jira_key IS NOT NULL
                 ORDER BY created_at DESC
@@ -577,7 +644,9 @@ public class JobStore {
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + " pr_author, workspace, repo_slug, priority, coverage_data"
+                + " pr_author, workspace, repo_slug, priority, coverage_data,"
+                + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
+                + " promotion_job_id"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -652,6 +721,18 @@ public class JobStore {
         } catch (Exception e) {
             LOG.warnf("Failed to deserialize coverage_data for job %s (non-fatal): %s", jobId, e.getMessage());
         }
+        // Aikido / SLA / promotion fields — added in V68 migration, may be null for older rows
+        try {
+            job.setAikidoIssueId(rs.getString("aikido_issue_id"));
+            job.setFixBranchName(rs.getString("fix_branch_name"));
+            job.setJiraIssueType(rs.getString("jira_issue_type"));
+            job.setJiraPriority(rs.getString("jira_priority"));
+            Timestamp jiraCreatedAt = rs.getTimestamp("jira_created_at");
+            if (jiraCreatedAt != null) job.setJiraCreatedAt(jiraCreatedAt.toInstant());
+            job.setPromotionJobId(rs.getString("promotion_job_id"));
+        } catch (Exception e) {
+            LOG.warnf("Failed to read Aikido/SLA fields for job %s (non-fatal): %s", jobId, e.getMessage());
+        }
         return job;
     }
 
@@ -684,6 +765,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, QualityReportJobRequest.class));
                 case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, JiraReviewRequest.class), jobType);
+                case PROMOTE -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, PromoteRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -706,6 +789,7 @@ public class JobStore {
             case METRICS -> job.getMetricsRequest();
             case QUALITY_REPORT -> job.getQualityReportRequest();
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> job.getJiraReviewRequest();
+            case PROMOTE -> job.getPromoteRequest();
             case CHAT -> null;
         };
         if (request == null) return "{}";
@@ -722,6 +806,7 @@ public class JobStore {
         if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
         if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
         if (job.getJiraReviewRequest() != null) return job.getJiraReviewRequest().issueKey();
+        if (job.getPromoteRequest() != null) return job.getPromoteRequest().jiraKey();
         return null;
     }
 

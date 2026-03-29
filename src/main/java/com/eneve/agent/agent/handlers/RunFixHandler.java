@@ -3,11 +3,13 @@ package com.eneve.agent.agent.handlers;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.CodeMetricsStore;
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.linter.StaticAnalysisDiffReport;
 import com.eneve.agent.model.*;
+import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -17,6 +19,7 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 
 @ApplicationScoped
@@ -30,8 +33,11 @@ public class RunFixHandler implements JobHandler {
     @Inject GitWorkspaceHelper gitHelper;
     @Inject GitPlatformService platformService;
     @Inject JobStore jobStore;
+    @Inject JobQueue jobQueue;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
+    @Inject TeamsNotifier teamsNotifier;
+    @Inject RepoSettingsStore repoSettingsStore;
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject LinterService linterService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
@@ -129,6 +135,19 @@ public class RunFixHandler implements JobHandler {
                         "No prompt provided and could not fetch JIRA issue description for "
                                 + request.jiraKey());
                 return;
+            }
+
+            // Teams: Fix job started notification
+            if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
+                teamsNotifier.sendNotification(new RunResult(
+                        job.getJobId(), "FIX", "STARTED",
+                        request.jiraKey(), request.repoUrl(), request.branchName(),
+                        null,
+                        "Fix job started — agent working on " + request.jiraKey()
+                                + " (branch: " + request.branchName() + ")",
+                        null, 0, 0));
+                lifecycle.safeJira(() -> jiraService.addComment(request.jiraKey(),
+                        "Fix job " + job.getJobId() + " started on branch " + request.branchName() + "."));
             }
 
             lifecycle.safeJira(() -> jiraService.commentStarted(
@@ -252,9 +271,22 @@ public class RunFixHandler implements JobHandler {
                             AgentPools.PARALLEL);
                 }
 
-                lifecycle.safeJira(() -> jiraService.commentSuccess(request.jiraKey(), prUrl, summary));
                 lifecycle.safeJira(() -> jiraService.transitionToInReview(request.jiraKey()));
+                lifecycle.safeJira(() -> jiraService.addComment(request.jiraKey(),
+                        "Fix PR raised: " + prUrl + ". Awaiting review and approval."));
                 lifecycle.safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
+
+                // Teams: PR ready for review
+                String jiraKey = request.jiraKey();
+                teamsNotifier.sendNotification(new RunResult(
+                        job.getJobId(), "FIX", "AWAITING_APPROVAL",
+                        jiraKey, request.repoUrl(), request.branchName(),
+                        prUrl,
+                        "Fix PR ready for develop. JIRA: " + jiraKey + "\n\n" + summary,
+                        null, job.getFilesChanged(), job.getLinesChanged()));
+
+                // Conditionally auto-submit REVIEW job
+                maybeSubmitReviewJob(job, request, coords, prId);
 
                 RunResult result = lifecycle.buildResult(job, true);
                 lifecycle.notifyResult(result, request.n8nWebhookUrl());
@@ -264,6 +296,48 @@ public class RunFixHandler implements JobHandler {
 
         } catch (Exception e) {
             lifecycle.failFix(job, "Unexpected error: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Submits a REVIEW job for the newly created PR unless {@code reviewEnabled} is true
+     * in repo settings (meaning an existing webhook/hook is already configured to trigger reviews).
+     */
+    private void maybeSubmitReviewJob(JobRecord fixJob, RunFixRequest request,
+                                      RepoCoordinates coords, String prId) {
+        try {
+            boolean reviewEnabled = repoSettingsStore
+                    .find(coords.organization(), coords.repository())
+                    .map(rs -> rs.reviewEnabled())
+                    .orElse(true); // default: assume hook exists
+
+            if (reviewEnabled) {
+                LOG.infof("Job %s: reviewEnabled=true for %s/%s — skipping auto-REVIEW job (hook handles it)",
+                        fixJob.getJobId(), coords.organization(), coords.repository());
+                return;
+            }
+
+            ReviewPrRequest reviewRequest = new ReviewPrRequest(
+                    request.repoUrl(), prId, request.targetBranchOrDefault(),
+                    request.jiraKey(), request.rulesRepoUrl(), request.ruleNames(),
+                    request.extraRules(), request.n8nWebhookUrl(), null, null);
+
+            String reviewJobId = UUID.randomUUID().toString();
+            JobRecord reviewJob = new JobRecord(reviewJobId, reviewRequest);
+            reviewJob.setAikidoIssueId(fixJob.getAikidoIssueId());
+            jobStore.put(reviewJob);
+
+            if (jobQueue.submit(reviewJob)) {
+                LOG.infof("Job %s: auto-submitted REVIEW job %s for PR %s",
+                        fixJob.getJobId(), reviewJobId, prId);
+                lifecycle.auditLog("JOBS", "AUTO_REVIEW_SUBMITTED", "job", fixJob.getJobId(),
+                        java.util.Map.of("reviewJobId", reviewJobId, "prId", prId));
+            } else {
+                LOG.warnf("Job %s: could not submit REVIEW job — queue full", fixJob.getJobId());
+            }
+        } catch (Exception e) {
+            LOG.warnf("Job %s: failed to submit auto-REVIEW job (non-fatal): %s",
+                    fixJob.getJobId(), e.getMessage());
         }
     }
 

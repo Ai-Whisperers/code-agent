@@ -304,6 +304,35 @@ public class RunFixResource {
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, fullRequest);
+
+        // Set Aikido / SLA fields for SOC2 tracking
+        job.setAikidoIssueId(String.valueOf(groupId));
+        job.setFixBranchName(branchName);
+
+        // Fetch JIRA priority / issue type / created date for SLA tracking
+        try {
+            String[] slaMeta = jiraService.getIssueSlaMeta(jiraKey);
+            if (slaMeta[0] != null && !slaMeta[0].isBlank()) job.setJiraPriority(slaMeta[0]);
+            if (slaMeta[1] != null && !slaMeta[1].isBlank()) job.setJiraIssueType(slaMeta[1]);
+            if (slaMeta[2] != null && !slaMeta[2].isBlank()) {
+                try {
+                    job.setJiraCreatedAt(java.time.OffsetDateTime.parse(slaMeta[2]).toInstant());
+                } catch (Exception ignored) {}
+            }
+        } catch (Exception e) {
+            LOG.warnf("Could not fetch JIRA SLA meta for %s: %s", jiraKey, e.getMessage());
+        }
+        // Fallback: derive priority from Aikido severity when JIRA didn't populate it
+        if (job.getJiraPriority() == null || job.getJiraPriority().isBlank()) {
+            String sev = issueInfo.severity();
+            if ("critical".equalsIgnoreCase(sev)) job.setJiraPriority("Critical");
+            else if ("high".equalsIgnoreCase(sev)) job.setJiraPriority("High");
+            else job.setJiraPriority("Medium");
+        }
+        if (job.getJiraIssueType() == null || job.getJiraIssueType().isBlank()) {
+            job.setJiraIssueType("Bug");
+        }
+
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {
@@ -314,6 +343,9 @@ public class RunFixResource {
                 jobId, jiraKey, groupId, issueInfo.packageName(), branchName);
         auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
                 Map.of("jobType", "AIKIDO_FIX", "jiraKey", jiraKey,
+                       "aikidoGroupId", String.valueOf(groupId)));
+        auditService.log("SOC2", "SLA_STARTED", "job", jobId,
+                Map.of("jiraKey", jiraKey, "severity", issueInfo.severity(),
                        "aikidoGroupId", String.valueOf(groupId)));
 
         return Response.accepted(Map.of(

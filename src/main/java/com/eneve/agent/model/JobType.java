@@ -15,7 +15,9 @@ public enum JobType {
     REVIEW_EPIC,
     REVIEW_FEATURE,
     REVIEW_USERSTORY,
-    CHAT;
+    CHAT,
+    /** Cherry-pick promotion job: creates promote/{jiraKey} from main, cherry-picks fix commits, raises PR → main. */
+    PROMOTE;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -30,6 +32,7 @@ public enum JobType {
             case FIX_COMMENT      ->  75;
             case REVIEW           ->  70;
             case FIX_PR           ->  70;
+            case PROMOTE          ->  65;
             case FIX              ->  60;
             case HOOK             ->  50;
             case METRICS          ->  40;

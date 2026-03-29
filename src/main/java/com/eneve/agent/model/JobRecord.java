@@ -4,6 +4,9 @@ import java.time.Instant;
 
 public class JobRecord {
 
+    // ── PROMOTE job request (cherry-pick promotion to main) ──────────────────
+    private final PromoteRequest promoteRequest;
+
     // ── SOC II / SLA fields (populated at submission time from Jira) ─────────
     // Kept volatile so they can be set after construction without synchronization.
 
@@ -47,6 +50,9 @@ public class JobRecord {
     // Optional Aikido vulnerability issue ID (set via webhook or manual link)
     private volatile String aikidoIssueId;
 
+    // Original fix branch name stored for cherry-pick promotion (develop → main)
+    private volatile String fixBranchName;
+
     // Scytale evidence upload tracking
     private volatile String scytaleEvidenceRef;
     private volatile Instant scytaleUploadedAt;
@@ -64,6 +70,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.FIX;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -83,6 +90,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.REVIEW;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -102,6 +110,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.FIX_PR;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -125,6 +134,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -144,6 +154,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.HOOK;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -163,6 +174,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.GENERATE_TESTS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -182,6 +194,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.GENERATE_DOCS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -201,6 +214,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.SYNC_CONFLUENCE;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -220,6 +234,7 @@ public class JobRecord {
         this.metricsRequest = metricsRequest;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.METRICS;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -239,6 +254,7 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = qualityReportRequest;
         this.jiraReviewRequest = null;
+        this.promoteRequest = null;
         this.jobType = JobType.QUALITY_REPORT;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
@@ -258,10 +274,31 @@ public class JobRecord {
         this.metricsRequest = null;
         this.qualityReportRequest = null;
         this.jiraReviewRequest = jiraReviewRequest;
+        this.promoteRequest = null;
         this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
         this.priority = jobType.defaultPriority();
+    }
+
+    public JobRecord(String jobId, PromoteRequest promoteRequest) {
+        this.jobId = jobId;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jiraReviewRequest = null;
+        this.promoteRequest = promoteRequest;
+        this.jobType = JobType.PROMOTE;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+        this.priority = JobType.PROMOTE.defaultPriority();
     }
 
     public String getJobId() { return jobId; }
@@ -332,6 +369,11 @@ public class JobRecord {
 
     public String getAikidoIssueId() { return aikidoIssueId; }
     public void setAikidoIssueId(String aikidoIssueId) { this.aikidoIssueId = aikidoIssueId; }
+
+    public String getFixBranchName() { return fixBranchName; }
+    public void setFixBranchName(String fixBranchName) { this.fixBranchName = fixBranchName; }
+
+    public PromoteRequest getPromoteRequest() { return promoteRequest; }
 
     public String getScytaleEvidenceRef() { return scytaleEvidenceRef; }
     public void setScytaleEvidenceRef(String scytaleEvidenceRef) { this.scytaleEvidenceRef = scytaleEvidenceRef; }

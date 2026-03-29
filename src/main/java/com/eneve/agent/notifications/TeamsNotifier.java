@@ -35,13 +35,22 @@ public class TeamsNotifier {
         }
 
         String status = result.status() != null ? result.status() : "UNKNOWN";
-        String cardStyle = "FAILED".equals(status) ? "attention" : "default";
+        String cardStyle = switch (status) {
+            case "FAILED"            -> "attention";
+            case "AWAITING_APPROVAL" -> "accent";
+            default                  -> "default";
+        };
         String jobLabel = jobTypeLabel(result.jobType());
 
         boolean hasStats = result.filesChanged() > 0 || result.linesChanged() > 0;
         String body = switch (status) {
             case "FAILED" -> "Error: " + escape(result.errorMessage());
             case "STARTED" -> "Summary: " + escape(result.summary());
+            case "AWAITING_APPROVAL" ->
+                    (result.prUrl() != null && !result.prUrl().isBlank()
+                            ? "PR: " + result.prUrl() + "\\n\\n" : "")
+                    + escape(result.summary())
+                    + "\\n\\nPlease review and approve the pull request.";
             default -> // SUCCESS and anything else
                     (result.prUrl() != null && !result.prUrl().isBlank()
                             ? "PR: " + result.prUrl() + "\\n\\n" : "")
@@ -119,15 +128,17 @@ public class TeamsNotifier {
     private static String jobTypeLabel(String jobType) {
         if (jobType == null) return "Job";
         return switch (jobType) {
-            case "FIX" -> "Fix";
-            case "REVIEW" -> "Review";
-            case "FIX_PR" -> "Fix PR";
-            case "REPLY" -> "Reply";
-            case "FIX_COMMENT" -> "Fix Comment";
-            case "HOOK" -> "Hook";
-            case "GENERATE_TESTS" -> "Generate Tests";
-            case "GENERATE_DOCS" -> "Generate Docs";
-            case "UPGRADE" -> "Quarkus Upgrade";
+            case "FIX"             -> "Fix";
+            case "REVIEW"          -> "Review";
+            case "FIX_PR"          -> "Fix PR";
+            case "REPLY"           -> "Reply";
+            case "FIX_COMMENT"     -> "Fix Comment";
+            case "HOOK"            -> "Hook";
+            case "GENERATE_TESTS"  -> "Generate Tests";
+            case "GENERATE_DOCS"   -> "Generate Docs";
+            case "UPGRADE"         -> "Quarkus Upgrade";
+            case "PROMOTE"         -> "Security Promotion";
+            case "AIKIDO_TRIAGE"   -> "Aikido Triage";
             default -> jobType;
         };
     }

@@ -302,7 +302,7 @@ public class JobQueue {
         return switch (jobType) {
             case CHAT                                                         -> chatSemaphore;
             case REPLY, FIX_COMMENT, HOOK                                     -> interactiveSemaphore;
-            case REVIEW, FIX_PR, FIX                                          -> prWorkSemaphore;
+            case REVIEW, FIX_PR, FIX, PROMOTE                                -> prWorkSemaphore;
             case METRICS, QUALITY_REPORT, SYNC_CONFLUENCE,
                  GENERATE_TESTS, GENERATE_DOCS                                -> backgroundSemaphore;
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY                -> reviewSemaphore;

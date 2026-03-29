@@ -4,6 +4,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -11,6 +12,9 @@ import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoService;
+import com.eneve.agent.aikido.AikidoTriageService;
+import com.eneve.agent.model.RunResult;
+import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.upgrade.UpgradeService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -44,10 +48,14 @@ public class AikidoWebhookResource {
 
     private static final Logger LOG = Logger.getLogger(AikidoWebhookResource.class);
 
+    private static final Set<String> ACTIONABLE_SEVERITIES = Set.of("critical", "high");
+
     @Inject UpgradeService upgradeService;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject AikidoService aikidoService;
+    @Inject AikidoTriageService aikidoTriageService;
     @Inject HookEvaluator hookEvaluator;
+    @Inject TeamsNotifier teamsNotifier;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -90,31 +98,110 @@ public class AikidoWebhookResource {
             }
 
             RepoSettings repo = repoOpt.get();
-            LOG.infof("Aikido webhook: matched repo %s/%s for event_type=%s — triggering upgrade check",
+            LOG.infof("Aikido webhook: matched repo %s/%s for event_type=%s",
                     repo.workspace(), repo.repoSlug(), eventType);
 
-            upgradeExecutor.submit(() -> {
-                try {
-                    UpgradeService.UpgradeResult result = upgradeService.checkAndUpgradeOne(
-                            repo.workspace(), repo.repoSlug());
-                    LOG.infof("Aikido-triggered upgrade check for %s/%s: checked=%d, outdated=%d, plans=%d",
-                            repo.workspace(), repo.repoSlug(),
-                            result.checked(), result.outdated(), result.plansCreated());
-                } catch (Exception e) {
-                    LOG.errorf("Aikido-triggered upgrade check failed for %s/%s: %s",
-                            repo.workspace(), repo.repoSlug(), e.getMessage());
+            // Extract vulnerability context from payload
+            String severity = payloadNode.path("severity").asText(
+                    payloadNode.path("risk_level").asText("unknown")).toLowerCase();
+            String issueType = extractIssueType(payloadNode);
+            Integer groupId = extractGroupId(payloadNode);
+
+            // Only new vulnerability events trigger remediation (not "fixed" or "resolved")
+            boolean isNewVulnerability = eventType != null
+                    && !eventType.toLowerCase().contains("fixed")
+                    && !eventType.toLowerCase().contains("resolved");
+
+            // ── Remediation triage for critical/high actionable issues ────────
+            if (isNewVulnerability && ACTIONABLE_SEVERITIES.contains(severity)
+                    && aikidoService.isActionableType(issueType) && groupId != null) {
+
+                // Check for unmapped container (repoUrl null after resolution)
+                String repoUrl = repo.gitPlatformUrl();
+                if (repoUrl == null || repoUrl.isBlank()) {
+                    String containerImage = extractContainerImage(payloadNode);
+                    if (containerImage != null) {
+                        String mapped = aikidoService.findCodeRepoUrlForContainer(containerImage);
+                        if (mapped == null) {
+                            LOG.warnf("Aikido webhook: container image '%s' has no repo mapping — alerting team",
+                                    containerImage);
+                            teamsNotifier.sendNotification(new RunResult(
+                                    null, "AIKIDO_TRIAGE", "FAILED", null, null, null, null,
+                                    null,
+                                    "Unmapped container: " + containerImage
+                                    + " — update container-repo-mapping.json to enable auto-remediation.",
+                                    0, 0));
+                            return ok("skipped", "Unmapped container: " + containerImage);
+                        }
+                        repoUrl = mapped;
+                    }
                 }
-            });
 
-            // Additionally evaluate hooks for Aikido events
-            evaluateAikidoHooks(eventType, repo, payloadNode);
+                final int finalGroupId = groupId;
+                final String finalRepoUrl = repoUrl;
+                final String finalSeverity = severity;
+                final String finalIssueType = issueType;
 
-            Map<String, Object> body = new LinkedHashMap<>();
-            body.put("action", "upgrade_check_started");
-            body.put("workspace", repo.workspace());
-            body.put("repoSlug", repo.repoSlug());
-            body.put("eventType", eventType);
-            return Response.accepted(body).build();
+                upgradeExecutor.submit(() -> {
+                    try {
+                        AikidoTriageService.TriageResult result = aikidoTriageService.handleNewIssue(
+                                finalGroupId, finalRepoUrl, finalSeverity, finalIssueType);
+                        if (result.skipped()) {
+                            LOG.infof("Aikido triage skipped for group %d: %s", finalGroupId, result.skipReason());
+                        } else {
+                            LOG.infof("Aikido triage dispatched job %s for JIRA %s (group=%d)",
+                                    result.jobId(), result.jiraKey(), finalGroupId);
+                        }
+                    } catch (Exception e) {
+                        LOG.errorf("Aikido triage failed for group %d: %s", finalGroupId, e.getMessage());
+                    }
+                });
+
+                // Also run upgrade check and hooks in background
+                upgradeExecutor.submit(() -> {
+                    try {
+                        upgradeService.checkAndUpgradeOne(repo.workspace(), repo.repoSlug());
+                    } catch (Exception e) {
+                        LOG.warnf("Upgrade check failed: %s", e.getMessage());
+                    }
+                });
+                evaluateAikidoHooks(eventType, repo, payloadNode);
+
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("action", "triage_started");
+                body.put("workspace", repo.workspace());
+                body.put("repoSlug", repo.repoSlug());
+                body.put("eventType", eventType);
+                body.put("severity", severity);
+                body.put("groupId", groupId);
+                return Response.accepted(body).build();
+
+            } else {
+                // Not a remediation-eligible event: still run upgrade check and hooks
+                if (!isNewVulnerability) {
+                    LOG.infof("Aikido webhook: event_type=%s is not a new vulnerability — skipping triage", eventType);
+                } else if (!ACTIONABLE_SEVERITIES.contains(severity)) {
+                    LOG.infof("Aikido webhook: severity=%s is below threshold — skipping triage", severity);
+                } else if (!aikidoService.isActionableType(issueType)) {
+                    LOG.infof("Aikido webhook: issueType=%s is not actionable — skipping triage", issueType);
+                }
+
+                upgradeExecutor.submit(() -> {
+                    try {
+                        upgradeService.checkAndUpgradeOne(repo.workspace(), repo.repoSlug());
+                    } catch (Exception e) {
+                        LOG.warnf("Upgrade check failed: %s", e.getMessage());
+                    }
+                });
+                evaluateAikidoHooks(eventType, repo, payloadNode);
+
+                Map<String, Object> body = new LinkedHashMap<>();
+                body.put("action", "upgrade_check_started");
+                body.put("workspace", repo.workspace());
+                body.put("repoSlug", repo.repoSlug());
+                body.put("eventType", eventType);
+                return Response.accepted(body).build();
+            }
 
         } catch (Exception e) {
             LOG.errorf("Aikido webhook processing error: %s", e.getMessage());
@@ -253,6 +340,26 @@ public class AikidoWebhookResource {
             if (container.isTextual()) return container.asText("");
             String img = container.path("image").asText(container.path("name").asText(""));
             if (!img.isBlank()) return img;
+        }
+        return null;
+    }
+
+    private static String extractIssueType(JsonNode payload) {
+        for (String field : new String[]{"type", "issue_type", "category", "scanner",
+                "rule_type", "detection_type", "scan_type", "finding_type"}) {
+            String val = payload.path(field).asText("");
+            if (!val.isBlank()) return val.toLowerCase();
+        }
+        return "unknown";
+    }
+
+    private static Integer extractGroupId(JsonNode payload) {
+        for (String field : new String[]{"group_id", "issue_group_id", "id", "group"}) {
+            JsonNode node = payload.path(field);
+            if (!node.isMissingNode() && node.isNumber()) return node.asInt();
+            if (!node.isMissingNode() && node.isTextual()) {
+                try { return Integer.parseInt(node.asText()); } catch (NumberFormatException ignored) {}
+            }
         }
         return null;
     }

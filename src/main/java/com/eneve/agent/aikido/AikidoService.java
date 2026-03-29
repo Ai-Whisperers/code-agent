@@ -150,6 +150,42 @@ public class AikidoService {
         }
     }
 
+    /**
+     * Looks up all open issue groups and returns the linked JIRA issue key for the specified
+     * group, or {@code null} if no JIRA link is recorded in Aikido.
+     * Used by AikidoTriageService to avoid creating duplicate JIRA tickets.
+     */
+    public String findLinkedJiraKeyForGroup(int groupId) {
+        String json = get("/api/public/v1/open-issue-groups", "list open issues (jira key lookup)");
+        if (json == null) return null;
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode groups = root.isArray() ? root : root.path("data");
+            if (!groups.isArray()) groups = root.path("groups");
+
+            for (JsonNode group : groups) {
+                if (group.path("id").asInt(-1) != groupId) continue;
+
+                // Primary: external_ticket_id / jira_issue_key on the group
+                String ext = group.path("external_ticket_id").asText(
+                        group.path("jira_issue_key").asText(""));
+                if (!ext.isBlank()) return ext;
+
+                // Secondary: tasks array
+                JsonNode tasks = group.path("tasks");
+                if (tasks.isArray()) {
+                    for (JsonNode task : tasks) {
+                        String key = task.path("key").asText(task.path("external_id").asText(""));
+                        if (!key.isBlank()) return key;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("findLinkedJiraKeyForGroup(%d) failed: %s", groupId, e.getMessage());
+        }
+        return null;
+    }
+
     private boolean matchesJiraKey(JsonNode group, String jiraKey) {
         String title = group.path("title").asText("");
         if (title.contains(jiraKey)) return true;
@@ -264,7 +300,7 @@ public class AikidoService {
         return results;
     }
 
-    private boolean isActionableType(String issueType) {
+    public boolean isActionableType(String issueType) {
         if (issueType == null || issueType.isBlank() || "unknown".equals(issueType)) return true;
         return ACTIONABLE_ISSUE_TYPES.contains(issueType.toLowerCase());
     }

@@ -281,6 +281,20 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Cherry-pick a list of commit SHAs onto the current branch in order.
+     * Uses {@code --allow-empty} so identical fixup commits do not abort the promotion.
+     *
+     * @throws IOException if cherry-pick fails (conflict or other error)
+     */
+    public void cherryPick(java.util.List<String> commitShas, long timeoutMinutes)
+            throws IOException, InterruptedException {
+        for (String sha : commitShas) {
+            runGit(timeoutMinutes, "cherry-pick", "--allow-empty", sha);
+            LOG.infof("Cherry-picked %s onto current branch", sha);
+        }
+    }
+
+    /**
      * Pull with rebase to incorporate remote changes before pushing.
      * Used when committing directly to a shared branch to avoid push rejections.
      */

@@ -31,9 +31,11 @@ import com.eneve.agent.agent.model.ChatEvent;
 import com.eneve.agent.agent.service.CommentChatService;
 import com.eneve.agent.model.CommentChatRequest;
 import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.PromoteRequest;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewCommentEntry;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scytale.ScytaleService;
@@ -105,6 +107,9 @@ public class JobsResource {
 
     @Inject
     CommentChatService commentChatService;
+
+    @Inject
+    JiraService jiraService;
 
     @GET
     @Operation(
@@ -952,10 +957,44 @@ public class JobsResource {
             auditService.log("JOBS", "MERGE_COMPLETED", "job", jobId,
                     Map.of("prId", job.getPrId() != null ? job.getPrId() : "unknown"));
 
-            if (issueType != null && isBugType(issueType, bugIssueTypes)
-                    && target != null && !target.equalsIgnoreCase(productionBranch)
-                    && isProtected(productionBranch, protectedBranches)) {
-                schedulePromotion(job, target, productionBranch, jobId);
+            String jiraKey = extractJobJiraKey(job);
+            boolean isMergeToProduction = productionBranch != null && target != null
+                    && target.equalsIgnoreCase(productionBranch);
+
+            if (issueType != null && isBugType(issueType, bugIssueTypes)) {
+                if (isMergeToProduction) {
+                    // Final merge: transition JIRA to Done + SOC2 complete comment
+                    if (jiraKey != null && !jiraKey.isBlank()) {
+                        final String key = jiraKey;
+                        Thread.ofVirtual().start(() -> {
+                            try {
+                                jiraService.transitionToDone(key);
+                                jiraService.addComment(key,
+                                        "Fix fully deployed to " + productionBranch
+                                        + ". SOC2 remediation complete.");
+                            } catch (Exception e) {
+                                LOG.warnf("JIRA update on main merge failed (non-fatal): %s", e.getMessage());
+                            }
+                        });
+                    }
+                } else {
+                    // Develop merge: comment + schedule promotion
+                    if (jiraKey != null && !jiraKey.isBlank()) {
+                        final String key = jiraKey;
+                        Thread.ofVirtual().start(() -> {
+                            try {
+                                jiraService.addComment(key,
+                                        "Fix merged to " + (target != null ? target : "develop")
+                                        + " branch. Promotion to " + productionBranch + " is in progress.");
+                            } catch (Exception e) {
+                                LOG.warnf("JIRA comment on develop merge failed (non-fatal): %s", e.getMessage());
+                            }
+                        });
+                    }
+                    if (target != null && isProtected(productionBranch, protectedBranches)) {
+                        schedulePromotion(job, target, productionBranch, jobId);
+                    }
+                }
             }
 
             return Response.ok(Map.of("status", "merged", "jobId", jobId)).build();
@@ -990,6 +1029,7 @@ public class JobsResource {
         if (job.getRequest() != null) return job.getRequest().jiraKey();
         if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
         if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
+        if (job.getPromoteRequest() != null) return job.getPromoteRequest().jiraKey();
         return null;
     }
 
@@ -1005,18 +1045,45 @@ public class JobsResource {
             }
 
             String jiraKey = extractJobJiraKey(originalJob);
+            // Use the original fix branch for cherry-pick (stored on FIX job)
+            String fixBranchName = originalJob.getFixBranchName();
+            if (fixBranchName == null && originalJob.getRequest() != null) {
+                fixBranchName = originalJob.getRequest().branchName();
+            }
+
+            PromoteRequest promoteRequest = new PromoteRequest(
+                    repoUrl,
+                    jiraKey != null ? jiraKey : "UNKNOWN",
+                    fixBranchName != null ? fixBranchName : "",
+                    originalJob.getPrId(),
+                    toBranch,
+                    originalJob.getAikidoIssueId());
+
             String promotionJobId = UUID.randomUUID().toString();
+            JobRecord promoteJob = new JobRecord(promotionJobId, promoteRequest);
+            promoteJob.setAikidoIssueId(originalJob.getAikidoIssueId());
+            if (jiraKey != null) {
+                promoteJob.setJiraIssueType(originalJob.getJiraIssueType());
+                promoteJob.setJiraPriority(originalJob.getJiraPriority());
+                promoteJob.setJiraCreatedAt(originalJob.getJiraCreatedAt());
+            }
+
+            jobStore.put(promoteJob);
+
             originalJob.setPromotionJobId(promotionJobId);
             jobStore.update(originalJob);
 
-            auditService.log("SOC2", "SOC2_PROMOTION_CREATED", "job", originalJobId,
+            boolean queued = jobQueue.submit(promoteJob);
+
+            auditService.log("SOC2", "SOC2_PROMOTION_STARTED", "job", originalJobId,
                     Map.of("promotionJobId", promotionJobId,
                            "fromBranch", fromBranch,
                            "toBranch", toBranch,
-                           "jiraKey", jiraKey != null ? jiraKey : "unknown"));
+                           "jiraKey", jiraKey != null ? jiraKey : "unknown",
+                           "queued", String.valueOf(queued)));
 
-            LOG.infof("SOC2 promotion placeholder created for job %s: %s → %s (promotionJobId=%s)",
-                    originalJobId, fromBranch, toBranch, promotionJobId);
+            LOG.infof("SOC2 PROMOTE job %s created for %s: %s → %s (queued=%s)",
+                    promotionJobId, originalJobId, fromBranch, toBranch, queued);
         } catch (Exception e) {
             LOG.warnf("Failed to schedule promotion for job %s: %s", originalJobId, e.getMessage());
         }
