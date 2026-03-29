@@ -59,7 +59,8 @@ public class AuditService {
      */
     public void recordSystemEvent(AuditEventType eventType, String entityType, 
                                  String entityId, String action, String details) {
-        AuditEvent event = new AuditEvent(eventType.name(), "system", entityType, entityId, 
+        String eventTypeName = eventType != null ? eventType.name() : null;
+        AuditEvent event = new AuditEvent(eventTypeName, "system", entityType, entityId, 
                                          action, details, true);
         recordEvent(event);
     }
@@ -70,7 +71,8 @@ public class AuditService {
     public void recordSecurityEvent(AuditEventType eventType, String userId, String action, 
                                    String details, String ipAddress, String userAgent, 
                                    String sessionId, boolean success, String errorMessage) {
-        AuditEvent event = new AuditEvent(null, eventType.name(), userId, "security", null, 
+        String eventTypeName = eventType != null ? eventType.name() : null;
+        AuditEvent event = new AuditEvent(null, eventTypeName, userId, "security", null, 
                                          action, details, ipAddress, userAgent, sessionId, 
                                          success, errorMessage, Instant.now());
         recordEvent(event);
@@ -106,7 +108,8 @@ public class AuditService {
     public List<AuditEvent> getEventsByType(AuditEventType eventType, Instant from, 
                                            Instant to, int limit, int offset) {
         try {
-            return auditStore.findByEventType(eventType.name(), from, to, limit, offset);
+            String eventTypeName = eventType != null ? eventType.name() : null;
+            return auditStore.findByEventType(eventTypeName, from, to, limit, offset);
         } catch (Exception e) {
             LOG.errorf("Failed to get events by type %s: %s", eventType, e.getMessage());
             throw e;
@@ -156,7 +159,8 @@ public class AuditService {
      */
     public void recordJobEvent(AuditEventType eventType, String userId, String jobId, 
                               String action, String details) {
-        recordSuccess(eventType.name(), userId, "job", jobId, action, details);
+        String eventTypeName = eventType != null ? eventType.name() : null;
+        recordSuccess(eventTypeName, userId, "job", jobId, action, details);
     }
 
     /**
@@ -164,7 +168,8 @@ public class AuditService {
      */
     public void recordRepoEvent(AuditEventType eventType, String userId, String repoId, 
                                String action, String details) {
-        recordSuccess(eventType.name(), userId, "repository", repoId, action, details);
+        String eventTypeName = eventType != null ? eventType.name() : null;
+        recordSuccess(eventTypeName, userId, "repository", repoId, action, details);
     }
 
     /**
