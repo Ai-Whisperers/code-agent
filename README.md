@@ -143,6 +143,106 @@ Swagger UI is available at `/q/swagger-ui`.
 
 ---
 
+## Project Structure
+
+```
+src/main/java/com/eneve/agent/
+├── RunFixResource.java              # Main fix/upgrade endpoints
+├── MemoryResource.java              # Review memory management
+├── RepoSettingsResource.java        # Repository settings
+├── HooksResource.java               # Automation hooks
+├── AiStatsResource.java             # AI call statistics
+├── agent/                           # Core agent logic
+│   ├── AgentRunner.java             # Main execution engine
+│   ├── ClaudeToolUseLoop.java       # AI tool interaction
+│   ├── JobQueue.java                # Job queue management
+│   ├── JobStore.java                # Job persistence
+│   ├── CommentStore.java            # PR comment tracking
+│   ├── MemoryStore.java             # Review memory persistence
+│   ├── RepoSettingsStore.java       # Repository settings persistence
+│   ├── HookStore.java               # Automation hook persistence
+│   ├── AiCallStore.java             # AI call telemetry storage
+│   ├── BuildValidator.java          # Maven/npm/dotnet validation
+│   ├── HookEvaluator.java           # Automation hook evaluation
+│   ├── IntentClassifier.java        # Comment intent analysis
+│   ├── ReviewCommentProcessor.java  # PR comment processing
+│   ├── AgentPromptBuilder.java      # Dynamic prompt construction
+│   └── LearningExtractor.java       # Memory extraction from reviews
+├── tools/                           # Agent tool implementations
+│   ├── ReadFileTool.java            # File reading capability
+│   ├── WriteFileTool.java           # File writing capability
+│   ├── RunCommandTool.java          # Command execution
+│   ├── ListFilesTool.java           # Directory listing
+│   ├── ToolExecutor.java            # Tool execution engine
+│   ├── ToolRegistry.java            # Tool registration
+│   └── GuardrailConfig.java         # Security restrictions
+├── scm/                            # Source control management
+│   ├── GitPlatformService.java      # SCM abstraction
+│   ├── GitPlatformProducer.java     # Platform selection
+│   ├── bitbucket/                   # Bitbucket implementation
+│   └── azuredevops/                 # Azure DevOps implementation
+├── webhooks/                        # Webhook handlers
+│   ├── JiraWebhookResource.java
+│   ├── BitbucketWebhookResource.java
+│   ├── BitbucketCommentWebhookResource.java
+│   ├── AzureDevOpsWebhookResource.java
+│   └── AzureDevOpsCommentWebhookResource.java
+├── jira/                           # JIRA integration
+│   └── JiraService.java
+├── aikido/                         # Aikido Security integration
+│   ├── AikidoService.java
+│   └── AikidoIssueInfo.java
+├── linter/                         # Static analysis integration
+│   ├── LinterService.java           # Main linter coordinator
+│   ├── LinterRunner.java            # Execution engine
+│   ├── CheckstyleLinter.java        # Java style checking
+│   ├── PmdLinter.java               # Java static analysis
+│   ├── SpotBugsLinter.java          # Java bug detection
+│   ├── EsLintRunner.java            # JavaScript/TypeScript linting
+│   └── DotnetFormatLinter.java      # C# formatting
+├── rules/                          # Cursor rules management
+│   ├── CursorRulesLoader.java       # Rule loading from repos
+│   ├── MdcParser.java               # Markdown parsing
+│   └── MdcRule.java                 # Rule representation
+├── diff/                           # Diff processing
+│   ├── DiffParser.java              # Git diff parsing
+│   ├── DiffFormatter.java           # Diff formatting
+│   ├── ParsedDiffFile.java          # File diff representation
+│   ├── DiffHunk.java                # Diff hunk representation
+│   └── DiffLine.java                # Individual line changes
+├── notifications/                   # External notifications
+│   ├── TeamsNotifier.java           # Microsoft Teams integration
+│   └── N8nWebhookNotifier.java      # n8n workflow integration
+├── security/                        # Security filters
+│   ├── ApiKeyFilter.java            # API key authentication
+│   └── WebhookSignatureFilter.java  # Webhook HMAC verification
+├── workspace/                       # Workspace management
+│   └── WorkspaceContext.java        # Execution context
+└── model/                          # Data transfer objects
+    ├── RunFixRequest.java
+    ├── QuickFixRequest.java
+    ├── AikidoFixRequest.java
+    ├── ReviewPrRequest.java
+    ├── FixPrRequest.java
+    ├── JobRecord.java
+    ├── JobStatus.java
+    ├── JobType.java
+    └── ...
+
+src/main/resources/
+├── application.properties           # Configuration defaults
+├── container-repo-mapping.json     # Container to repo mapping
+└── db/migration/                   # Flyway database migrations
+    ├── V1__create_agent_comments.sql
+    ├── V2__create_ai_calls.sql
+    ├── V3__create_review_memory.sql
+    ├── V4__add_project_to_agent_comments.sql
+    ├── V5__create_repo_settings.sql
+    └── V6__create_automation_hooks.sql
+```
+
+---
+
 ## Database Schema
 
 The application uses PostgreSQL with Flyway migrations. Current tables:
@@ -297,363 +397,175 @@ All configuration is done via environment variables. Key properties:
 - `AIKIDO_CI_API_SECRET` - CI API secret for triggering scans
 
 ### Security
-- `API_KEY` - Shared API key for REST endpoints (optional)
+- `API_KEY` - Shared API key to protect REST endpoints (optional)
 - `WEBHOOK_SECRET_BITBUCKET` - HMAC-SHA256 secret for Bitbucket webhooks (optional)
 - `WEBHOOK_SECRET_AZUREDEVOPS` - HMAC-SHA256 secret for Azure DevOps webhooks (optional)
 - `WEBHOOK_SECRET_JIRA` - HMAC-SHA256 secret for JIRA webhooks (optional)
 
-### Job Queue & Performance
-- `RUN_FIX_MAX_CONCURRENT_JOBS` - Max parallel jobs (default: `3`)
-- `RUN_FIX_MAX_QUEUE_SIZE` - Queue capacity (default: `20`)
-- `REVIEW_WEBHOOK_SKIP_AUTHORS` - Skip PR reviews from these authors (default: `code-agent`)
-- `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` - Only review PRs with this keyword in title (default: none)
+### Review Behavior
+- `REVIEW_WEBHOOK_SKIP_AUTHORS` - Skip auto-review for these authors (default: `code-agent`)
+- `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` - Require keyword in PR title for auto-review
+
+### Job Queue
+- `RUN_FIX_MAX_CONCURRENT_JOBS` - Max parallel fix jobs (default: `3`)
+- `RUN_FIX_MAX_QUEUE_SIZE` - Max job queue size (default: `20`)
 
 ### Agent Guardrails
-- `RUN_FIX_BLOCKED_PATHS` - Paths agent cannot modify (default: `src/main/security,src/main/billing,.github,.env`)
+- `RUN_FIX_BLOCKED_PATHS` - Blocked file paths (default: `src/main/security,src/main/billing,.github,.env`)
 - `RUN_FIX_ALLOWED_COMMANDS` - Allowed shell commands (default: `mvn,git diff,git status,ls,find,cat,dotnet,npm,npx`)
 - `RUN_FIX_MAX_FILES_CHANGED` - Max files per job (default: `10`)
-- `RUN_FIX_MAX_LINES_CHANGED` - Max lines per job (default: `500`)
+- `RUN_FIX_MAX_LINES_CHANGED` - Max lines changed per job (default: `500`)
 - `RUN_FIX_MAX_LOOP_ITERATIONS` - Max AI tool-use iterations (default: `50`)
 - `RUN_FIX_JOB_TIMEOUT_MINUTES` - Job timeout (default: `30`)
 
-### PostgreSQL Database
-- `DATABASE_URL` - JDBC URL (default: `jdbc:postgresql://localhost:5432/code_agent`)
+### Database
+- `DATABASE_URL` - PostgreSQL connection URL (default: `jdbc:postgresql://localhost:5432/code_agent`)
 - `DATABASE_USER` - Database username (default: `code_agent`)
 - `DATABASE_PASSWORD` - Database password
 
-### Linter/SAST
-- `LINTER_ENABLED` - Enable linting (default: `true`)
-- `LINTER_CHECKSTYLE_ENABLED` - Enable Checkstyle (default: `true`)
-- `LINTER_PMD_ENABLED` - Enable PMD (default: `true`)
-- `LINTER_SPOTBUGS_ENABLED` - Enable SpotBugs (default: `true`)
-- `LINTER_ESLINT_ENABLED` - Enable ESLint (default: `true`)
-- `LINTER_DOTNET_FORMAT_ENABLED` - Enable dotnet format (default: `true`)
-- `LINTER_MAX_FIX_ITERATIONS` - Max fix attempts (default: `2`)
-- `LINTER_FAIL_ON_NEW_ISSUES` - Fail build on new issues (default: `false`)
+### Linting & SAST
+- `LINTER_ENABLED` - Enable linting integration (default: `true`)
+- `LINTER_CHECKSTYLE_ENABLED` - Enable Checkstyle for Java (default: `true`)
+- `LINTER_PMD_ENABLED` - Enable PMD for Java (default: `true`)
+- `LINTER_SPOTBUGS_ENABLED` - Enable SpotBugs for Java (default: `true`)
+- `LINTER_ESLINT_ENABLED` - Enable ESLint for JavaScript/TypeScript (default: `true`)
+- `LINTER_DOTNET_FORMAT_ENABLED` - Enable dotnet format for C# (default: `true`)
+- `LINTER_MAX_FIX_ITERATIONS` - Max linter fix attempts (default: `2`)
+- `LINTER_FAIL_ON_NEW_ISSUES` - Fail job on new linter issues (default: `false`)
 - `LINTER_TIMEOUT_MINUTES` - Linter timeout (default: `10`)
 
 ---
 
-### POST /run-fix (full control)
+## Deployment
 
-```json
-{
-  "repoUrl": "https://bitbucket.org/workspace/repo.git",
-  "branchName": "agent/PROJ-123-upgrade-log4j",
-  "jiraKey": "PROJ-123",
-  "prompt": "Upgrade log4j from 2.19.0 to 2.23.1 in this Maven project",
-  "targetBranch": "main",
-  "n8nWebhookUrl": "https://n8n.example.com/webhook/abc",
-  "rulesRepoUrl": "https://bitbucket.org/workspace/cursor-rules.git",
-  "ruleNames": ["java-conventions", "maven-standards"],
-  "extraRules": "Do not modify test files"
-}
+### Docker
+
+The application is containerized with a multi-stage Dockerfile:
+
+```dockerfile
+# Stage 1: Build with JDK 21 + Maven
+FROM eclipse-temurin:21-jdk AS build
+# Build Quarkus application
+
+# Stage 2: Runtime with JRE 21 + build tools
+FROM eclipse-temurin:21-jre
+# Includes: Git, Maven, Node.js 20, .NET SDK 8.0
 ```
 
-Required: `repoUrl`, `branchName`, `jiraKey`. The `prompt` is optional — if omitted, it's fetched from the JIRA ticket description.
+**Runtime Dependencies:**
+- **Git** - Repository cloning and operations
+- **Maven** - Java project validation 
+- **Node.js 20** - ESLint execution for JavaScript/TypeScript
+- **.NET SDK 8.0** - dotnet format execution for C#
+- **Java 21** - Application runtime
 
-### POST /quick-fix (simplified)
-
-```json
-{
-  "repoUrl": "https://bitbucket.org/csarenergy/ms-meter.git",
-  "jiraKey": "JTP-10967"
-}
-```
-
-Auto-generates branch name from JIRA summary (e.g. `agent/JTP-10967-upgrade-cxf-xjc-boolean`), uses `develop` as base branch, fetches prompt from JIRA description.
-
-### POST /aikido-fix (Aikido Security integration)
-
-```json
-{
-  "jiraKey": "JTP-10967"
-}
-```
-
-The simplest endpoint — only a JIRA key is needed. The agent:
-
-1. **Resolves the Aikido issue** using three strategies (in order):
-   - Search Aikido open issues linked to the JIRA key
-   - Parse the JIRA description for an Aikido URL (e.g. `app.aikido.dev/...?groupId=123`)
-   - Use `aikidoGroupId` if provided directly
-2. **Fetches vulnerability context** from Aikido: package name, current/fixed versions, CVE details (severity, CVSS, description), and changelog summary
-3. **Resolves the repository URL** from Aikido (or override with `repoUrl`)
-4. **Builds an enriched prompt** with full vulnerability details for Claude
-5. **Auto-generates** the branch name and uses `develop` as base branch
-
-Optional fields: `aikidoGroupId` (skip JIRA lookup), `repoUrl` (override Aikido repo), `ruleNames` (load specific rules from the shared rules repo configured via `RULES_REPO_URL`), `extraRules` (inline additional instructions appended to the system prompt).
-
-Example with rules:
-```json
-{
-  "jiraKey": "JTP-10967",
-  "ruleNames": ["java-conventions", "security-standards"],
-  "extraRules": "Ensure backward compatibility with Java 17"
-}
-```
-
-Response:
-```json
-{
-  "jobId": "550e8400-...",
-  "branch": "agent/JTP-10967-cxf-xjc-boolean-1.1.0",
-  "aikidoIssue": {
-    "groupId": 22926095,
-    "package": "cxf-xjc-boolean",
-    "currentVersion": "1.0.0",
-    "fixedVersion": "1.1.0",
-    "cve": "CVE-2024-XXXXX",
-    "severity": "critical"
-  }
-}
-```
-
-### POST /review-pr (AI code review)
-
-```json
-{
-  "repoUrl": "https://bitbucket.org/workspace/repo.git",
-  "prId": "42",
-  "targetBranch": "main",
-  "jiraKey": "PROJ-123",
-  "rulesRepoUrl": "https://bitbucket.org/workspace/cursor-rules.git",
-  "ruleNames": ["java-conventions"],
-  "extraRules": "Pay special attention to thread safety in concurrent code"
-}
-```
-
-Required: `repoUrl`, `prId`. The agent clones the repo, computes the diff against the target branch, and runs an AI-powered review covering security, design, code quality, testing coverage, performance, and best practices. Findings are posted as inline comments on the PR.
-
-### POST /fix-pr (auto-fix review comments)
-
-```json
-{
-  "repoUrl": "https://bitbucket.org/workspace/repo.git",
-  "prId": "42",
-  "jiraKey": "PROJ-123"
-}
-```
-
-Required: `repoUrl`, `prId`. Fetches review comments from the PR, runs the AI agent to address each comment, and pushes fixes to the PR branch.
-
-### POST /jobs/{jobId}/reject
-
-```json
-{
-  "reason": "Changes are too broad"
-}
-```
-
-### POST /webhooks/jira (webhook)
-
-Receives JIRA Cloud webhook payloads. No request body to construct — JIRA sends this automatically.
-
-**Trigger:** assign any issue to the agent user in JIRA.
-
-**Response (job triggered):**
-```json
-{
-  "action": "job_triggered",
-  "jobId": "...",
-  "jiraKey": "JTP-10967",
-  "branch": "agent/JTP-10967-cxf-xjc-boolean-fix"
-}
-```
-
-**Response (ignored):**
-```json
-{
-  "action": "ignored",
-  "reason": "Not assigned to agent user"
-}
-```
-
-### POST /webhooks/bitbucket/pull-request (auto-review)
-
-Receives Bitbucket Cloud webhook payloads for `pullrequest:created` and `pullrequest:updated` events. Automatically triggers an AI code review job. Skips PRs authored by the agent itself (configurable via `REVIEW_WEBHOOK_SKIP_AUTHORS`).
-
-### POST /webhooks/bitbucket/pull-request-comment (conversational reply)
-
-Receives Bitbucket Cloud webhook payloads for `pullrequest:comment_created` events. When a developer replies to one of the agent's review comments, the agent classifies the intent (fix request vs. discussion) and triggers the appropriate job. Supports a `/learn` command to store team preferences for future reviews.
-
-### POST /webhooks/azuredevops/pull-request (auto-review)
-
-Receives Azure DevOps Service Hook payloads for `git.pullrequest.created` and `git.pullrequest.updated` events. Same behavior as the Bitbucket PR webhook.
-
-### POST /webhooks/azuredevops/pull-request-comment (conversational reply)
-
-Receives Azure DevOps Service Hook payloads for PR comment events. Same behavior as the Bitbucket comment webhook.
-
-### POST /sync-jira (active polling)
-
-No request body needed. Searches JIRA for all open issues (`statusCategory != Done`) with the configured label (default: `WALL-E`) and queues fix jobs for any that don't already have an active job in the queue.
-
-Useful as a catch-up mechanism (e.g. via a cron/scheduler) to pick up issues that were labelled while the agent was down, or as a manual trigger. Just add the `WALL-E` label to any JIRA issue to have the agent pick it up on the next sync.
-
+**Build & Deploy:**
 ```bash
-curl -X POST http://localhost:8080/sync-jira
+mvn clean package
+docker build -t code-agent-runner .
+docker run -p 8080:8080 code-agent-runner
 ```
 
-**Response:**
-```json
-{
-  "found": 5,
-  "queued": 2,
-  "queuedJobs": [
-    { "key": "JTP-10967", "jobId": "...", "branch": "agent/JTP-10967-upgrade-log4j" },
-    { "key": "JTP-10980", "jobId": "...", "branch": "agent/JTP-10980-fix-null-check" }
-  ],
-  "skipped": [
-    { "key": "JTP-10950", "reason": "Active job exists" },
-    { "key": "JTP-10960", "reason": "Active job exists" }
-  ],
-  "errors": []
-}
-```
-
-### Automation Hooks System
-
-**NEW:** The agent now supports configurable automation hooks that can trigger jobs based on PR events or schedules.
-
-#### Built-in Hooks
-
-The system comes with one pre-configured hook:
-- `update-readme` - Automatically updates README.md when a PR is merged to develop
-
-#### Hook Configuration
-
-Create a new automation hook:
-
-```json
-{
-  "name": "security-audit",
-  "description": "Run security audit on main branch weekly",
-  "enabled": true,
-  "triggerType": "pr_event",
-  "prEvent": "pullrequest:fulfilled",
-  "branchPattern": "^main$",
-  "actionType": "FIX",
-  "prompt": "Run a comprehensive security audit and fix any issues found",
-  "ruleNames": ["security-standards"],
-  "targetBranch": "main",
-  "commitDirect": false
-}
-```
-
-**Trigger Types:**
-- `pr_event` - Triggered by PR events (create, update, merge, etc.)
-- `schedule` - Triggered by cron expression (future enhancement)
-
-**PR Events:**
-- `pullrequest:created` - New PR created
-- `pullrequest:updated` - PR updated (new commits)
-- `pullrequest:fulfilled` - PR merged
-- `pullrequest:rejected` - PR declined
-
-**Action Types:**
-- `FIX` - Run agent fix job
-- `REVIEW` - Run agent review job
-
-**Branch Pattern:** Regex pattern to match target branches (e.g., `^main$`, `^feature/.*$`)
-
-### AI Statistics & Cost Tracking
-
-**NEW:** Track AI usage and costs with detailed analytics:
-
+**Environment Variables:**
+Set required environment variables before running:
 ```bash
-# Get recent AI calls with pagination
-GET /stats/ai-calls?limit=50&offset=0&jobType=FIX&from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
-
-# Get aggregated summary by model and job type
-GET /stats/ai-calls/summary?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
-
-# Get all AI calls for a specific job with cost estimate
-GET /stats/ai-calls/by-job/550e8400-e29b-41d4-a716-446655440000
-
-# Get daily aggregation for time-series charts
-GET /stats/ai-calls/daily?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
+export ANTHROPIC_API_KEY=your-claude-key
+export JIRA_USER=your@email.com
+export JIRA_API_TOKEN=your-jira-token
+export BITBUCKET_USER=your-user
+export BITBUCKET_APP_PASSWORD=your-app-password
+export DATABASE_URL=jdbc:postgresql://db:5432/code_agent
+export DATABASE_PASSWORD=your-db-password
 ```
-
-**Response example:**
-```json
-{
-  "jobId": "550e8400-...",
-  "calls": [...],
-  "totalCalls": 15,
-  "totalInputTokens": 125000,
-  "totalOutputTokens": 8500,
-  "totalCacheWriteTokens": 50000,
-  "totalCacheReadTokens": 75000,
-  "totalDurationMs": 45000,
-  "estimatedCostUsd": 1.85
-}
-```
-
-### Container-to-Repository Mapping
-
-**Enhanced:** The system includes a comprehensive mapping of Docker container images to source code repositories for Aikido integration:
-
-```json
-{
-  "mappings": {
-    "julesenergy/ms-meter": {
-      "repoUrl": "https://bitbucket.org/csarenergy/ms-meter.git",
-      "codeRepo": "ms-meter",
-      "confidence": "medium"
-    }
-  }
-}
-```
-
-This mapping enables automatic repository resolution when processing Aikido security vulnerabilities.
-
-### Multi-Platform Support
-
-The agent supports both **Bitbucket Cloud** and **Azure DevOps**:
-
-- **Bitbucket Cloud:** Full webhook support for PR events and comments
-- **Azure DevOps:** Service hooks for PR events and thread comments
-- **Linting:** Supports Java (Checkstyle, PMD, SpotBugs), JavaScript (ESLint), and .NET (dotnet format)
-- **Build Systems:** Maven, npm/npx, and .NET CLI
 
 ### Health & Monitoring
 
-```bash
-GET /health
-```
+- **Health Check:** `GET /q/health` - Readiness and liveness probes
+- **Metrics:** Available via Quarkus SmallRye Health integration
+- **Swagger UI:** Available at `/q/swagger-ui` for API documentation
+- **AI Cost Tracking:** Built-in token usage and cost estimation
 
-Returns system health including:
-- Queue status (active jobs, queue size, available slots)
-- Database connectivity
-- External service status
+---
 
-### Development
+## Key Features
 
-**Java 17** is required. The project uses:
-- **Quarkus 3.23.0.CR1** - Reactive web framework
-- **PostgreSQL** - Primary database with Flyway migrations
-- **Anthropic Claude** - AI model integration
-- **Maven** - Build system
+### 🤖 AI-Powered Code Changes
+- **Claude Sonnet 4.0** integration with tool-use capabilities
+- **Guardrails** prevent access to sensitive paths and commands
+- **Build validation** ensures changes don't break Maven/npm/dotnet builds
+- **Cost tracking** monitors token usage and API costs
 
-**Build:**
-```bash
-mvn clean package
-```
+### 🔍 Code Review & Quality
+- **Automated PR reviews** with inline comments
+- **Review memory** learns team preferences over time
+- **Static analysis** integration (Checkstyle, PMD, SpotBugs, ESLint, dotnet format)
+- **Security-focused** reviews with vulnerability detection
 
-**Run tests:**
-```bash
-mvn test
-```
+### 🚀 Multi-Platform SCM Support
+- **Bitbucket Cloud** - Full PR lifecycle management
+- **Azure DevOps** - Full PR lifecycle management  
+- **Git operations** - Clone, branch, commit, push
 
-**Local development:**
-```bash
-mvn quarkus:dev
-```
+### 📋 JIRA Integration
+- **Automatic issue sync** via webhooks
+- **Status transitions** (In Review → Done/Rejected)
+- **Worklog tracking** for time estimation
+- **Aikido Security** integration for vulnerability context
 
-**Docker build:**
-```bash
-docker build -t code-agent-runner .
-```
+### ⚙️ Flexible Automation
+- **Automation hooks** for custom triggers (PR events, schedules)
+- **Repository settings** for per-repo configuration
+- **Cursor rules** integration for coding standards
+- **Webhook support** for external integrations
 
-The application exposes health checks, metrics, and Swagger UI for API documentation at `/q/swagger-ui`.
+### 📊 Observability
+- **Job queue monitoring** with status tracking
+- **AI call telemetry** with cost analytics
+- **Review statistics** and team insights
+- **Health checks** for container orchestration
+
+---
+
+## Getting Started
+
+1. **Prerequisites:**
+   - PostgreSQL database
+   - Claude API key from Anthropic
+   - JIRA Cloud instance with API access
+   - Bitbucket or Azure DevOps with app credentials
+
+2. **Local Development:**
+   ```bash
+   # Set environment variables
+   cp application.properties application-local.properties
+   # Edit application-local.properties with your credentials
+   
+   # Run database migrations
+   mvn flyway:migrate
+   
+   # Start in dev mode
+   mvn quarkus:dev
+   ```
+
+3. **Production Deployment:**
+   ```bash
+   # Build container
+   mvn clean package
+   docker build -t code-agent-runner .
+   
+   # Run with environment variables
+   docker run -d --name code-agent \
+     -p 8080:8080 \
+     -e ANTHROPIC_API_KEY=your-key \
+     -e DATABASE_URL=jdbc:postgresql://db:5432/code_agent \
+     code-agent-runner
+   ```
+
+4. **First Job:**
+   ```bash
+   curl -X POST http://localhost:8080/quick-fix \
+     -H "Content-Type: application/json" \
+     -d '{"jiraKey": "PROJ-123", "repoUrl": "https://bitbucket.org/workspace/repo"}'
+   ```
+
+For detailed API documentation, visit `/q/swagger-ui` after starting the application.
