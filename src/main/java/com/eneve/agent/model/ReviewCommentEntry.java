@@ -13,5 +13,7 @@ public record ReviewCommentEntry(
         /** ISO-8601 timestamp of when the finding was marked resolved, or null if still open. */
         String resolvedAt,
         /** Display name / username of whoever resolved the finding, or null if still open. */
-        String resolvedBy
+        String resolvedBy,
+        /** ID of the parent comment this is a reply to; 0 means this is a root (top-level) comment. */
+        long parentId
 ) {}

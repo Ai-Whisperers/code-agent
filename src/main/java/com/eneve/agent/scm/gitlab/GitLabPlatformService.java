@@ -375,21 +375,26 @@ public class GitLabPlatformService implements GitPlatformService {
                         JsonNode notes = discussion.path("notes");
                         if (!notes.isArray()) continue;
 
+                        // The first note in the discussion is the root; subsequent notes are replies.
+                        long firstNoteId = 0L;
                         for (JsonNode note : notes) {
+                            long noteId = note.path("id").asLong(0);
+                            if (firstNoteId == 0L) firstNoteId = noteId;
+
                             String author = note.path("author").path("username").asText("");
                             if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
 
                             String content = note.path("body").asText("").trim();
                             if (content.isEmpty()) continue;
 
-                            long noteId = note.path("id").asLong(0);
+                            long parentId = (noteId == firstNoteId) ? 0L : firstNoteId;
                             JsonNode position = note.path("position");
                             if (!position.isMissingNode() && position.has("new_path")) {
                                 String file = position.path("new_path").asText("");
                                 int line = position.path("new_line").asInt(0);
-                                comments.add(new AgentComment(noteId, file, line, content));
+                                comments.add(new AgentComment(noteId, file, line, content, parentId));
                             } else {
-                                comments.add(new AgentComment(noteId, "", 0, content));
+                                comments.add(new AgentComment(noteId, "", 0, content, parentId));
                             }
                         }
                     }

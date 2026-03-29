@@ -364,7 +364,8 @@ public class JobsResource {
                         c.id(), c.filePath(), c.line(), c.content(),
                         ri.resolved(),
                         ri.resolvedAt() != null ? ri.resolvedAt().toString() : null,
-                        ri.resolvedBy()));
+                        ri.resolvedBy(),
+                        c.parentId()));
             }
         } catch (Exception e) {
             LOG.warnf("Could not fetch PR comments for job %s: %s", jobId, e.getMessage());

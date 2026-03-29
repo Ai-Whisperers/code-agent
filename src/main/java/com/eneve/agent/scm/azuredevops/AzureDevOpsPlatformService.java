@@ -366,6 +366,16 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                     JsonNode threadComments = thread.path("comments");
                     if (!threadComments.isArray()) continue;
 
+                    // The first comment in the thread is the root (parentCommentId == 0).
+                    long firstCommentId = 0L;
+                    for (JsonNode c : threadComments) {
+                        long parentCommentId = c.path("parentCommentId").asLong(0);
+                        if (parentCommentId == 0) {
+                            firstCommentId = c.path("id").asLong(0);
+                            break;
+                        }
+                    }
+
                     for (JsonNode c : threadComments) {
                         String uniqueName = c.path("author").path("uniqueName").asText("");
                         if (agentUser().isEmpty() || !uniqueName.equalsIgnoreCase(agentUser())) continue;
@@ -374,13 +384,16 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
                         if (content.isEmpty()) continue;
 
                         long commentId = c.path("id").asLong(0);
+                        long parentCommentId = c.path("parentCommentId").asLong(0);
+                        // Use the thread root id as parentId for replies; 0 means this is the root.
+                        long parentId = (parentCommentId == 0) ? 0L : firstCommentId;
                         JsonNode ctx = thread.path("threadContext");
                         if (!ctx.isMissingNode() && ctx.has("filePath")) {
                             String file = ctx.path("filePath").asText("");
                             int line = ctx.path("rightFileStart").path("line").asInt(0);
-                            comments.add(new AgentComment(commentId, file, line, content));
+                            comments.add(new AgentComment(commentId, file, line, content, parentId));
                         } else {
-                            comments.add(new AgentComment(commentId, "", 0, content));
+                            comments.add(new AgentComment(commentId, "", 0, content, parentId));
                         }
                     }
                 }
