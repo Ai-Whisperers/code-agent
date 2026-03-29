@@ -1,7 +1,5 @@
 package com.eneve.agent;
 
-import com.eneve.agent.agent.store.JobStore;
-import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.scope.ScopeService;
 import com.eneve.agent.scope.ScopeService.ActiveJobExistsException;
 import com.eneve.agent.scope.ScopeService.ImprovementGenerationException;
@@ -12,7 +10,6 @@ import com.eneve.agent.scope.ScopeService.ScopeNotFoundException;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
-import org.jboss.logging.Logger;
 import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -36,17 +33,10 @@ import java.util.regex.Pattern;
 @RolesAllowed({"app_staff", "app_developer", "app_admin"})
 public class ScopeResource {
 
-    private static final Logger LOG = Logger.getLogger(ScopeResource.class);
     private static final Pattern ISSUE_KEY_PATTERN = Pattern.compile("^[A-Z][A-Z0-9_]+-[0-9]+$");
 
     @Inject
     ScopeService scopeService;
-
-    @Inject
-    AuditService auditService;
-
-    @Inject
-    JobStore jobStore;
 
     // ─── CRUD ───────────────────────────────────────────────────────────────
 
@@ -75,9 +65,6 @@ public class ScopeResource {
                 strOf(body, "featureIssuetype"),
                 strOf(body, "userstoryIssuetype"));
 
-        auditService.log("SCOPE", "SCOPE_CREATED", "scope", result.scope().id(),
-                Map.of("name", name, "labels", labels, "itemsSynced", result.itemsSynced()));
-
         Map<String, Object> resp = scopeResponse(result.scope(), result.itemsSynced());
         if (result.itemsSynced() == 0) {
             resp.put("warning", "No epics found for the given labels");
@@ -98,8 +85,6 @@ public class ScopeResource {
                     strOf(body, "epicIssuetype"),
                     strOf(body, "featureIssuetype"),
                     strOf(body, "userstoryIssuetype"));
-            auditService.log("SCOPE", "SCOPE_UPDATED", "scope", id,
-                    Map.of("name", name, "labels", labels));
             return Response.ok(updated).build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
@@ -128,7 +113,6 @@ public class ScopeResource {
     public Response deleteScope(@PathParam("id") String id) {
         try {
             scopeService.deleteScope(id);
-            auditService.log("SCOPE", "SCOPE_DELETED", "scope", id);
             return Response.noContent().build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
@@ -187,10 +171,7 @@ public class ScopeResource {
             return badRequest("Invalid issue key format");
         }
         try {
-            Object result = scopeService.refreshItem(scopeId, issueKey);
-            auditService.log("SCOPE", "ITEM_REFRESHED", "scope_item", issueKey,
-                    Map.of("scopeId", scopeId));
-            return Response.ok(result).build();
+            return Response.ok(scopeService.refreshItem(scopeId, issueKey)).build();
         } catch (ScopeNotFoundException | JiraIssueNotFoundException e) {
             return notFound(e.getMessage());
         }
@@ -202,10 +183,7 @@ public class ScopeResource {
     @Path("/{id}/sync")
     public Response syncScope(@PathParam("id") String scopeId) {
         try {
-            int itemsSynced = scopeService.syncScope(scopeId);
-            auditService.log("SCOPE", "SCOPE_SYNCED", "scope", scopeId,
-                    Map.of("itemsSynced", itemsSynced));
-            return Response.ok(Map.of("itemsSynced", itemsSynced)).build();
+            return Response.ok(Map.of("itemsSynced", scopeService.syncScope(scopeId))).build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
         }
@@ -221,10 +199,7 @@ public class ScopeResource {
             return badRequest("Invalid issue key format");
         }
         try {
-            String jobId = scopeService.enqueueReview(scopeId, issueKey);
-            auditService.log("SCOPE", "REVIEW_ENQUEUED", "scope_item", issueKey,
-                    Map.of("scopeId", scopeId, "jobId", jobId));
-            return Response.accepted(Map.of("jobId", jobId)).build();
+            return Response.accepted(Map.of("jobId", scopeService.enqueueReview(scopeId, issueKey))).build();
         } catch (ScopeNotFoundException | JiraIssueNotFoundException e) {
             return notFound(e.getMessage());
         } catch (ItemOverriddenException e) {
@@ -240,11 +215,6 @@ public class ScopeResource {
                                @QueryParam("force") boolean force) {
         try {
             ScopeService.ReviewAllResult result = scopeService.enqueueReviewAll(scopeId, force);
-            auditService.log("SCOPE", "REVIEW_ALL_ENQUEUED", "scope", scopeId,
-                    Map.of("jobsEnqueued", result.jobsEnqueued(),
-                           "jobsSkipped",  result.jobsSkipped(),
-                           "jobsUnchanged", result.jobsUnchanged(),
-                           "force", force));
             Map<String, Object> resp = new LinkedHashMap<>();
             resp.put("jobsEnqueued",  result.jobsEnqueued());
             resp.put("jobsSkipped",   result.jobsSkipped());
@@ -264,10 +234,8 @@ public class ScopeResource {
             return notFound("Scope not found");
         }
         try {
-            long count = jobStore.countActiveReviewJobsForRoadmap(scopeId);
-            return Response.ok(Map.of("count", count)).build();
+            return Response.ok(Map.of("count", scopeService.countActiveReviewJobs(scopeId))).build();
         } catch (Exception e) {
-            LOG.errorf("Failed to count active review jobs for scope %s: %s", scopeId, e.getMessage());
             return Response.serverError().entity(Map.of("error", "Failed to retrieve active review count")).build();
         }
     }
@@ -290,8 +258,6 @@ public class ScopeResource {
         try {
             String updatedBy = sc.getUserPrincipal() != null ? sc.getUserPrincipal().getName() : null;
             scopeService.setOverride(scopeId, issueKey, status, updatedBy);
-            auditService.log("SCOPE", "OVERRIDE_SET", "scope_item", issueKey,
-                    Map.of("scopeId", scopeId, "status", status));
             return Response.ok(Map.of("scopeId", scopeId, "issueKey", issueKey, "status", status)).build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
@@ -307,8 +273,6 @@ public class ScopeResource {
         }
         try {
             scopeService.clearOverride(scopeId, issueKey);
-            auditService.log("SCOPE", "OVERRIDE_CLEARED", "scope_item", issueKey,
-                    Map.of("scopeId", scopeId));
             return Response.noContent().build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
@@ -325,10 +289,7 @@ public class ScopeResource {
             return badRequest("Invalid issue key format");
         }
         try {
-            Object proposal = scopeService.improveItem(scopeId, issueKey);
-            auditService.log("SCOPE", "PROPOSAL_CREATED", "scope_item", issueKey,
-                    Map.of("scopeId", scopeId));
-            return Response.ok(proposal).build();
+            return Response.ok(scopeService.improveItem(scopeId, issueKey)).build();
         } catch (ScopeNotFoundException | JiraIssueNotFoundException e) {
             return notFound(e.getMessage());
         } catch (ImprovementGenerationException e) {
@@ -356,15 +317,12 @@ public class ScopeResource {
                                    @PathParam("proposalId") String proposalId,
                                    Map<String, String> body) {
         try {
-            Object updated = scopeService.updateProposal(
+            return Response.ok(scopeService.updateProposal(
                     scopeId, proposalId,
                     body.getOrDefault("proposedSummary",     ""),
                     body.getOrDefault("proposedDescription", ""),
                     body.getOrDefault("proposedCriteria",    ""),
-                    body.getOrDefault("proposedTechnical",   ""));
-            auditService.log("SCOPE", "PROPOSAL_UPDATED", "scope_proposal", proposalId,
-                    Map.of("scopeId", scopeId));
-            return Response.ok(updated).build();
+                    body.getOrDefault("proposedTechnical",   ""))).build();
         } catch (ProposalNotFoundException e) {
             return notFound(e.getMessage());
         }
@@ -375,10 +333,7 @@ public class ScopeResource {
     public Response acceptProposal(@PathParam("id") String scopeId,
                                    @PathParam("proposalId") String proposalId) {
         try {
-            Object result = scopeService.acceptProposal(scopeId, proposalId);
-            auditService.log("SCOPE", "PROPOSAL_ACCEPTED", "scope_proposal", proposalId,
-                    Map.of("scopeId", scopeId));
-            return Response.ok(result).build();
+            return Response.ok(scopeService.acceptProposal(scopeId, proposalId)).build();
         } catch (ProposalNotFoundException | ScopeNotFoundException e) {
             return notFound(e.getMessage());
         } catch (ImprovementGenerationException e) {
@@ -391,10 +346,7 @@ public class ScopeResource {
     public Response rejectProposal(@PathParam("id") String scopeId,
                                    @PathParam("proposalId") String proposalId) {
         try {
-            Object result = scopeService.rejectProposal(scopeId, proposalId);
-            auditService.log("SCOPE", "PROPOSAL_REJECTED", "scope_proposal", proposalId,
-                    Map.of("scopeId", scopeId));
-            return Response.ok(result).build();
+            return Response.ok(scopeService.rejectProposal(scopeId, proposalId)).build();
         } catch (ProposalNotFoundException e) {
             return notFound(e.getMessage());
         }
@@ -406,8 +358,6 @@ public class ScopeResource {
                                    @PathParam("proposalId") String proposalId) {
         try {
             scopeService.deleteProposal(scopeId, proposalId);
-            auditService.log("SCOPE", "PROPOSAL_DELETED", "scope_proposal", proposalId,
-                    Map.of("scopeId", scopeId));
             return Response.noContent().build();
         } catch (ProposalNotFoundException e) {
             return notFound(e.getMessage());
@@ -432,8 +382,6 @@ public class ScopeResource {
                                 @PathParam("productId") String productId) {
         try {
             scopeService.linkProduct(scopeId, productId);
-            auditService.log("SCOPE", "PRODUCT_LINKED", "scope", scopeId,
-                    Map.of("productId", productId));
             return Response.ok(scopeService.listLinkedProducts(scopeId)).build();
         } catch (ScopeNotFoundException e) {
             return notFound(e.getMessage());
@@ -446,8 +394,6 @@ public class ScopeResource {
                                   @PathParam("productId") String productId) {
         try {
             scopeService.unlinkProduct(scopeId, productId);
-            auditService.log("SCOPE", "PRODUCT_UNLINKED", "scope", scopeId,
-                    Map.of("productId", productId));
             return Response.noContent().build();
         } catch (ScopeNotFoundException e) {
             return notFound(e.getMessage());
@@ -487,7 +433,6 @@ public class ScopeResource {
      * Accepts both {@code List<String>} (JSON array) and {@code String} (single value).
      * The legacy {@code label} field is also accepted for backward compatibility.
      */
-    @SuppressWarnings("unchecked")
     private static List<String> labelsOf(Map<String, Object> body) {
         Object v = body.get("labels");
         if (v instanceof List<?> list) {

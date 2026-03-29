@@ -96,12 +96,13 @@ public class AiCallStore {
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
                        stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
-                       prompt_text, response_text
+                       NULL AS prompt_text, NULL AS response_text
                 FROM ai_calls WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
         appendFilters(sql, params, jobType, from, to);
-        sql.append(" ORDER BY created_at DESC LIMIT ? OFFSET ?");
+        // Secondary sort on id keeps pagination stable when rows share the same created_at timestamp.
+        sql.append(" ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?");
         params.add(limit);
         params.add(offset);
 

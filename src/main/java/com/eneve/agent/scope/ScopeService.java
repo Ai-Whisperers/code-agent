@@ -28,6 +28,7 @@ import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.ScopeItem;
 import com.eneve.agent.model.ScopeProposal;
 import com.eneve.agent.model.ScopeRecord;
+import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -82,6 +83,7 @@ public class ScopeService {
     @Inject ClaudeToolUseLoop toolLoop;
     @Inject CustomerRegistryStore customerRegistryStore;
     @Inject AgroalDataSource dataSource;
+    @Inject AuditService auditService;
 
     // ─── Exception types ─────────────────────────────────────────────────────
 
@@ -154,6 +156,8 @@ public class ScopeService {
 
         ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story);
         int itemsSynced = syncScope(scope.id());
+        auditService.log("SCOPE", "SCOPE_CREATED", "scope", scope.id(),
+                Map.of("name", name, "labels", labels, "itemsSynced", itemsSynced));
         return new CreateScopeResult(scope, itemsSynced);
     }
 
@@ -176,7 +180,10 @@ public class ScopeService {
         List<String> effectiveLabels = (labels != null && !labels.isEmpty()) ? labels : existing.labels();
 
         scopeStore.update(id, name, effectiveLabels, epic, feature, story);
-        return scopeStore.findById(id).orElseThrow(() -> new ScopeNotFoundException(id));
+        ScopeRecord updated = scopeStore.findById(id).orElseThrow(() -> new ScopeNotFoundException(id));
+        auditService.log("SCOPE", "SCOPE_UPDATED", "scope", id,
+                Map.of("name", name, "labels", effectiveLabels));
+        return updated;
     }
 
     /**
@@ -206,6 +213,7 @@ public class ScopeService {
     public void deleteScope(String id) {
         if (scopeStore.findById(id).isEmpty()) throw new ScopeNotFoundException(id);
         scopeStore.delete(id);
+        auditService.log("SCOPE", "SCOPE_DELETED", "scope", id);
     }
 
     // ─── Sync ─────────────────────────────────────────────────────────────────
@@ -227,6 +235,8 @@ public class ScopeService {
         scopeItemStore.replaceAll(scopeId, items);
         cleanupOrphanedData(scopeId);
         LOG.infof("ScopeService.syncScope: stored %d items for scope %s", items.size(), scopeId);
+        auditService.log("SCOPE", "SCOPE_SYNCED", "scope", scopeId,
+                Map.of("itemsSynced", items.size()));
         return items.size();
     }
 
@@ -412,7 +422,10 @@ public class ScopeService {
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
         Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
 
-        return buildTreeItem(stored, reviewMap.get(issueKey), overrideMap.get(issueKey));
+        Map<String, Object> result = buildTreeItem(stored, reviewMap.get(issueKey), overrideMap.get(issueKey));
+        auditService.log("SCOPE", "ITEM_REFRESHED", "scope_item", issueKey,
+                Map.of("scopeId", scopeId));
+        return result;
     }
 
     // ─── Reviews ──────────────────────────────────────────────────────────────
@@ -468,7 +481,10 @@ public class ScopeService {
         }
         LOG.infof("ScopeService.enqueueReviewAll: enqueued=%d skipped=%d unchanged=%d scope=%s",
                 enqueued, skipped, unchanged, scopeId);
-        return new ReviewAllResult(enqueued, skipped, unchanged);
+        ReviewAllResult result = new ReviewAllResult(enqueued, skipped, unchanged);
+        auditService.log("SCOPE", "REVIEW_ALL_ENQUEUED", "scope", scopeId,
+                Map.of("jobsEnqueued", enqueued, "jobsSkipped", skipped, "jobsUnchanged", unchanged));
+        return result;
     }
 
     /**
@@ -492,6 +508,8 @@ public class ScopeService {
         JobRecord job = new JobRecord(jobId, req, jobType);
         jobStore.put(job);
         jobQueue.submitReviewJob(job);
+        auditService.log("SCOPE", "REVIEW_ENQUEUED", "scope_item", issueKey,
+                Map.of("scopeId", scopeId, "jobId", jobId));
         return jobId;
     }
 
@@ -500,11 +518,15 @@ public class ScopeService {
     public void setOverride(String scopeId, String issueKey, String status, String updatedBy) {
         if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
         overrideStore.setOverride(scopeId, issueKey, status, updatedBy);
+        auditService.log("SCOPE", "OVERRIDE_SET", "scope_item", issueKey,
+                Map.of("scopeId", scopeId, "status", status));
     }
 
     public void clearOverride(String scopeId, String issueKey) {
         if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
         overrideStore.clearOverride(scopeId, issueKey);
+        auditService.log("SCOPE", "OVERRIDE_CLEARED", "scope_item", issueKey,
+                Map.of("scopeId", scopeId));
     }
 
     // ─── AI Proposals ─────────────────────────────────────────────────────────
@@ -546,7 +568,7 @@ public class ScopeService {
             throw new ImprovementGenerationException("Malformed JSON from AI for " + issueKey + ": " + e.getMessage());
         }
 
-        return proposalStore.create(
+        ScopeProposal proposal = proposalStore.create(
                 scopeId, issueKey, item.issueType(), item.parentKey(),
                 root.path("proposed_summary").asText(""),
                 root.path("proposed_description").asText(""),
@@ -554,6 +576,9 @@ public class ScopeService {
                 root.path("proposed_technical").asText(""),
                 root.path("ai_explanation").asText("")
         );
+        auditService.log("SCOPE", "PROPOSAL_CREATED", "scope_item", issueKey,
+                Map.of("scopeId", scopeId));
+        return proposal;
     }
 
     /**
@@ -575,7 +600,10 @@ public class ScopeService {
         ScopeProposal existing = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
         proposalStore.updateFields(proposalId, summary, description, criteria, technical);
-        return proposalStore.findById(proposalId).orElse(existing);
+        ScopeProposal updated = proposalStore.findById(proposalId).orElse(existing);
+        auditService.log("SCOPE", "PROPOSAL_UPDATED", "scope_proposal", proposalId,
+                Map.of("scopeId", scopeId));
+        return updated;
     }
 
     /**
@@ -621,7 +649,10 @@ public class ScopeService {
         }
 
         proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey);
-        return proposalStore.findById(proposalId).orElse(proposal);
+        ScopeProposal accepted = proposalStore.findById(proposalId).orElse(proposal);
+        auditService.log("SCOPE", "PROPOSAL_ACCEPTED", "scope_proposal", proposalId,
+                Map.of("scopeId", scopeId));
+        return accepted;
     }
 
     /**
@@ -633,7 +664,10 @@ public class ScopeService {
         ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
         proposalStore.updateStatus(proposalId, "REJECTED", null);
-        return proposalStore.findById(proposalId).orElse(proposal);
+        ScopeProposal rejected = proposalStore.findById(proposalId).orElse(proposal);
+        auditService.log("SCOPE", "PROPOSAL_REJECTED", "scope_proposal", proposalId,
+                Map.of("scopeId", scopeId));
+        return rejected;
     }
 
     /**
@@ -644,6 +678,8 @@ public class ScopeService {
     public void deleteProposal(String scopeId, String proposalId) {
         if (proposalStore.findById(proposalId).isEmpty()) throw new ProposalNotFoundException(proposalId);
         proposalStore.delete(proposalId);
+        auditService.log("SCOPE", "PROPOSAL_DELETED", "scope_proposal", proposalId,
+                Map.of("scopeId", scopeId));
     }
 
     // ─── Product links ────────────────────────────────────────────────────────
@@ -659,11 +695,19 @@ public class ScopeService {
     public void linkProduct(String scopeId, String productId) {
         if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
         scopeStore.linkProduct(scopeId, productId);
+        auditService.log("SCOPE", "PRODUCT_LINKED", "scope", scopeId,
+                Map.of("productId", productId));
     }
 
     public void unlinkProduct(String scopeId, String productId) {
         if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
         scopeStore.unlinkProduct(scopeId, productId);
+        auditService.log("SCOPE", "PRODUCT_UNLINKED", "scope", scopeId,
+                Map.of("productId", productId));
+    }
+
+    public long countActiveReviewJobs(String scopeId) {
+        return jobStore.countActiveReviewJobsForRoadmap(scopeId);
     }
 
     // ─── Token stats ─────────────────────────────────────────────────────────

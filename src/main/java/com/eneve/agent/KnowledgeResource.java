@@ -3,16 +3,9 @@ package com.eneve.agent;
 import java.io.InputStream;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
-import com.eneve.agent.agent.store.CustomerRegistryStore;
-import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
-import com.eneve.agent.agent.store.StaticFileSourceStore;
-import com.eneve.agent.agent.store.WebDocSourceStore;
 import com.eneve.agent.agent.service.KnowledgeIndexerService;
-import com.eneve.agent.agent.service.KnowledgeSearchService;
 
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
@@ -21,7 +14,6 @@ import org.eclipse.microprofile.openapi.annotations.parameters.RequestBody;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
-import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.PartType;
 import org.jboss.resteasy.reactive.RestForm;
 
@@ -38,9 +30,6 @@ import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
-import software.amazon.awssdk.services.s3.S3Client;
-import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
-import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 
 @Path("/knowledge")
 @RolesAllowed("app_admin")
@@ -49,25 +38,10 @@ import software.amazon.awssdk.services.s3.model.PutObjectRequest;
 @Tag(name = "Knowledge Base", description = "Index and search Jira/Confluence knowledge")
 public class KnowledgeResource {
 
-    private static final Logger LOG = Logger.getLogger(KnowledgeResource.class);
+    @Inject
+    KnowledgeService knowledgeService;
 
-    private static final long MAX_STATIC_FILE_BYTES = 10 * 1024 * 1024L; // 10 MB hard cap
-    private static final java.util.Set<String> ALLOWED_EXTENSIONS = java.util.Set.of(".txt", ".md", ".pdf");
-
-    @Inject KnowledgeIndexerService indexer;
-    @Inject KnowledgeSearchService searcher;
-    @Inject KnowledgeEmbeddingStore store;
-    @Inject CustomerRegistryStore registryStore;
-    @Inject WebDocSourceStore webDocSourceStore;
-    @Inject StaticFileSourceStore staticFileStore;
-    @Inject S3Client s3Client;
-
-    @ConfigProperty(name = "attachment.s3.bucket", defaultValue = "code-agent-attachments")
-    String s3Bucket;
-
-    // ──────────────────────────────────────────────────────────────────────
-    // Indexing endpoints
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Indexing endpoints ────────────────────────────────────────────────
 
     @POST
     @Path("/index/jira")
@@ -85,8 +59,7 @@ public class KnowledgeResource {
         if (request == null || request.projectKey() == null || request.projectKey().isBlank()) {
             return Response.status(400).entity(Map.of("error", "projectKey is required")).build();
         }
-        var result = indexer.indexJiraProject(request.projectKey());
-        return Response.ok(result).build();
+        return Response.ok(knowledgeService.indexJira(request.projectKey())).build();
     }
 
     @POST
@@ -105,8 +78,7 @@ public class KnowledgeResource {
         if (request == null || request.spaceKey() == null || request.spaceKey().isBlank()) {
             return Response.status(400).entity(Map.of("error", "spaceKey is required")).build();
         }
-        var result = indexer.indexConfluenceSpace(request.spaceKey());
-        return Response.ok(result).build();
+        return Response.ok(knowledgeService.indexConfluence(request.spaceKey())).build();
     }
 
     @POST
@@ -118,9 +90,9 @@ public class KnowledgeResource {
                     + "all configured Jira projects and Confluence spaces. May take several minutes.")
     @APIResponse(responseCode = "200", description = "Reindex completed")
     public Response reindexAll() {
-        var results = indexer.reindexAll();
+        var results = knowledgeService.reindexAll();
         int totalIndexed = results.stream().mapToInt(KnowledgeIndexerService.IndexResult::chunksIndexed).sum();
-        int totalErrors = results.stream().mapToInt(r -> r.errors().size()).sum();
+        int totalErrors  = results.stream().mapToInt(r -> r.errors().size()).sum();
         return Response.ok(Map.of(
                 "runs", results.size(),
                 "totalChunksIndexed", totalIndexed,
@@ -140,21 +112,21 @@ public class KnowledgeResource {
             @APIResponse(responseCode = "404", description = "Product not found")
     })
     public Response indexProduct(
-            @Parameter(required = true) @jakarta.ws.rs.PathParam("productId") String productId) {
-        return registryStore.getProduct(productId).map(product -> {
-            var results = indexer.indexProduct(product);
+            @Parameter(required = true) @PathParam("productId") String productId) {
+        try {
+            var results = knowledgeService.indexProduct(productId);
             int totalIndexed = results.stream().mapToInt(KnowledgeIndexerService.IndexResult::chunksIndexed).sum();
             return Response.ok(Map.of(
                     "productId", productId,
                     "totalChunksIndexed", totalIndexed,
                     "details", results
             )).build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Product not found: " + productId)).build());
+        } catch (KnowledgeService.ProductNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Search endpoint
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Search endpoint ───────────────────────────────────────────────────
 
     @GET
     @Path("/search")
@@ -180,18 +152,11 @@ public class KnowledgeResource {
         if (query == null || query.isBlank()) {
             return Response.status(400).entity(Map.of("error", "q (query) is required")).build();
         }
-
-        var results = searcher.search(query, sourceTypes, topK);
-        return Response.ok(Map.of(
-                "query", query,
-                "count", results.size(),
-                "results", results
-        )).build();
+        var results = knowledgeService.search(query, sourceTypes, topK);
+        return Response.ok(Map.of("query", query, "count", results.size(), "results", results)).build();
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Stats endpoint
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Stats endpoint ────────────────────────────────────────────────────
 
     @GET
     @Path("/stats")
@@ -201,19 +166,10 @@ public class KnowledgeResource {
             description = "Returns chunk counts per source type, optionally scoped to a product.")
     @APIResponse(responseCode = "200", description = "Statistics")
     public Response stats() {
-
-        return Response.ok(Map.of(
-                "jira", store.countBySource("jira"),
-                "confluence", store.countBySource("confluence"),
-                "jiraAttachment", store.countBySource("jira-attachment"),
-                "webDocs", store.countBySource("web-docs"),
-                "staticFiles", store.countBySource("static-file")
-        )).build();
+        return Response.ok(knowledgeService.getStats()).build();
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Web doc sources — management
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Web doc sources — management ──────────────────────────────────────
 
     @POST
     @Path("/web-doc-sources")
@@ -221,7 +177,8 @@ public class KnowledgeResource {
                description = "Adds a new site to the crawler registry. Does not trigger crawling immediately.")
     @APIResponses({
             @APIResponse(responseCode = "200", description = "Source registered"),
-            @APIResponse(responseCode = "400", description = "Missing required fields")
+            @APIResponse(responseCode = "400", description = "Missing required fields"),
+            @APIResponse(responseCode = "409", description = "Source with this baseUrl already exists")
     })
     public Response registerWebDocSource(WebDocSourceRequest request) {
         if (request == null || request.baseUrl() == null || request.baseUrl().isBlank()) {
@@ -233,13 +190,16 @@ public class KnowledgeResource {
         if (request.allowedPathPrefix() == null || request.allowedPathPrefix().isBlank()) {
             return Response.status(400).entity(Map.of("error", "allowedPathPrefix is required")).build();
         }
-        int maxPages = request.maxPages() != null ? request.maxPages() : 500;
+        int maxPages     = request.maxPages()     != null ? request.maxPages()     : 500;
         int crawlDelayMs = request.crawlDelayMs() != null ? request.crawlDelayMs() : 500;
-        return webDocSourceStore.insert(
-                request.name(), request.baseUrl(), request.allowedPathPrefix(),
-                maxPages, crawlDelayMs
-        ).map(s -> Response.ok(s).build())
-         .orElse(Response.status(409).entity(Map.of("error", "A source with this baseUrl already exists")).build());
+        try {
+            var source = knowledgeService.registerWebDocSource(
+                    request.name(), request.baseUrl(), request.allowedPathPrefix(),
+                    maxPages, crawlDelayMs);
+            return Response.ok(source).build();
+        } catch (KnowledgeService.DuplicateSourceException e) {
+            return Response.status(409).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
     @GET
@@ -247,7 +207,7 @@ public class KnowledgeResource {
     @Operation(operationId = "listWebDocSources", summary = "List registered web documentation sources")
     @APIResponse(responseCode = "200", description = "List of sources")
     public Response listWebDocSources() {
-        return Response.ok(webDocSourceStore.listAll()).build();
+        return Response.ok(knowledgeService.listWebDocSources()).build();
     }
 
     @DELETE
@@ -259,16 +219,15 @@ public class KnowledgeResource {
             @APIResponse(responseCode = "404", description = "Source not found")
     })
     public Response deleteWebDocSource(@Parameter(required = true) @PathParam("id") String id) {
-        return webDocSourceStore.findById(id).map(source -> {
-            store.deleteBySourceIdPrefix("web-docs", source.baseUrl());
-            webDocSourceStore.delete(id);
+        try {
+            knowledgeService.deleteWebDocSource(id);
             return Response.noContent().build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Web doc source not found: " + id)).build());
+        } catch (KnowledgeService.WebDocSourceNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Web doc sources — crawl triggers
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Web doc sources — crawl triggers ──────────────────────────────────
 
     @POST
     @Path("/index/web-docs/{id}")
@@ -279,10 +238,11 @@ public class KnowledgeResource {
             @APIResponse(responseCode = "404", description = "Source not found")
     })
     public Response crawlWebDocSource(@Parameter(required = true) @PathParam("id") String id) {
-        return webDocSourceStore.findById(id).map(source -> {
-            var result = indexer.indexWebDocSource(source);
-            return Response.ok(result).build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Web doc source not found: " + id)).build());
+        try {
+            return Response.ok(knowledgeService.crawlWebDocSource(id)).build();
+        } catch (KnowledgeService.WebDocSourceNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
     @POST
@@ -291,7 +251,7 @@ public class KnowledgeResource {
                description = "Crawls and re-indexes every registered web doc source. May take several minutes.")
     @APIResponse(responseCode = "200", description = "Crawl results")
     public Response crawlAllWebDocSources() {
-        var results = indexer.indexAllWebDocSources();
+        var results = knowledgeService.crawlAllWebDocSources();
         int totalIndexed = results.stream().mapToInt(KnowledgeIndexerService.IndexResult::chunksIndexed).sum();
         int totalErrors  = results.stream().mapToInt(r -> r.errors().size()).sum();
         return Response.ok(Map.of(
@@ -302,9 +262,7 @@ public class KnowledgeResource {
         )).build();
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Static file sources — management
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Static file sources — management ─────────────────────────────────
 
     @POST
     @Path("/static-files")
@@ -323,55 +281,14 @@ public class KnowledgeResource {
         if (form.filename == null || form.filename.isBlank()) {
             return Response.status(400).entity(Map.of("error", "filename is required")).build();
         }
-
-        String lower = form.filename.toLowerCase();
-        boolean allowed = ALLOWED_EXTENSIONS.stream().anyMatch(lower::endsWith);
-        if (!allowed) {
-            return Response.status(400).entity(Map.of("error",
-                    "Unsupported file type. Allowed extensions: .txt, .md, .pdf")).build();
-        }
-
-        long fileSize = form.fileSize != null ? form.fileSize : 0;
-        if (fileSize > MAX_STATIC_FILE_BYTES) {
-            return Response.status(400).entity(Map.of("error",
-                    "File too large. Maximum size is 10 MB")).build();
-        }
-
-        String contentType = form.contentType != null && !form.contentType.isBlank()
-                ? form.contentType : "application/octet-stream";
-        String displayName = (form.name != null && !form.name.isBlank())
-                ? form.name.trim()
-                : form.filename.replaceAll("\\.[^.]+$", "");
-
-        String fileId = UUID.randomUUID().toString();
-        String s3Key = "knowledge/static-files/" + fileId + "/" + form.filename;
-
         try {
-            byte[] data = form.file.readAllBytes();
-            if (fileSize == 0) fileSize = data.length;
-
-            s3Client.putObject(
-                    PutObjectRequest.builder()
-                            .bucket(s3Bucket)
-                            .key(s3Key)
-                            .contentType(contentType)
-                            .contentLength((long) data.length)
-                            .build(),
-                    software.amazon.awssdk.core.sync.RequestBody.fromBytes(data));
-            LOG.infof("Uploaded static file to S3: %s", s3Key);
-
-            var source = staticFileStore.insert(displayName, form.filename, contentType, s3Key, data.length)
-                    .orElseThrow(() -> new RuntimeException("Failed to persist static file metadata"));
-
-            var result = indexer.indexStaticFile(source);
-            LOG.infof("Static file indexed: %s chunks=%d", source.id(), result.chunksIndexed());
-
-            return Response.ok(staticFileStore.findById(source.id()).orElse(source)).build();
-
-        } catch (Exception e) {
-            LOG.errorf("Failed to upload or index static file %s: %s", form.filename, e.getMessage());
-            s3Client.deleteObject(DeleteObjectRequest.builder().bucket(s3Bucket).key(s3Key).build());
-            return Response.status(500).entity(Map.of("error", "Upload failed: " + e.getMessage())).build();
+            var source = knowledgeService.uploadStaticFile(
+                    form.filename, form.file, form.contentType, form.fileSize, form.name);
+            return Response.ok(source).build();
+        } catch (IllegalArgumentException e) {
+            return Response.status(400).entity(Map.of("error", e.getMessage())).build();
+        } catch (RuntimeException e) {
+            return Response.status(500).entity(Map.of("error", e.getMessage())).build();
         }
     }
 
@@ -380,7 +297,7 @@ public class KnowledgeResource {
     @Operation(operationId = "listStaticFiles", summary = "List uploaded static files")
     @APIResponse(responseCode = "200", description = "List of static file sources")
     public Response listStaticFiles() {
-        return Response.ok(staticFileStore.listAll()).build();
+        return Response.ok(knowledgeService.listStaticFiles()).build();
     }
 
     @DELETE
@@ -392,13 +309,12 @@ public class KnowledgeResource {
             @APIResponse(responseCode = "404", description = "File not found")
     })
     public Response deleteStaticFile(@Parameter(required = true) @PathParam("id") String id) {
-        return staticFileStore.findById(id).map(source -> {
-            s3Client.deleteObject(DeleteObjectRequest.builder()
-                    .bucket(s3Bucket).key(source.s3Key()).build());
-            store.deleteBySource("static-file", source.id());
-            staticFileStore.delete(id);
+        try {
+            knowledgeService.deleteStaticFile(id);
             return Response.noContent().build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Static file not found: " + id)).build());
+        } catch (KnowledgeService.StaticFileNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
     @POST
@@ -410,15 +326,14 @@ public class KnowledgeResource {
             @APIResponse(responseCode = "404", description = "File not found")
     })
     public Response reindexStaticFile(@Parameter(required = true) @PathParam("id") String id) {
-        return staticFileStore.findById(id).map(source -> {
-            var result = indexer.indexStaticFile(source);
-            return Response.ok(result).build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Static file not found: " + id)).build());
+        try {
+            return Response.ok(knowledgeService.reindexStaticFile(id)).build();
+        } catch (KnowledgeService.StaticFileNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
-    // ──────────────────────────────────────────────────────────────────────
-    // Request body records
-    // ──────────────────────────────────────────────────────────────────────
+    // ── Request body records ──────────────────────────────────────────────
 
     public record IndexJiraRequest(
             @Schema(required = true, description = "Jira project key", example = "ENG")

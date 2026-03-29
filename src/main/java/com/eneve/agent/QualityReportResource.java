@@ -3,15 +3,8 @@ package com.eneve.agent;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 
-import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.model.QualityReport;
-import com.eneve.agent.agent.store.QualityReportStore;
-import com.eneve.agent.model.JobRecord;
-import com.eneve.agent.model.QualityReportJobRequest;
-import com.eneve.agent.scm.GitPlatformService;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -43,10 +36,7 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Quality Reports", description = "Per-repository quality snapshots with aggregate score and branch comparison")
 public class QualityReportResource {
 
-    @Inject QualityReportStore reportStore;
-    @Inject JobStore jobStore;
-    @Inject JobQueue jobQueue;
-    @Inject GitPlatformService platformService;
+    @Inject QualityReportService qualityReportService;
 
     @GET
     @Path("/{workspace}/{repoSlug}/{branch}")
@@ -69,12 +59,11 @@ public class QualityReportResource {
             @Parameter(description = "Branch name", required = true)
             @PathParam("branch") String branch) {
 
-        return reportStore.findLatest(workspace, repoSlug, branch)
-                .map(r -> Response.ok(r).build())
-                .orElse(Response.status(404)
-                        .entity(Map.of("error", "No quality report found for "
-                                + workspace + "/" + repoSlug + "@" + branch))
-                        .build());
+        try {
+            return Response.ok(qualityReportService.getLatest(workspace, repoSlug, branch)).build();
+        } catch (QualityReportService.ReportNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
     @GET
@@ -96,7 +85,7 @@ public class QualityReportResource {
             @Parameter(description = "Maximum number of records to return (default: 30)")
             @QueryParam("limit") @DefaultValue("30") int limit) {
 
-        List<QualityReport> history = reportStore.findHistory(workspace, repoSlug, branch, limit);
+        List<QualityReport> history = qualityReportService.getHistory(workspace, repoSlug, branch, limit);
         return Response.ok(history).build();
     }
 
@@ -117,31 +106,16 @@ public class QualityReportResource {
             @Parameter(description = "Comma-separated list of branches to compare (default: main,develop)")
             @QueryParam("branches") @DefaultValue("main,develop") String branchesParam) {
 
-        String[] requestedBranches = branchesParam.split(",");
-        Map<String, QualityReport> latestPerBranch = reportStore.findLatestPerBranch(workspace, repoSlug);
-
-        Map<String, Object> branchReports = new LinkedHashMap<>();
-        for (String b : requestedBranches) {
-            String trimmed = b.trim();
-            QualityReport report = latestPerBranch.get(trimmed);
-            branchReports.put(trimmed, report);
-        }
+        QualityReportService.CompareResult result =
+                qualityReportService.compare(workspace, repoSlug, branchesParam);
 
         Map<String, Object> response = new LinkedHashMap<>();
-        response.put("workspace", workspace);
-        response.put("repoSlug", repoSlug);
-        response.put("branches", branchReports);
-
-        if (requestedBranches.length == 2) {
-            String branchA = requestedBranches[0].trim();
-            String branchB = requestedBranches[1].trim();
-            QualityReport a = latestPerBranch.get(branchA);
-            QualityReport b = latestPerBranch.get(branchB);
-            if (a != null && b != null) {
-                response.put("deltas", computeDeltas(a, b));
-            }
+        response.put("workspace", result.workspace());
+        response.put("repoSlug",  result.repoSlug());
+        response.put("branches",  result.branches());
+        if (result.deltas() != null) {
+            response.put("deltas", result.deltas());
         }
-
         return Response.ok(response).build();
     }
 
@@ -168,68 +142,22 @@ public class QualityReportResource {
             @RequestBody(description = "Repository URL and optional overrides", required = true)
             TriggerQualityReportRequest request) {
 
-        String resolvedRepoUrl = (request != null && request.repoUrl() != null && !request.repoUrl().isBlank())
-                ? request.repoUrl()
-                : platformService.buildCloneUrl(workspace, repoSlug);
-
-        if (resolvedRepoUrl == null || resolvedRepoUrl.isBlank()) {
-            return Response.status(400)
-                    .entity(Map.of("error", "repoUrl is required and could not be resolved for " + workspace + "/" + repoSlug))
-                    .build();
+        String repoUrl = request != null ? request.repoUrl() : null;
+        try {
+            QualityReportService.TriggerResult result =
+                    qualityReportService.trigger(workspace, repoSlug, branch, repoUrl);
+            return Response.accepted(Map.of(
+                    "jobId",     result.jobId(),
+                    "workspace", result.workspace(),
+                    "repoSlug",  result.repoSlug(),
+                    "branch",    result.branch(),
+                    "status",    result.status()
+            )).build();
+        } catch (QualityReportService.MissingRepoUrlException e) {
+            return Response.status(400).entity(Map.of("error", e.getMessage())).build();
+        } catch (QualityReportService.QueueFullException e) {
+            return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
-
-        String jobId = UUID.randomUUID().toString();
-        QualityReportJobRequest jobRequest = new QualityReportJobRequest(
-                resolvedRepoUrl, branch, workspace, repoSlug);
-        JobRecord job = new JobRecord(jobId, jobRequest);
-        jobStore.put(job);
-
-        if (!jobQueue.submit(job)) {
-            return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
-        }
-
-        return Response.accepted(Map.of(
-                "jobId", jobId,
-                "workspace", workspace,
-                "repoSlug", repoSlug,
-                "branch", branch,
-                "status", "QUEUED"
-        )).build();
-    }
-
-    // ─── Helpers ──────────────────────────────────────────────────────────
-
-    private Map<String, Object> computeDeltas(QualityReport a, QualityReport b) {
-        Map<String, Object> deltas = new LinkedHashMap<>();
-        deltas.put("score", round(b.score() - a.score()));
-
-        if (a.coverage() != null && b.coverage() != null) {
-            deltas.put("coverage.lineRate", round(b.coverage().lineRate() - a.coverage().lineRate()));
-            deltas.put("coverage.branchRate", round(b.coverage().branchRate() - a.coverage().branchRate()));
-        }
-        if (a.linter() != null && b.linter() != null) {
-            deltas.put("linter.totalFindings", b.linter().totalFindings() - a.linter().totalFindings());
-            deltas.put("linter.errorCount", b.linter().errorCount() - a.linter().errorCount());
-        }
-        if (a.aikido() != null && b.aikido() != null) {
-            deltas.put("aikido.totalIssues", b.aikido().totalIssues() - a.aikido().totalIssues());
-            deltas.put("aikido.criticalCount", b.aikido().criticalCount() - a.aikido().criticalCount());
-        }
-        if (a.complexity() != null && b.complexity() != null) {
-            deltas.put("complexity.avgComplexity",
-                    round(b.complexity().avgComplexity() - a.complexity().avgComplexity()));
-            deltas.put("complexity.methodsAboveThreshold",
-                    b.complexity().methodsAboveThreshold() - a.complexity().methodsAboveThreshold());
-        }
-        if (a.reviewQuality() != null && b.reviewQuality() != null) {
-            deltas.put("reviewQuality.resolutionRate",
-                    round(b.reviewQuality().resolutionRate() - a.reviewQuality().resolutionRate()));
-        }
-        return deltas;
-    }
-
-    private static double round(double val) {
-        return Math.round(val * 10000.0) / 10000.0;
     }
 
     public record TriggerQualityReportRequest(

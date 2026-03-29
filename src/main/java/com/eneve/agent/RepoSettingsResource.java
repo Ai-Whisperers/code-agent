@@ -4,12 +4,6 @@ import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.model.RepoSettings;
-import com.eneve.agent.agent.store.RepoSettingsStore;
-import com.eneve.agent.agent.service.RepoSyncService;
-import com.eneve.agent.agent.service.WebhookSyncService;
-import com.eneve.agent.audit.AuditService;
-
-import org.jboss.logging.Logger;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -42,19 +36,8 @@ import jakarta.ws.rs.core.Response;
 @Tag(name = "Repo Settings", description = "Manage per-repository review settings and prompt templates")
 public class RepoSettingsResource {
 
-    private static final Logger LOG = Logger.getLogger(RepoSettingsResource.class);
-
     @Inject
-    RepoSettingsStore settingsStore;
-
-    @Inject
-    WebhookSyncService webhookSyncService;
-
-    @Inject
-    RepoSyncService repoSyncService;
-
-    @Inject
-    AuditService auditService;
+    RepoSettingsService repoSettingsService;
 
     @POST
     @Path("/sync")
@@ -66,12 +49,7 @@ public class RepoSettingsResource {
     )
     @APIResponse(responseCode = "200", description = "Sync triggered")
     public Response sync() {
-        try {
-            repoSyncService.syncRepos();
-        } catch (Exception e) {
-            LOG.warnf("Manual repo sync failed (non-fatal): %s", e.getMessage());
-        }
-        auditService.log("REPO_SETTINGS", "REPO_SYNC", "repo_settings", null, null);
+        repoSettingsService.syncRepos();
         return Response.ok(Map.of("action", "sync_triggered")).build();
     }
 
@@ -83,7 +61,7 @@ public class RepoSettingsResource {
     )
     @APIResponse(responseCode = "200", description = "List of repo settings")
     public Response list() {
-        List<RepoSettings> settings = settingsStore.listAll();
+        List<RepoSettings> settings = repoSettingsService.listAll();
         return Response.ok(settings).build();
     }
 
@@ -103,12 +81,11 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        return settingsStore.find(workspace, repoSlug)
-                .map(s -> Response.ok(s).build())
-                .orElse(Response.status(404)
-                        .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                        .build());
+        try {
+            return Response.ok(repoSettingsService.get(workspace, repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 
     @PUT
@@ -129,45 +106,24 @@ public class RepoSettingsResource {
             @RequestBody(description = "Repository settings", required = true)
             UpsertRepoSettingsRequest request) {
 
-        boolean enabled = request.reviewEnabled() != null ? request.reviewEnabled() : true;
-        boolean vectorEnabled = request.vectorEnabled() != null ? request.vectorEnabled() : false;
-        boolean docsEnabled = request.docsEnabled() != null ? request.docsEnabled() : true;
-        boolean upgradeEnabled = request.upgradeEnabled() != null ? request.upgradeEnabled() : true;
-        boolean qualityReportEnabled = request.qualityReportEnabled() != null ? request.qualityReportEnabled() : false;
-        boolean archived = request.archived() != null ? request.archived() : false;
-        List<String> ruleNames = request.ruleNames() != null ? request.ruleNames() : List.of();
-        String prompt = request.reviewPrompt();
-        List<String> disabledHooks = request.disabledHooks() != null ? request.disabledHooks() : List.of();
-        String confluenceSpaceKey = request.confluenceSpaceKey();
-        String confluenceParentPageId = request.confluenceParentPageId();
-        String gitPlatformUrl = request.gitPlatformUrl();
+        boolean reviewEnabled         = request.reviewEnabled()         != null ? request.reviewEnabled()         : true;
+        boolean vectorEnabled         = request.vectorEnabled()         != null ? request.vectorEnabled()         : false;
+        boolean docsEnabled           = request.docsEnabled()           != null ? request.docsEnabled()           : true;
+        boolean upgradeEnabled        = request.upgradeEnabled()        != null ? request.upgradeEnabled()        : true;
+        boolean qualityReportEnabled  = request.qualityReportEnabled()  != null ? request.qualityReportEnabled()  : false;
+        boolean archived              = request.archived()              != null ? request.archived()              : false;
+        List<String> ruleNames        = request.ruleNames()             != null ? request.ruleNames()             : List.of();
+        List<String> disabledHooks    = request.disabledHooks()         != null ? request.disabledHooks()         : List.of();
 
-        settingsStore.upsert(workspace, repoSlug, enabled, vectorEnabled, docsEnabled, upgradeEnabled,
-                qualityReportEnabled, archived, ruleNames, prompt, disabledHooks, confluenceSpaceKey, confluenceParentPageId,
-                gitPlatformUrl);
+        repoSettingsService.upsert(workspace, repoSlug,
+                reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled,
+                qualityReportEnabled, archived, ruleNames, request.reviewPrompt(),
+                disabledHooks, request.confluenceSpaceKey(),
+                request.confluenceParentPageId(), request.gitPlatformUrl());
 
-        try {
-            if (enabled && !archived) {
-                webhookSyncService.ensureWebhooks(workspace, repoSlug);
-            } else {
-                webhookSyncService.removeWebhooks(workspace, repoSlug);
-            }
-        } catch (Exception e) {
-            LOG.warnf("Webhook sync failed after upsert for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
-        }
-
-        auditService.log("REPO_SETTINGS", "REPO_SETTINGS_SAVED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of(
-                "action", "saved",
-                "workspace", workspace,
-                "repoSlug", repoSlug,
-                "reviewEnabled", enabled,
-                "vectorEnabled", vectorEnabled,
-                "docsEnabled", docsEnabled,
-                "upgradeEnabled", upgradeEnabled,
-                "qualityReportEnabled", qualityReportEnabled,
-                "archived", archived
-        )).build();
+        return Response.ok(RepoSettingsService.upsertResponse(workspace, repoSlug,
+                reviewEnabled, vectorEnabled, docsEnabled,
+                upgradeEnabled, qualityReportEnabled, archived)).build();
     }
 
     @PATCH
@@ -187,23 +143,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        var existing = settingsStore.find(workspace, repoSlug);
-        if (existing.isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.enableReview(workspace, repoSlug);
+            return Response.ok(Map.of("action", "enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setReviewEnabled(workspace, repoSlug, true);
-        if (!existing.get().archived()) {
-            try {
-                webhookSyncService.ensureWebhooks(workspace, repoSlug);
-            } catch (Exception e) {
-                LOG.warnf("Webhook sync failed after enable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
-            }
-        }
-        auditService.log("REPO_SETTINGS", "REPO_REVIEW_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -224,20 +169,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
-        }
-        settingsStore.setReviewEnabled(workspace, repoSlug, false);
         try {
-            webhookSyncService.removeWebhooks(workspace, repoSlug);
-        } catch (Exception e) {
-            LOG.warnf("Webhook sync failed after disable for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            repoSettingsService.disableReview(workspace, repoSlug);
+            return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        auditService.log("REPO_SETTINGS", "REPO_REVIEW_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -258,15 +195,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.enableVector(workspace, repoSlug);
+            return Response.ok(Map.of("action", "vector_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setVectorEnabled(workspace, repoSlug, true);
-        auditService.log("REPO_SETTINGS", "REPO_VECTOR_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "vector_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -287,15 +221,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.disableVector(workspace, repoSlug);
+            return Response.ok(Map.of("action", "vector_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setVectorEnabled(workspace, repoSlug, false);
-        auditService.log("REPO_SETTINGS", "REPO_VECTOR_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "vector_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -315,15 +246,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.enableDocs(workspace, repoSlug);
+            return Response.ok(Map.of("action", "docs_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setDocsEnabled(workspace, repoSlug, true);
-        auditService.log("REPO_SETTINGS", "REPO_DOCS_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "docs_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -343,15 +271,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.disableDocs(workspace, repoSlug);
+            return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setDocsEnabled(workspace, repoSlug, false);
-        auditService.log("REPO_SETTINGS", "REPO_DOCS_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "docs_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -372,15 +297,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.enableUpgrade(workspace, repoSlug);
+            return Response.ok(Map.of("action", "upgrade_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setUpgradeEnabled(workspace, repoSlug, true);
-        auditService.log("REPO_SETTINGS", "REPO_UPGRADE_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "upgrade_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -401,15 +323,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.disableUpgrade(workspace, repoSlug);
+            return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setUpgradeEnabled(workspace, repoSlug, false);
-        auditService.log("REPO_SETTINGS", "REPO_UPGRADE_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "upgrade_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -430,15 +349,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.enableQualityReport(workspace, repoSlug);
+            return Response.ok(Map.of("action", "quality_report_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setQualityReportEnabled(workspace, repoSlug, true);
-        auditService.log("REPO_SETTINGS", "REPO_QUALITY_REPORT_ENABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "quality_report_enabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -459,15 +375,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.disableQualityReport(workspace, repoSlug);
+            return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setQualityReportEnabled(workspace, repoSlug, false);
-        auditService.log("REPO_SETTINGS", "REPO_QUALITY_REPORT_DISABLED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "quality_report_disabled", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -488,20 +401,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        if (settingsStore.find(workspace, repoSlug).isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
-        }
-        settingsStore.setArchived(workspace, repoSlug, true);
         try {
-            webhookSyncService.removeWebhooks(workspace, repoSlug);
-        } catch (Exception e) {
-            LOG.warnf("Webhook sync failed after archive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            repoSettingsService.archive(workspace, repoSlug);
+            return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        auditService.log("REPO_SETTINGS", "REPO_ARCHIVED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "archived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @PATCH
@@ -521,23 +426,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        var unarchiveSettings = settingsStore.find(workspace, repoSlug);
-        if (unarchiveSettings.isEmpty()) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
+        try {
+            repoSettingsService.unarchive(workspace, repoSlug);
+            return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        settingsStore.setArchived(workspace, repoSlug, false);
-        if (unarchiveSettings.get().reviewEnabled()) {
-            try {
-                webhookSyncService.ensureWebhooks(workspace, repoSlug);
-            } catch (Exception e) {
-                LOG.warnf("Webhook sync failed after unarchive for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
-            }
-        }
-        auditService.log("REPO_SETTINGS", "REPO_UNARCHIVED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "unarchived", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     @DELETE
@@ -557,20 +451,12 @@ public class RepoSettingsResource {
             @PathParam("workspace") String workspace,
             @Parameter(description = "Bitbucket repository slug", required = true)
             @PathParam("repoSlug") String repoSlug) {
-
-        boolean deleted = settingsStore.delete(workspace, repoSlug);
-        if (!deleted) {
-            return Response.status(404)
-                    .entity(Map.of("error", "No settings found for " + workspace + "/" + repoSlug))
-                    .build();
-        }
         try {
-            webhookSyncService.removeWebhooks(workspace, repoSlug);
-        } catch (Exception e) {
-            LOG.warnf("Webhook removal failed after delete for %s/%s (non-fatal): %s", workspace, repoSlug, e.getMessage());
+            repoSettingsService.delete(workspace, repoSlug);
+            return Response.ok(Map.of("action", "deleted", "workspace", workspace, "repoSlug", repoSlug)).build();
+        } catch (RepoSettingsService.RepoNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
-        auditService.log("REPO_SETTINGS", "REPO_DELETED", "repo_setting", workspace + "/" + repoSlug, null);
-        return Response.ok(Map.of("action", "deleted", "workspace", workspace, "repoSlug", repoSlug)).build();
     }
 
     public record UpsertRepoSettingsRequest(
