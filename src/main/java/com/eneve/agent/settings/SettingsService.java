@@ -32,7 +32,7 @@ public class SettingsService {
     private static final Logger LOG = Logger.getLogger(SettingsService.class);
     private static final String MASKED = "****";
 
-    @ConfigProperty(name = "settings.cache.ttl-seconds", defaultValue = "30")
+    @ConfigProperty(name = "settings.cache.ttl-seconds", defaultValue = "300")
     int cacheTtlSeconds;
 
     @Inject

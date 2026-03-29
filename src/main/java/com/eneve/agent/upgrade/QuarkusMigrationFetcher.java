@@ -14,6 +14,7 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Fetches the official Quarkus migration guide for a given target version and returns
@@ -32,10 +33,7 @@ public class QuarkusMigrationFetcher {
     private static final int MAX_CHARS = 15_000;
     private static final String BASE_URL = "https://quarkus.io/guides/migration-guide-";
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Fetches and extracts migration guide text for the given target Quarkus version.

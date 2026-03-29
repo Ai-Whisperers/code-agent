@@ -12,6 +12,7 @@ import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.agent.GitWorkspaceHelper;
+import com.eneve.agent.Soc2Policy;
 import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -48,6 +49,7 @@ public class PromoteHandler implements JobHandler {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject SettingsService settings;
+    @Inject Soc2Policy soc2Policy;
 
     @Override
     public JobType jobType() {
@@ -57,7 +59,7 @@ public class PromoteHandler implements JobHandler {
     @Override
     public void handle(JobRecord job) {
         long timeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
-        String productionBranch = settings.get("soc2.production-branch", "main");
+        String productionBranch = soc2Policy.productionBranch();
 
         PromoteRequest request = job.getPromoteRequest();
         if (request == null) {

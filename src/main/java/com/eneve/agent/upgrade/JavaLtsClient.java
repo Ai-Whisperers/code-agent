@@ -38,14 +38,12 @@ public class JavaLtsClient {
             "https://api.adoptium.net/v3/info/available_releases";
 
     @Inject SettingsService settings;
+    @Inject ObjectMapper objectMapper;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the current Java LTS major version (e.g. {@code "21"}),
@@ -74,7 +72,7 @@ public class JavaLtsClient {
                 return Optional.empty();
             }
 
-            JsonNode root = new ObjectMapper().readTree(response.body());
+            JsonNode root = objectMapper.readTree(response.body());
             JsonNode ltsNode = root.get("most_recent_lts");
             if (ltsNode == null || ltsNode.isNull()) {
                 LOG.warnf("JavaLtsClient: 'most_recent_lts' field missing from Adoptium response");

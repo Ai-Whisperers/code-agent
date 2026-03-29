@@ -25,7 +25,7 @@ import org.jboss.logging.Logger;
 public class AuditService {
 
     private static final Logger LOG = Logger.getLogger(AuditService.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     SecurityIdentity securityIdentity;
@@ -71,10 +71,10 @@ public class AuditService {
         return securityIdentity.getPrincipal().getName();
     }
 
-    private static String toJson(Map<String, Object> detail) {
+    private String toJson(Map<String, Object> detail) {
         if (detail == null || detail.isEmpty()) return null;
         try {
-            return MAPPER.writeValueAsString(detail);
+            return mapper.writeValueAsString(detail);
         } catch (JsonProcessingException e) {
             return null;
         }

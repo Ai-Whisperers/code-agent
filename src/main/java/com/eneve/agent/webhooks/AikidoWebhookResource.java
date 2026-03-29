@@ -57,7 +57,7 @@ public class AikidoWebhookResource {
     @Inject HookEvaluator hookEvaluator;
     @Inject TeamsNotifier teamsNotifier;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    ObjectMapper objectMapper = new ObjectMapper();
 
     private final ExecutorService upgradeExecutor = Executors.newSingleThreadExecutor(r -> {
         Thread t = new Thread(r, "aikido-webhook-upgrade");

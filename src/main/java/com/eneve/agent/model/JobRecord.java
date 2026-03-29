@@ -4,6 +4,9 @@ import java.time.Instant;
 
 public class JobRecord {
 
+    // ── Single unified payload (preferred) ───────────────────────────────────
+    private final JobPayload payload;
+
     // ── PROMOTE job request (cherry-pick promotion to main) ──────────────────
     private final PromoteRequest promoteRequest;
 
@@ -59,6 +62,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, RunFixRequest request) {
         this.jobId = jobId;
+        this.payload = request;
         this.request = request;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -79,6 +83,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, ReviewPrRequest reviewRequest) {
         this.jobId = jobId;
+        this.payload = reviewRequest;
         this.request = null;
         this.reviewRequest = reviewRequest;
         this.fixPrRequest = null;
@@ -99,6 +104,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, FixPrRequest fixPrRequest) {
         this.jobId = jobId;
+        this.payload = fixPrRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = fixPrRequest;
@@ -123,6 +129,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, ReplyCommentRequest replyRequest, JobType jobType) {
         this.jobId = jobId;
+        this.payload = replyRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -143,6 +150,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, HookJobRequest hookRequest) {
         this.jobId = jobId;
+        this.payload = hookRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -163,6 +171,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, GenerateTestsRequest generateTestsRequest) {
         this.jobId = jobId;
+        this.payload = generateTestsRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -183,6 +192,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, GenerateDocsRequest generateDocsRequest) {
         this.jobId = jobId;
+        this.payload = generateDocsRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -203,6 +213,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, SyncConfluenceRequest syncConfluenceRequest) {
         this.jobId = jobId;
+        this.payload = syncConfluenceRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -223,6 +234,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, MetricsJobRequest metricsRequest) {
         this.jobId = jobId;
+        this.payload = metricsRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -243,6 +255,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, QualityReportJobRequest qualityReportRequest) {
         this.jobId = jobId;
+        this.payload = qualityReportRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -263,6 +276,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, JiraReviewRequest jiraReviewRequest, JobType jobType) {
         this.jobId = jobId;
+        this.payload = jiraReviewRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -283,6 +297,7 @@ public class JobRecord {
 
     public JobRecord(String jobId, PromoteRequest promoteRequest) {
         this.jobId = jobId;
+        this.payload = promoteRequest;
         this.request = null;
         this.reviewRequest = null;
         this.fixPrRequest = null;
@@ -302,18 +317,33 @@ public class JobRecord {
     }
 
     public String getJobId() { return jobId; }
-    public RunFixRequest getRequest() { return request; }
-    public ReviewPrRequest getReviewRequest() { return reviewRequest; }
-    public FixPrRequest getFixPrRequest() { return fixPrRequest; }
-    public ReplyCommentRequest getReplyRequest() { return replyRequest; }
-    public HookJobRequest getHookRequest() { return hookRequest; }
-    public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
-    public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
-    public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
-    public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
-    public QualityReportJobRequest getQualityReportRequest() { return qualityReportRequest; }
-    public JiraReviewRequest getJiraReviewRequest() { return jiraReviewRequest; }
     public JobType getJobType() { return jobType; }
+
+    /** Returns the unified job payload. Prefer this over the individual typed getters. */
+    public JobPayload getPayload() { return payload; }
+
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public RunFixRequest getRequest() { return request; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public ReviewPrRequest getReviewRequest() { return reviewRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public FixPrRequest getFixPrRequest() { return fixPrRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public ReplyCommentRequest getReplyRequest() { return replyRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public HookJobRequest getHookRequest() { return hookRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public QualityReportJobRequest getQualityReportRequest() { return qualityReportRequest; }
+    /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
+    @Deprecated public JiraReviewRequest getJiraReviewRequest() { return jiraReviewRequest; }
     public Instant getCreatedAt() { return createdAt; }
 
     public JobStatus getStatus() { return status; }

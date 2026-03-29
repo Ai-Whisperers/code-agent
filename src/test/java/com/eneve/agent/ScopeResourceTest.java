@@ -442,7 +442,7 @@ class ScopeResourceTest {
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void activeReviewCount_knownScope_returnsCount() {
         when(scopeService.getScope(SCOPE_ID)).thenReturn(SAMPLE_SCOPE);
-        when(jobStore.countActiveReviewJobsForRoadmap(SCOPE_ID)).thenReturn(7L);
+        when(scopeService.countActiveReviewJobs(SCOPE_ID)).thenReturn(7L);
 
         given()
         .when()
@@ -456,7 +456,7 @@ class ScopeResourceTest {
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void activeReviewCount_zeroJobs_returnsZero() {
         when(scopeService.getScope(SCOPE_ID)).thenReturn(SAMPLE_SCOPE);
-        when(jobStore.countActiveReviewJobsForRoadmap(SCOPE_ID)).thenReturn(0L);
+        when(scopeService.countActiveReviewJobs(SCOPE_ID)).thenReturn(0L);
 
         given()
         .when()
@@ -470,7 +470,7 @@ class ScopeResourceTest {
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void activeReviewCount_storeThrows_returns500WithGenericMessage() {
         when(scopeService.getScope(SCOPE_ID)).thenReturn(SAMPLE_SCOPE);
-        when(jobStore.countActiveReviewJobsForRoadmap(SCOPE_ID))
+        when(scopeService.countActiveReviewJobs(SCOPE_ID))
                 .thenThrow(new RuntimeException("DB connection failed: password=s3cr3t!"));
 
         given()

@@ -34,8 +34,8 @@ public class BitbucketBranchService {
     private String bbUser()    { return settings.get("bitbucket.user", ""); }
     private String appPassword() { return settings.getSecret("bitbucket.app.password"); }
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     /**
      * Returns the target commit hash of the named branch, or {@link Optional#empty()}

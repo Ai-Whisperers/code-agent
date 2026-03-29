@@ -2,13 +2,9 @@ package com.eneve.agent;
 
 import java.time.Instant;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
-
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.model.CommentFeedbackEntry;
 import com.eneve.agent.agent.store.CommentFeedbackStore;
@@ -16,9 +12,7 @@ import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.audit.AuditStore;
-import com.eneve.agent.model.DiffFileEntry;
-import com.eneve.agent.model.DiffHunkEntry;
-import com.eneve.agent.model.DiffLineEntry;
+import com.eneve.agent.diff.JobDiffParser;
 import com.eneve.agent.model.EvidenceEntry;
 import com.eneve.agent.model.JobCommitsResponse;
 import com.eneve.agent.model.JobDiffResponse;
@@ -36,6 +30,9 @@ import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewCommentEntry;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.exception.JobConflictException;
+import com.eneve.agent.exception.JobNotFoundException;
+import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scytale.ScytaleService;
@@ -84,22 +81,13 @@ public class JobsService {
     @Inject
     JiraService jiraService;
 
-    // ── Custom exceptions ─────────────────────────────────────────────────
+    @Inject
+    Soc2Policy soc2Policy;
 
-    public static class JobNotFoundException extends RuntimeException {
-        public JobNotFoundException(String message) { super(message); }
-    }
-
-    public static class JobConflictException extends RuntimeException {
-        public JobConflictException(String message) { super(message); }
-    }
+    // ── SOC2-specific exception (jobs only) ───────────────────────────────
 
     public static class Soc2GuardException extends RuntimeException {
         public Soc2GuardException(String message) { super(message); }
-    }
-
-    public static class JobQueueFullException extends RuntimeException {
-        public JobQueueFullException(String message) { super(message); }
     }
 
     // ── Public service methods ────────────────────────────────────────────
@@ -156,7 +144,7 @@ public class JobsService {
             throw new RuntimeException("SCM diff unavailable: " + e.getMessage(), e);
         }
 
-        return buildDiffResponse(sourceBranch, targetBranch, rawDiff);
+        return JobDiffParser.parse(sourceBranch, targetBranch, rawDiff);
     }
 
     public JobCommitsResponse getJobCommits(String jobId) {
@@ -183,7 +171,7 @@ public class JobsService {
 
         String rawDiff = gitPlatformService.getCommitDiff(
                 coords.organization(), coords.project(), coords.repository(), sha);
-        return buildDiffResponse(sha, "parent", rawDiff);
+        return JobDiffParser.parse(sha, "parent", rawDiff);
     }
 
     public JobReviewResponse getJobReview(String jobId) {
@@ -401,11 +389,8 @@ public class JobsService {
                 .map(e -> new EvidenceEntry(e.occurredAt(), e.actor(), e.action(), e.detail()))
                 .toList();
 
-        String bugTypesStr = settings.get("soc2.bug-issue-types", "Bug,Defect");
-        List<String> bugTypes = Arrays.asList(bugTypesStr.split("\\s*,\\s*"));
         String issueType = job.getJiraIssueType();
-        boolean complianceApplicable = issueType != null
-                && bugTypes.stream().anyMatch(t -> t.equalsIgnoreCase(issueType));
+        boolean complianceApplicable = soc2Policy.isBugType(issueType);
 
         String reviewJobId = null;
         String reviewJobStatus = null;
@@ -444,14 +429,10 @@ public class JobsService {
                                    || hasAuditEvent(rawAuditEntries, "SLA_OVERDUE");
             boolean scytaleUploaded = hasAuditEvent(rawAuditEntries, "SOC2_EVIDENCE_UPLOADED");
 
-            String protectedBranches = settings.get("soc2.protected-branches", "develop,main,master,production");
-            boolean targetProtected = targetBranch != null
-                    && Arrays.stream(protectedBranches.split("\\s*,\\s*"))
-                             .anyMatch(b -> b.equalsIgnoreCase(targetBranch));
+            boolean targetProtected = soc2Policy.isProtected(targetBranch);
 
             boolean promotionTracked = job.getPromotionJobId() != null
-                    || (targetBranch != null && targetBranch.equalsIgnoreCase(
-                            settings.get("soc2.production-branch", "main")));
+                    || (targetBranch != null && targetBranch.equalsIgnoreCase(soc2Policy.productionBranch()));
 
             checks.add(new JobEvidenceResponse.ComplianceCheck(
                     "Linked Bug ticket", jiraKey != null,
@@ -547,14 +528,11 @@ public class JobsService {
                     "Job is not awaiting approval. Current status: " + job.getStatus());
         }
 
-        String protectedBranches = settings.get("soc2.protected-branches", "develop,main,master,production");
-        String bugIssueTypes     = settings.get("soc2.bug-issue-types",     "Bug,Defect");
-        String productionBranch  = settings.get("soc2.production-branch",   "main");
+        String target           = resolveTargetBranch(job);
+        String issueType        = job.getJiraIssueType();
+        String productionBranch = soc2Policy.productionBranch();
 
-        String target    = resolveTargetBranch(job);
-        String issueType = job.getJiraIssueType();
-
-        if (issueType != null && isBugType(issueType, bugIssueTypes) && isProtected(target, protectedBranches)) {
+        if (soc2Policy.isBugType(issueType) && soc2Policy.isProtected(target)) {
             boolean reviewed = jobStore.findByPrId(job.getPrId()).stream()
                     .anyMatch(j -> j.getJobType() == JobType.REVIEW && j.getStatus() == JobStatus.SUCCESS);
             if (!reviewed) {
@@ -578,10 +556,9 @@ public class JobsService {
                 Map.of("prId", job.getPrId() != null ? job.getPrId() : "unknown"));
 
         String jiraKey = extractJobJiraKey(job);
-        boolean isMergeToProduction = productionBranch != null && target != null
-                && target.equalsIgnoreCase(productionBranch);
+        boolean isMergeToProduction = target != null && target.equalsIgnoreCase(productionBranch);
 
-        if (issueType != null && isBugType(issueType, bugIssueTypes)) {
+        if (soc2Policy.isBugType(issueType)) {
             if (isMergeToProduction) {
                 if (jiraKey != null && !jiraKey.isBlank()) {
                     final String key = jiraKey;
@@ -612,7 +589,7 @@ public class JobsService {
                         }
                     });
                 }
-                if (target != null && isProtected(productionBranch, protectedBranches)) {
+                if (target != null && soc2Policy.isProtected(productionBranch)) {
                     schedulePromotion(job, target, productionBranch, jobId);
                 }
             }
@@ -699,17 +676,6 @@ public class JobsService {
         return null;
     }
 
-    private static boolean isBugType(String issueType, String configuredTypes) {
-        return Arrays.stream(configuredTypes.split("\\s*,\\s*"))
-                .anyMatch(t -> t.equalsIgnoreCase(issueType));
-    }
-
-    private static boolean isProtected(String branch, String configuredBranches) {
-        if (branch == null) return false;
-        return Arrays.stream(configuredBranches.split("\\s*,\\s*"))
-                .anyMatch(b -> b.equalsIgnoreCase(branch));
-    }
-
     private void schedulePromotion(JobRecord originalJob, String fromBranch, String toBranch, String originalJobId) {
         try {
             String repoUrl = null;
@@ -769,107 +735,4 @@ public class JobsService {
         return entries.stream().anyMatch(e -> action.equals(e.action()));
     }
 
-    // ── Diff parsing ──────────────────────────────────────────────────────
-
-    private static final Pattern DIFF_HUNK_HEADER = Pattern.compile(
-            "^@@\\s+-(\\d+)(?:,(\\d+))?\\s+\\+(\\d+)(?:,(\\d+))?\\s+@@(.*)$");
-
-    static JobDiffResponse buildDiffResponse(String sourceBranch, String targetBranch, String rawDiff) {
-        List<DiffFileEntry> files = new ArrayList<>();
-
-        if (rawDiff == null || rawDiff.isBlank()) {
-            return new JobDiffResponse(sourceBranch, targetBranch, 0, 0, files);
-        }
-
-        String currentPath = null;
-        String currentOldPath = null;
-        List<DiffHunkEntry> currentHunks = null;
-        List<DiffLineEntry> currentLines = null;
-        String currentHunkHeader = null;
-        int oldLineNo = 0;
-        int newLineNo = 0;
-
-        for (String raw : rawDiff.split("\n", -1)) {
-
-            if (raw.startsWith("diff --git ")) {
-                flushHunk(currentHunks, currentLines, currentHunkHeader);
-                flushFile(files, currentPath, currentOldPath, currentHunks);
-                currentPath = null;
-                currentOldPath = null;
-                currentHunks = new ArrayList<>();
-                currentLines = null;
-                currentHunkHeader = null;
-                oldLineNo = 0;
-                newLineNo = 0;
-                continue;
-            }
-
-            if (raw.startsWith("--- ")) {
-                String path = raw.substring(4).trim();
-                if (path.startsWith("a/")) path = path.substring(2);
-                currentOldPath = "/dev/null".equals(path) ? null : path;
-                continue;
-            }
-
-            if (raw.startsWith("+++ ")) {
-                String path = raw.substring(4).trim();
-                if (path.startsWith("b/")) path = path.substring(2);
-                if (!"/dev/null".equals(path)) currentPath = path;
-                continue;
-            }
-
-            Matcher m = DIFF_HUNK_HEADER.matcher(raw);
-            if (m.find()) {
-                flushHunk(currentHunks, currentLines, currentHunkHeader);
-                oldLineNo = Integer.parseInt(m.group(1));
-                newLineNo = Integer.parseInt(m.group(3));
-                currentHunkHeader = raw.trim();
-                currentLines = new ArrayList<>();
-                continue;
-            }
-
-            if (currentLines == null) continue;
-
-            if (raw.startsWith("+")) {
-                currentLines.add(new DiffLineEntry("add", 0, newLineNo, raw.substring(1)));
-                newLineNo++;
-            } else if (raw.startsWith("-")) {
-                currentLines.add(new DiffLineEntry("del", oldLineNo, 0, raw.substring(1)));
-                oldLineNo++;
-            } else if (raw.startsWith(" ")) {
-                currentLines.add(new DiffLineEntry("ctx", oldLineNo, newLineNo, raw.substring(1)));
-                oldLineNo++;
-                newLineNo++;
-            }
-        }
-
-        flushHunk(currentHunks, currentLines, currentHunkHeader);
-        flushFile(files, currentPath, currentOldPath, currentHunks);
-
-        int totalAdditions = files.stream().mapToInt(DiffFileEntry::additions).sum();
-        int totalDeletions = files.stream().mapToInt(DiffFileEntry::deletions).sum();
-        return new JobDiffResponse(sourceBranch, targetBranch, totalAdditions, totalDeletions, files);
-    }
-
-    private static void flushHunk(List<DiffHunkEntry> hunks, List<DiffLineEntry> lines, String header) {
-        if (hunks != null && lines != null && !lines.isEmpty()) {
-            hunks.add(new DiffHunkEntry(header != null ? header : "", List.copyOf(lines)));
-        }
-    }
-
-    private static void flushFile(List<DiffFileEntry> files, String path, String oldPath,
-                                   List<DiffHunkEntry> hunks) {
-        if (hunks == null || hunks.isEmpty()) return;
-        String effectivePath = path != null ? path : (oldPath != null ? oldPath : "unknown");
-        String status = path == null ? "removed" : (oldPath == null ? "added" : "modified");
-        int additions = 0;
-        int deletions = 0;
-        for (DiffHunkEntry hunk : hunks) {
-            for (DiffLineEntry line : hunk.lines()) {
-                if ("add".equals(line.type())) additions++;
-                else if ("del".equals(line.type())) deletions++;
-            }
-        }
-        files.add(new DiffFileEntry(effectivePath, status, additions, deletions, List.copyOf(hunks)));
-    }
 }

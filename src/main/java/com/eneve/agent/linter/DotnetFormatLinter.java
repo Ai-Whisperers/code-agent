@@ -18,12 +18,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class DotnetFormatLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(DotnetFormatLinter.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     /** MSBuild diagnostic pattern: path(line,col): severity CODE: message */
     private static final Pattern MSBUILD_DIAG = Pattern.compile(
@@ -134,7 +135,7 @@ public class DotnetFormatLinter implements LinterRunner {
             String json = Files.readString(reportFile);
             if (json.isBlank()) return findings;
 
-            JsonNode root = MAPPER.readTree(json);
+            JsonNode root = mapper.readTree(json);
             if (!root.isArray()) return findings;
 
             for (JsonNode entry : root) {

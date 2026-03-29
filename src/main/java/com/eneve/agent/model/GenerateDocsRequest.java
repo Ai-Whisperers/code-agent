@@ -31,7 +31,7 @@ public record GenerateDocsRequest(
 
         @Schema(description = "If true, commit directly to targetBranch instead of creating a PR (default: false)")
         Boolean commitDirect
-) {
+) implements JobPayload {
     public String targetBranchOrDefault() {
         return (targetBranch != null && !targetBranch.isBlank()) ? targetBranch : "main";
     }

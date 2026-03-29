@@ -29,9 +29,7 @@ import org.w3c.dom.NodeList;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-
 import jakarta.enterprise.context.ApplicationScoped;
-
 /**
  * Detects the primary framework archetype and its version from project files.
  *
@@ -65,6 +63,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 public class ArchetypeDetector {
 
     private static final Logger LOG = Logger.getLogger(ArchetypeDetector.class);
+
+    ObjectMapper objectMapper = new ObjectMapper();
 
     public record ArchetypeInfo(String archetype, String version, Map<String, String> dependencyVersions) {
 
@@ -439,7 +439,7 @@ public class ArchetypeDetector {
         }
 
         try {
-            JsonNode root = new ObjectMapper().readTree(pkgJson.toFile());
+            JsonNode root = objectMapper.readTree(pkgJson.toFile());
 
             Map<String, String> allDeps = new LinkedHashMap<>();
             for (String section : List.of("dependencies", "devDependencies", "peerDependencies")) {
@@ -555,7 +555,7 @@ public class ArchetypeDetector {
         Path globalJson = projectRoot.resolve("global.json");
         if (Files.exists(globalJson)) {
             try {
-                JsonNode root = new ObjectMapper().readTree(globalJson.toFile());
+                JsonNode root = objectMapper.readTree(globalJson.toFile());
                 JsonNode sdk = root.get("sdk");
                 if (sdk != null) {
                     JsonNode sdkVersion = sdk.get("version");
@@ -634,7 +634,7 @@ public class ArchetypeDetector {
         }
 
         try {
-            JsonNode root = new ObjectMapper().readTree(composerJson.toFile());
+            JsonNode root = objectMapper.readTree(composerJson.toFile());
 
             Map<String, String> allDeps = new java.util.LinkedHashMap<>();
             for (String section : List.of("require", "require-dev")) {

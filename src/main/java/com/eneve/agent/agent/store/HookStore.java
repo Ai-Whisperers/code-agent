@@ -10,7 +10,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.sql.*;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +22,7 @@ import java.util.Optional;
 public class HookStore {
 
     private static final Logger LOG = Logger.getLogger(HookStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     private static final String SELECT_COLS = """
             id, name, description, enabled, trigger_types, pr_event, branch_pattern,
@@ -211,37 +210,37 @@ public class HookStore {
         );
     }
 
-    private static String toJson(List<String> list) {
+    private String toJson(List<String> list) {
         if (list == null || list.isEmpty()) return null;
         try {
-            return MAPPER.writeValueAsString(list);
+            return mapper.writeValueAsString(list);
         } catch (JsonProcessingException e) {
             return null;
         }
     }
 
-    private static List<String> fromJson(String json) {
+    private List<String> fromJson(String json) {
         if (json == null || json.isBlank()) return List.of();
         try {
-            return MAPPER.readValue(json, new TypeReference<>() {});
+            return mapper.readValue(json, new TypeReference<>() {});
         } catch (JsonProcessingException e) {
             return List.of();
         }
     }
 
-    private static String toJsonMap(Map<String, String> map) {
+    private String toJsonMap(Map<String, String> map) {
         if (map == null || map.isEmpty()) return null;
         try {
-            return MAPPER.writeValueAsString(map);
+            return mapper.writeValueAsString(map);
         } catch (JsonProcessingException e) {
             return null;
         }
     }
 
-    private static Map<String, String> fromJsonMap(String json) {
+    private Map<String, String> fromJsonMap(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
-            return MAPPER.readValue(json, new TypeReference<>() {});
+            return mapper.readValue(json, new TypeReference<>() {});
         } catch (JsonProcessingException e) {
             return Map.of();
         }

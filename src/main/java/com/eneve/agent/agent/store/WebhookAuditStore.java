@@ -20,7 +20,7 @@ import java.util.List;
 public class WebhookAuditStore {
 
     private static final Logger LOG = Logger.getLogger(WebhookAuditStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -118,19 +118,19 @@ public class WebhookAuditStore {
         );
     }
 
-    private static String toJson(List<String> list) {
+    private String toJson(List<String> list) {
         if (list == null || list.isEmpty()) return null;
         try {
-            return MAPPER.writeValueAsString(list);
+            return mapper.writeValueAsString(list);
         } catch (JsonProcessingException e) {
             return null;
         }
     }
 
-    private static List<String> fromJson(String json) {
+    private List<String> fromJson(String json) {
         if (json == null || json.isBlank()) return List.of();
         try {
-            return MAPPER.readValue(json, new TypeReference<>() {});
+            return mapper.readValue(json, new TypeReference<>() {});
         } catch (JsonProcessingException e) {
             return List.of();
         }

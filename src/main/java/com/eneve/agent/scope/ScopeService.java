@@ -65,7 +65,7 @@ public class ScopeService {
 
     private static final Logger LOG = Logger.getLogger(ScopeService.class);
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject ScopeStore scopeStore;
     @Inject ScopeItemStore scopeItemStore;
@@ -563,7 +563,7 @@ public class ScopeService {
         String cleaned = extractJson(responseText);
         JsonNode root;
         try {
-            root = MAPPER.readTree(cleaned);
+            root = mapper.readTree(cleaned);
         } catch (Exception e) {
             throw new ImprovementGenerationException("Malformed JSON from AI for " + issueKey + ": " + e.getMessage());
         }

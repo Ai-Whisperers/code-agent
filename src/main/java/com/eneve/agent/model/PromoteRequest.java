@@ -27,7 +27,7 @@ public record PromoteRequest(
 
         @Schema(description = "Optional Aikido issue group ID for audit correlation")
         String aikidoIssueId
-) {
+) implements JobPayload {
     public String targetBranchOrDefault() {
         return targetBranch != null && !targetBranch.isBlank() ? targetBranch : "main";
     }

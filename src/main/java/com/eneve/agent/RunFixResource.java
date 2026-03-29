@@ -2,6 +2,9 @@ package com.eneve.agent;
 
 import java.util.Map;
 
+import com.eneve.agent.exception.JobConflictException;
+import com.eneve.agent.exception.JobNotFoundException;
+import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.GenerateDocsRequest;
@@ -74,7 +77,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId)).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -108,7 +111,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", result.jobId(), "branch", result.branch())).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -156,7 +159,7 @@ public class RunFixResource {
             return Response.status(503).entity(Map.of("error", e.getMessage())).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -192,7 +195,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -228,7 +231,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId, "prId", request.prId())).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -264,7 +267,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId, "branch", request.branchName())).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -299,7 +302,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId)).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -332,7 +335,7 @@ public class RunFixResource {
             return Response.accepted(Map.of("jobId", jobId)).build();
         } catch (IllegalArgumentException e) {
             return Response.status(400).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -354,7 +357,7 @@ public class RunFixResource {
             @PathParam("jobId") String jobId) {
         try {
             return Response.ok(runFixService.getStatus(jobId)).build();
-        } catch (RunFixService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -385,9 +388,9 @@ public class RunFixResource {
         try {
             runFixService.reject(jobId, request);
             return Response.ok(Map.of("status", "rejected", "jobId", jobId)).build();
-        } catch (RunFixService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -412,11 +415,11 @@ public class RunFixResource {
         try {
             runFixService.cancelJob(jobId);
             return Response.ok(Map.of("status", "cancelled", "jobId", jobId)).build();
-        } catch (RunFixService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         } catch (RunFixService.Soc2DeletionBlockedException e) {
             return Response.status(403).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -441,9 +444,9 @@ public class RunFixResource {
         try {
             String newJobId = runFixService.rerunJob(jobId);
             return Response.ok(Map.of("status", "queued", "jobId", newJobId, "originalJobId", jobId)).build();
-        } catch (RunFixService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (RunFixService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
         }
     }

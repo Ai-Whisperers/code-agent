@@ -15,7 +15,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
-
 /**
  * Runs PHPStan static analysis against PHP projects.
  *
@@ -34,7 +33,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 public class PhpStanLinter implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(PhpStanLinter.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    ObjectMapper mapper = new ObjectMapper();
 
     @Override
     public String name() {
@@ -143,7 +142,7 @@ public class PhpStanLinter implements LinterRunner {
     private List<LinterFinding> parseJsonOutput(String jsonOutput, Path workspaceRoot) {
         List<LinterFinding> findings = new ArrayList<>();
         try {
-            JsonNode root = MAPPER.readTree(jsonOutput);
+            JsonNode root = mapper.readTree(jsonOutput);
             JsonNode files = root.path("files");
             if (!files.isObject()) return findings;
 

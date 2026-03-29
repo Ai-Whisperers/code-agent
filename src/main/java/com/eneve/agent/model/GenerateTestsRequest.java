@@ -43,7 +43,7 @@ public record GenerateTestsRequest(
         @Schema(description = "Inline extra instructions to append to the system prompt",
                 example = "Prefer AssertJ assertions over plain JUnit assertions")
         String extraRules
-) {
+) implements JobPayload {
     public String targetBranchOrDefault() {
         return targetBranch != null && !targetBranch.isBlank() ? targetBranch : "develop";
     }

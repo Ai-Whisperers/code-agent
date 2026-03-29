@@ -15,7 +15,7 @@ public record JiraReviewRequest(
         String issueType,
         String parentKey,
         String grandparentKey
-) {
+) implements JobPayload {
     public JiraReviewRequest(String roadmapId, String issueKey, String issueType) {
         this(roadmapId, issueKey, issueType, null, null);
     }

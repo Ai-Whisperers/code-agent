@@ -45,8 +45,8 @@ public class AikidoService {
     private String clientSecret() { return settings.getSecret("aikido.client.secret"); }
     private String ciApiSecret() { return settings.getSecret("aikido.ci.api.secret"); }
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     private String accessToken;
     private Instant tokenExpiry = Instant.EPOCH;

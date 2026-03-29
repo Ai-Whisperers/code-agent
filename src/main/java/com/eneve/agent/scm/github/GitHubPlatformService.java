@@ -48,8 +48,8 @@ public class GitHubPlatformService implements GitPlatformService {
 
     private String baseUrl() { return settingsService.get("github.base.url", "https://api.github.com"); }
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     @Override
     public String[] createPullRequest(String org, String project, String repo,

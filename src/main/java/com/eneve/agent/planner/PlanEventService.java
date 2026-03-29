@@ -19,7 +19,7 @@ import java.util.Map;
 public class PlanEventService {
 
     private static final Logger LOG = Logger.getLogger(PlanEventService.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     private final Map<String, List<SseEventSink>> activeStreams = new ConcurrentHashMap<>();
 
@@ -58,7 +58,7 @@ public class PlanEventService {
         }
 
         try {
-            String eventData = MAPPER.writeValueAsString(event);
+            String eventData = mapper.writeValueAsString(event);
             OutboundSseEvent sseEvent = sse.newEventBuilder()
                     .name(event.eventType())
                     .data(eventData)

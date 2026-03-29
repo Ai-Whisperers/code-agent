@@ -64,7 +64,7 @@ public class PrSummaryGenerator {
      */
     public record SummaryResult(String body, List<PendingDiagram> pendingDiagrams) {}
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    ObjectMapper objectMapper = new ObjectMapper();
 
     @Inject
     AnthropicClient client;

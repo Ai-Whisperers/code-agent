@@ -40,14 +40,12 @@ public class PhpReleaseClient {
     private static final Pattern STABLE_VERSION_PATTERN = Pattern.compile("^\\d+\\.\\d+\\.\\d+$");
 
     @Inject SettingsService settings;
+    @Inject ObjectMapper objectMapper;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the latest stable PHP release version (e.g. {@code "8.3.11"}),
@@ -76,7 +74,7 @@ public class PhpReleaseClient {
                 return Optional.empty();
             }
 
-            JsonNode root = new ObjectMapper().readTree(response.body());
+            JsonNode root = objectMapper.readTree(response.body());
 
             List<String> stableVersions = new ArrayList<>();
             root.fieldNames().forEachRemaining(key -> {

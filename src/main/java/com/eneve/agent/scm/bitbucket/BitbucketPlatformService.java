@@ -46,8 +46,8 @@ public class BitbucketPlatformService implements GitPlatformService {
 
     private String baseUrl() { return settingsService.get("bitbucket.base.url", "https://api.bitbucket.org/2.0"); }
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     /** Lazily resolved actual Bitbucket account username (distinct from the HTTP auth credential). */
     private volatile String cachedAccountUsername;

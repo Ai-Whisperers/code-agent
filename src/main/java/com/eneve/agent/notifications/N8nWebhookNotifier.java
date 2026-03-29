@@ -11,6 +11,7 @@ import com.eneve.agent.model.RunResult;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 /**
  * Sends job results to n8n via webhook.
@@ -21,8 +22,8 @@ public class N8nWebhookNotifier {
 
     private static final Logger LOG = Logger.getLogger(N8nWebhookNotifier.class);
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     /**
      * Send job result to n8n. Uses the webhook URL from the request, or the default from config.

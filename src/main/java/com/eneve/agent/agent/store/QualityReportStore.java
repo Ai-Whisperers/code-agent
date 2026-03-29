@@ -3,7 +3,6 @@ package com.eneve.agent.agent.store;
 import com.eneve.agent.agent.model.QualityReport;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,8 +22,7 @@ import java.util.*;
 public class QualityReportStore {
 
     private static final Logger LOG = Logger.getLogger(QualityReportStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -148,7 +146,7 @@ public class QualityReportStore {
 
     private String toJson(QualityReport report) {
         try {
-            return MAPPER.writeValueAsString(report);
+            return mapper.writeValueAsString(report);
         } catch (JsonProcessingException e) {
             LOG.warnf("QualityReportStore: failed to serialise report: %s", e.getMessage());
             return "{}";
@@ -158,7 +156,7 @@ public class QualityReportStore {
     private QualityReport fromJson(String json) {
         if (json == null || json.isBlank()) return null;
         try {
-            return MAPPER.readValue(json, QualityReport.class);
+            return mapper.readValue(json, QualityReport.class);
         } catch (JsonProcessingException e) {
             LOG.warnf("QualityReportStore: failed to deserialise report: %s", e.getMessage());
             return null;

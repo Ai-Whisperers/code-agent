@@ -29,8 +29,16 @@ public class JobStore {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    /** In-memory cache for fast access to recently seen / active jobs. */
-    private final Map<String, JobRecord> cache = new ConcurrentHashMap<>();
+    private static final int CACHE_MAX_SIZE = 5_000;
+
+    /** Bounded LRU cache for fast access to recently seen / active jobs. */
+    private final Map<String, JobRecord> cache = Collections.synchronizedMap(
+            new LinkedHashMap<>(CACHE_MAX_SIZE, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, JobRecord> eldest) {
+                    return size() > CACHE_MAX_SIZE;
+                }
+            });
 
     /**
      * Persist a new job to the database and add it to the cache.

@@ -3,7 +3,6 @@ package com.eneve.agent.agent.store;
 import com.eneve.agent.agent.CodeMetricsCalculator.CodeMetricsSnapshot;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import io.agroal.api.AgroalDataSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -23,8 +22,7 @@ import java.util.UUID;
 public class CodeMetricsStore {
 
     private static final Logger LOG = Logger.getLogger(CodeMetricsStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper()
-            .registerModule(new JavaTimeModule());
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -142,7 +140,7 @@ public class CodeMetricsStore {
 
     private String toJson(CodeMetricsSnapshot snapshot) {
         try {
-            return MAPPER.writeValueAsString(snapshot);
+            return mapper.writeValueAsString(snapshot);
         } catch (JsonProcessingException e) {
             LOG.warnf("CodeMetricsStore: failed to serialise snapshot: %s", e.getMessage());
             return "{}";
@@ -152,7 +150,7 @@ public class CodeMetricsStore {
     private CodeMetricsSnapshot fromJson(String json) {
         if (json == null || json.isBlank()) return null;
         try {
-            return MAPPER.readValue(json, CodeMetricsSnapshot.class);
+            return mapper.readValue(json, CodeMetricsSnapshot.class);
         } catch (JsonProcessingException e) {
             LOG.warnf("CodeMetricsStore: failed to deserialise snapshot: %s", e.getMessage());
             return null;

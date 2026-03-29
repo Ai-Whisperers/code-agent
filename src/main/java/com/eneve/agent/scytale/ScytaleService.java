@@ -42,7 +42,7 @@ public class ScytaleService {
     @Inject
     ObjectMapper objectMapper;
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    @Inject HttpClient httpClient;
 
     /**
      * Uploads a structured evidence payload for {@code job} to Scytale.

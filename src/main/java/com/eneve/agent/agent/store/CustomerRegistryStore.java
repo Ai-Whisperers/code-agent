@@ -25,7 +25,7 @@ import java.util.Optional;
 public class CustomerRegistryStore {
 
     private static final Logger LOG = Logger.getLogger(CustomerRegistryStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -414,7 +414,7 @@ public class CustomerRegistryStore {
     private String toJson(Object value) {
         if (value == null) return "{}";
         try {
-            return MAPPER.writeValueAsString(value);
+            return mapper.writeValueAsString(value);
         } catch (Exception e) {
             LOG.warnf("Failed to serialize value to JSON: %s", e.getMessage());
             return "{}";
@@ -424,7 +424,7 @@ public class CustomerRegistryStore {
     private <T> T fromJson(String json, TypeReference<T> type) {
         if (json == null || json.isBlank()) return null;
         try {
-            return MAPPER.readValue(json, type);
+            return mapper.readValue(json, type);
         } catch (Exception e) {
             LOG.warnf("Failed to deserialize JSON: %s", e.getMessage());
             return null;

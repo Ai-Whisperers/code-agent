@@ -21,7 +21,7 @@ import java.util.Map;
 public class KnowledgeEmbeddingStore {
 
     private static final Logger LOG = Logger.getLogger(KnowledgeEmbeddingStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -221,19 +221,19 @@ public class KnowledgeEmbeddingStore {
         }
     }
 
-    private static String toJson(Map<String, Object> metadata) {
+    private String toJson(Map<String, Object> metadata) {
         if (metadata == null) return "{}";
         try {
-            return MAPPER.writeValueAsString(metadata);
+            return mapper.writeValueAsString(metadata);
         } catch (Exception e) {
             return "{}";
         }
     }
 
-    private static Map<String, Object> fromJson(String json) {
+    private Map<String, Object> fromJson(String json) {
         if (json == null || json.isBlank()) return Map.of();
         try {
-            return MAPPER.readValue(json, new TypeReference<Map<String, Object>>() {});
+            return mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
         } catch (Exception e) {
             return Map.of();
         }

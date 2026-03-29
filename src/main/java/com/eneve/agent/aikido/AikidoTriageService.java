@@ -13,6 +13,7 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.Soc2Policy;
 import com.eneve.agent.settings.SettingsService;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -45,6 +46,7 @@ public class AikidoTriageService {
     @Inject TeamsNotifier teamsNotifier;
     @Inject SettingsService settings;
     @Inject AuditStore auditStore;
+    @Inject Soc2Policy soc2Policy;
 
     /**
      * Result of a triage operation. Callers can inspect this to build an appropriate HTTP response.
@@ -209,12 +211,9 @@ public class AikidoTriageService {
     }
 
     private LocalDate calculateDueDate(String severity) {
-        int slaDays;
-        if ("critical".equalsIgnoreCase(severity)) {
-            slaDays = Integer.parseInt(settings.get("soc2.sla.critical-days", "3"));
-        } else {
-            slaDays = Integer.parseInt(settings.get("soc2.sla.high-days", "7"));
-        }
+        int slaDays = "critical".equalsIgnoreCase(severity)
+                ? soc2Policy.criticalSlaDays()
+                : soc2Policy.highSlaDays();
         return LocalDate.now().plusDays(slaDays);
     }
 

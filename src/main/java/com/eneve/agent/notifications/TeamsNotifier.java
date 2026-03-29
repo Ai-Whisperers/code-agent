@@ -25,7 +25,7 @@ public class TeamsNotifier {
     @Inject
     SettingsService settingsService;
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    @Inject HttpClient httpClient;
 
     public void sendNotification(RunResult result) {
         String webhookUrl = settingsService.get("teams.webhook.url", "");

@@ -20,4 +20,4 @@ public record HookJobRequest(
         String extraRules,
         boolean commitDirect,
         String hookName
-) {}
+) implements JobPayload {}

@@ -51,7 +51,7 @@ public record RunFixRequest(
         @Schema(description = "When true, skip PR creation after pushing — used for intermediate " +
                 "plan steps that share a single PR with the first FIX step in the plan.")
         Boolean skipPrCreation
-) {
+) implements JobPayload {
     public String targetBranchOrDefault() {
         return targetBranch != null && !targetBranch.isBlank() ? targetBranch : "main";
     }

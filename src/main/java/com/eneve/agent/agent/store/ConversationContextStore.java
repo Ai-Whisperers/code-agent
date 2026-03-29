@@ -23,7 +23,7 @@ import java.util.Optional;
 public class ConversationContextStore {
 
     private static final Logger LOG = Logger.getLogger(ConversationContextStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     AgroalDataSource dataSource;
@@ -75,11 +75,11 @@ public class ConversationContextStore {
              PreparedStatement ps = conn.prepareStatement(upsertSql)) {
             
             ps.setString(1, conversationId);
-            ps.setString(2, MAPPER.writeValueAsString(customerIds != null ? customerIds : List.of()));
-            ps.setString(3, MAPPER.writeValueAsString(productIds != null ? productIds : List.of()));
-            ps.setString(4, MAPPER.writeValueAsString(aikidoIssueIds != null ? aikidoIssueIds : List.of()));
-            ps.setString(5, MAPPER.writeValueAsString(jiraIssueKeys != null ? jiraIssueKeys : List.of()));
-            ps.setString(6, MAPPER.writeValueAsString(confluenceDocIds != null ? confluenceDocIds : List.of()));
+            ps.setString(2, mapper.writeValueAsString(customerIds != null ? customerIds : List.of()));
+            ps.setString(3, mapper.writeValueAsString(productIds != null ? productIds : List.of()));
+            ps.setString(4, mapper.writeValueAsString(aikidoIssueIds != null ? aikidoIssueIds : List.of()));
+            ps.setString(5, mapper.writeValueAsString(jiraIssueKeys != null ? jiraIssueKeys : List.of()));
+            ps.setString(6, mapper.writeValueAsString(confluenceDocIds != null ? confluenceDocIds : List.of()));
             ps.setTimestamp(7, Timestamp.from(now));
             ps.setTimestamp(8, Timestamp.from(now));
             
@@ -155,23 +155,23 @@ public class ConversationContextStore {
 
     private ConversationContext mapContext(ResultSet rs) throws SQLException {
         try {
-            List<String> customerIds = MAPPER.readValue(
+            List<String> customerIds = mapper.readValue(
                 rs.getString("customer_ids"), 
                 new TypeReference<List<String>>() {}
             );
-            List<String> productIds = MAPPER.readValue(
+            List<String> productIds = mapper.readValue(
                 rs.getString("product_ids"),
                 new TypeReference<List<String>>() {}
             );
-            List<Integer> aikidoIssueIds = MAPPER.readValue(
+            List<Integer> aikidoIssueIds = mapper.readValue(
                 rs.getString("aikido_issue_ids"),
                 new TypeReference<List<Integer>>() {}
             );
-            List<String> jiraIssueKeys = MAPPER.readValue(
+            List<String> jiraIssueKeys = mapper.readValue(
                 rs.getString("jira_issue_keys"),
                 new TypeReference<List<String>>() {}
             );
-            List<String> confluenceDocIds = MAPPER.readValue(
+            List<String> confluenceDocIds = mapper.readValue(
                 rs.getString("confluence_doc_ids"),
                 new TypeReference<List<String>>() {}
             );

@@ -32,7 +32,7 @@ import jakarta.inject.Inject;
 public class ConfluenceService {
 
     private static final Logger LOG = Logger.getLogger(ConfluenceService.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     SettingsService settingsService;
@@ -40,10 +40,7 @@ public class ConfluenceService {
     @Inject
     MermaidPngRenderer mermaidPngRenderer;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     public boolean isEnabled() {
         return !settingsService.get("confluence.base.url", "").isBlank()
@@ -154,7 +151,7 @@ public class ConfluenceService {
                 return null;
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             JsonNode results = root.path("results");
             if (results.isArray() && !results.isEmpty()) {
                 return results.get(0).path("id").asText();
@@ -266,7 +263,7 @@ public class ConfluenceService {
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
         if (response.statusCode() != 200) return null;
 
-        JsonNode results = MAPPER.readTree(response.body()).path("results");
+        JsonNode results = mapper.readTree(response.body()).path("results");
         if (results.isArray() && !results.isEmpty()) {
             return results.get(0).path("id").asText();
         }
@@ -302,7 +299,7 @@ public class ConfluenceService {
      */
     private String createPage(String spaceKey, String parentPageId,
                               String title, String storageBody) throws Exception {
-        ObjectNode body = MAPPER.createObjectNode();
+        ObjectNode body = mapper.createObjectNode();
         body.put("spaceId", resolveSpaceId(spaceKey));
         body.put("status", "current");
         body.put("title", title);
@@ -322,7 +319,7 @@ public class ConfluenceService {
                 .header("Authorization", authHeader())
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
-                .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -331,7 +328,7 @@ public class ConfluenceService {
             return null;
         }
 
-        JsonNode result = MAPPER.readTree(response.body());
+        JsonNode result = mapper.readTree(response.body());
         String pageId = result.path("id").asText();
         LOG.infof("Created Confluence page '%s' (id=%s) in space %s", title, pageId, spaceKey);
         return pageId;
@@ -340,7 +337,7 @@ public class ConfluenceService {
     private String updatePage(String pageId, String title, String storageBody) throws Exception {
         int currentVersion = getCurrentVersion(pageId);
 
-        ObjectNode body = MAPPER.createObjectNode();
+        ObjectNode body = mapper.createObjectNode();
         body.put("id", pageId);
         body.put("status", "current");
         body.put("title", title);
@@ -359,7 +356,7 @@ public class ConfluenceService {
                 .header("Authorization", authHeader())
                 .header("Content-Type", "application/json")
                 .header("Accept", "application/json")
-                .PUT(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                .PUT(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -382,7 +379,7 @@ public class ConfluenceService {
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        JsonNode result = MAPPER.readTree(response.body());
+        JsonNode result = mapper.readTree(response.body());
         return result.path("version").path("number").asInt(1);
     }
 
@@ -404,7 +401,7 @@ public class ConfluenceService {
             throw new RuntimeException("Failed to resolve space key '" + spaceKey + "': HTTP " + response.statusCode());
         }
 
-        JsonNode results = MAPPER.readTree(response.body()).path("results");
+        JsonNode results = mapper.readTree(response.body()).path("results");
         if (!results.isArray() || results.isEmpty()) {
             throw new RuntimeException("Confluence space not found: " + spaceKey);
         }
@@ -455,7 +452,7 @@ public class ConfluenceService {
                     break;
                 }
 
-                JsonNode root = MAPPER.readTree(response.body());
+                JsonNode root = mapper.readTree(response.body());
                 JsonNode results = root.path("results");
                 if (!results.isArray() || results.isEmpty()) break;
 
@@ -507,7 +504,7 @@ public class ConfluenceService {
                 return null;
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             String storageValue = root.path("body").path("storage").path("value").asText("");
             return stripXhtml(storageValue);
         } catch (Exception e) {
@@ -593,7 +590,7 @@ public class ConfluenceService {
                 return List.of();
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             JsonNode results = root.path("results");
             List<ConfluencePage> pages = new java.util.ArrayList<>();
             for (JsonNode r : results) {
@@ -632,7 +629,7 @@ public class ConfluenceService {
                 return null;
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             String title = root.path("title").asText("");
             String storageBody = root.path("body").path("storage").path("value").asText("");
             String body = stripXhtml(storageBody);
@@ -655,7 +652,7 @@ public class ConfluenceService {
             String spaceId = resolveSpaceIdWithCreds(spaceKey, creds);
             if (spaceId == null) return null;
 
-            ObjectNode body = MAPPER.createObjectNode();
+            ObjectNode body = mapper.createObjectNode();
             body.put("spaceId", spaceId);
             body.put("status", "current");
             body.put("title", title);
@@ -677,7 +674,7 @@ public class ConfluenceService {
                     .header("Authorization", auth)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                    .POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -686,7 +683,7 @@ public class ConfluenceService {
                 return null;
             }
 
-            JsonNode result = MAPPER.readTree(response.body());
+            JsonNode result = mapper.readTree(response.body());
             String createdPageId = result.path("id").asText();
             LOG.infof("Created Confluence page '%s' (id=%s) in space %s", title, createdPageId, spaceKey);
             return createdPageId;
@@ -705,7 +702,7 @@ public class ConfluenceService {
             MarkdownToStorageConverter.ConversionResult conversion =
                     MarkdownToStorageConverter.convert(markdownBody);
 
-            ObjectNode body = MAPPER.createObjectNode();
+            ObjectNode body = mapper.createObjectNode();
             body.put("id", pageId);
             body.put("status", "current");
             body.put("title", title);
@@ -726,7 +723,7 @@ public class ConfluenceService {
                     .header("Authorization", auth)
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
-                    .PUT(HttpRequest.BodyPublishers.ofString(MAPPER.writeValueAsString(body)))
+                    .PUT(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body)))
                     .build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
@@ -761,7 +758,7 @@ public class ConfluenceService {
             throw new RuntimeException("Failed to resolve space key '" + spaceKey + "': HTTP " + response.statusCode());
         }
 
-        JsonNode results = MAPPER.readTree(response.body()).path("results");
+        JsonNode results = mapper.readTree(response.body()).path("results");
         if (!results.isArray() || results.isEmpty()) {
             throw new RuntimeException("Confluence space not found: " + spaceKey);
         }
@@ -780,7 +777,7 @@ public class ConfluenceService {
                 .build();
 
         HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-        JsonNode result = MAPPER.readTree(response.body());
+        JsonNode result = mapper.readTree(response.body());
         return result.path("version").path("number").asInt(1);
     }
 

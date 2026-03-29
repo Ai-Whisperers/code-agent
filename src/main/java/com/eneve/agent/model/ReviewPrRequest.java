@@ -48,5 +48,5 @@ public record ReviewPrRequest(
                 + "Used to attribute review quality metrics to the developer.",
                 example = "alice")
         String prAuthor
-) {
+) implements JobPayload {
 }

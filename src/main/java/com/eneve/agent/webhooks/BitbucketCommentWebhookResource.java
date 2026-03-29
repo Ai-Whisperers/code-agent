@@ -3,30 +3,14 @@ package com.eneve.agent.webhooks;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.UUID;
 
 import com.eneve.agent.agent.model.CommentContext;
-import com.eneve.agent.agent.model.CommentFeedbackEntry;
-import com.eneve.agent.agent.store.CommentFeedbackStore;
 import com.eneve.agent.agent.model.CommentIntent;
-import com.eneve.agent.agent.store.CommentStore;
-import com.eneve.agent.agent.IntentClassifier;
-import com.eneve.agent.agent.JobQueue;
-import com.eneve.agent.agent.store.JobStore;
-import com.eneve.agent.agent.model.MemoryEntry;
-import com.eneve.agent.agent.store.MemoryStore;
-import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.WebhookAuditStore;
-import com.eneve.agent.scm.GitPlatformService;
-import com.eneve.agent.model.GenerateTestsRequest;
-import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
-import com.eneve.agent.model.ReplyCommentRequest;
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
-import com.eneve.agent.settings.SettingsService;
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
@@ -51,22 +35,14 @@ import jakarta.ws.rs.core.Response;
 @Produces(MediaType.APPLICATION_JSON)
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Webhooks", description = "Incoming webhook handlers for external integrations")
-public class BitbucketCommentWebhookResource {
+public class BitbucketCommentWebhookResource extends AbstractCommentWebhookHandler {
 
     private static final Logger LOG = Logger.getLogger(BitbucketCommentWebhookResource.class);
 
-    @Inject JobQueue jobQueue;
-    @Inject JobStore jobStore;
-    @Inject CommentStore commentStore;
-    @Inject CommentFeedbackStore feedbackStore;
-    @Inject IntentClassifier intentClassifier;
-    @Inject MemoryStore memoryStore;
-    @Inject RepoSettingsStore repoSettingsStore;
-    @Inject GitPlatformService platformService;
     @Inject WebhookAuditStore webhookAuditStore;
-    @Inject SettingsService settings;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Override
+    protected String agentUserSettingKey() { return "bitbucket.agent.user"; }
 
     @POST
     @Path("/bitbucket/pull-request-comment")
@@ -189,7 +165,7 @@ public class BitbucketCommentWebhookResource {
                     return ok("ignored", "Could not parse workspace/repo from: " + repoFullName);
                 }
                 audit("bitbucket", event, workspace, repoSlug, prId, commentAuthor, "false_positive", rawPayload);
-                return handleFalsePositiveCommand(workspace, repoSlug, repoUrl, prId,
+                return handleFalsePositiveCommand(workspace, repoSlug, prId,
                         parentCommentId, commentAuthor);
             }
 
@@ -224,156 +200,10 @@ public class BitbucketCommentWebhookResource {
         }
     }
 
-    private Response submitJob(String repoUrl, String prId,
-                               long parentCommentId, String humanMessage,
-                               String filePath, int line, JobType jobType) {
-        ReplyCommentRequest request = new ReplyCommentRequest(
-                repoUrl, prId, parentCommentId, humanMessage, filePath, line);
 
-        String jobId = UUID.randomUUID().toString();
-        JobRecord job = new JobRecord(jobId, request, jobType);
-        jobStore.put(job);
 
-        if (!jobQueue.submit(job)) {
-            return Response.status(429)
-                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
-                    .build();
-        }
 
-        String action = (jobType == JobType.FIX_COMMENT) ? "fix_triggered" : "reply_triggered";
-        LOG.infof("Comment webhook triggered %s job %s for comment %d on PR #%s",
-                jobType, jobId, parentCommentId, prId);
-        return Response.ok(Map.of(
-                "action", action,
-                "jobId", jobId,
-                "jobType", jobType.name(),
-                "parentCommentId", parentCommentId,
-                "prId", prId
-        )).build();
-    }
 
-    private Response handleGenerateTestsCommand(String repoUrl, String prId,
-                                                  long parentCommentId,
-                                                  String workspace, String repoSlug) {
-        String branchName = "agent/tests/pr-" + prId;
-        GenerateTestsRequest request = new GenerateTestsRequest(
-                repoUrl, branchName, null, null, null, null, null, null, null);
-
-        String jobId = UUID.randomUUID().toString();
-        JobRecord job = new JobRecord(jobId, request);
-        jobStore.put(job);
-
-        if (!jobQueue.submit(job)) {
-            return Response.status(429)
-                    .entity(Map.of("action", "rejected", "reason", "Job queue is full"))
-                    .build();
-        }
-
-        LOG.infof("/generate-tests triggered job %s for PR #%s (%s/%s)", jobId, prId, workspace, repoSlug);
-
-        try {
-            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
-                    "Generating unit tests — a pull request with the generated tests will be created shortly. Job ID: `" + jobId + "`");
-        } catch (Exception e) {
-            LOG.warnf("Failed to post /generate-tests confirmation reply (non-fatal): %s", e.getMessage());
-        }
-
-        return Response.ok(Map.of(
-                "action", "generate_tests_triggered",
-                "jobId", jobId,
-                "branch", branchName,
-                "prId", prId
-        )).build();
-    }
-
-    private Response handleLearnCommand(String commentText, String workspace, String repoSlug,
-                                         String repoUrl, String prId, long parentCommentId,
-                                         String author) {
-        String learning = commentText.substring("/learn ".length()).trim();
-        if (learning.isBlank()) {
-            return ok("ignored", "/learn command with empty text");
-        }
-
-        if (memoryStore.exists(workspace, repoSlug, learning)) {
-            LOG.debugf("Duplicate /learn ignored for %s/%s: %s", workspace, repoSlug, learning);
-            return ok("duplicate", "This preference is already stored");
-        }
-
-        MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, learning, author);
-        memoryStore.save(entry);
-
-        LOG.infof("/learn command from %s on %s/%s PR #%s: %s", author, workspace, repoSlug, prId, learning);
-
-        try {
-            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
-                    "Noted — I'll remember this for future reviews of this repository:\n\n> " + learning);
-        } catch (Exception e) {
-            LOG.warnf("Failed to post /learn confirmation reply (non-fatal): %s", e.getMessage());
-        }
-
-        return Response.ok(Map.of(
-                "action", "learning_stored",
-                "memory", learning,
-                "workspace", workspace,
-                "repoSlug", repoSlug
-        )).build();
-    }
-
-    private Response handleFalsePositiveCommand(String workspace, String repoSlug,
-                                                  String repoUrl, String prId,
-                                                  long parentCommentId, String author) {
-        CommentContext ctx = commentStore.find(parentCommentId).orElse(null);
-        if (ctx == null) {
-            LOG.warnf("/fp: could not find CommentContext for comment %d", parentCommentId);
-            return ok("ignored", "Could not find original finding for comment " + parentCommentId);
-        }
-
-        CommentFeedbackEntry feedback = CommentFeedbackEntry.falsePositive(
-                parentCommentId, prId, workspace, repoSlug,
-                ctx.category(), ctx.findingText(), author);
-        feedbackStore.save(feedback);
-
-        commentStore.markResolved(parentCommentId, author);
-
-        try {
-            platformService.resolveComment(workspace, "", repoSlug, prId, parentCommentId);
-        } catch (Exception e) {
-            LOG.warnf("Failed to resolve comment %d on platform (non-fatal): %s", parentCommentId, e.getMessage());
-        }
-
-        try {
-            platformService.replyToComment(workspace, "", repoSlug, prId, parentCommentId,
-                    "Got it \u2014 marked as false positive. I'll be more careful about this pattern in future reviews.");
-        } catch (Exception e) {
-            LOG.warnf("Failed to post /fp confirmation reply (non-fatal): %s", e.getMessage());
-        }
-
-        checkAndAutoSuppress(workspace, repoSlug, feedback.pattern(), author);
-
-        LOG.infof("/fp from %s on %s/%s PR #%s, comment %d: %s",
-                author, workspace, repoSlug, prId, parentCommentId,
-                ctx.findingText() != null ? ctx.findingText().substring(0, Math.min(80, ctx.findingText().length())) : "");
-
-        return Response.ok(Map.of(
-                "action", "false_positive_recorded",
-                "commentId", parentCommentId,
-                "workspace", workspace,
-                "repoSlug", repoSlug
-        )).build();
-    }
-
-    private void checkAndAutoSuppress(String workspace, String repoSlug, String pattern, String author) {
-        if (pattern == null || pattern.isBlank()) return;
-        List<String> recurring = feedbackStore.findRecurringPatterns(workspace, repoSlug, Integer.parseInt(settings.get("review.fp.auto-suppress-threshold", "3")));
-        if (!recurring.contains(pattern)) return;
-
-        String memoryText = "Do not flag findings matching this pattern — the team has repeatedly marked it as a false positive: " + pattern;
-        if (!memoryStore.exists(workspace, repoSlug, memoryText)) {
-            MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, memoryText, "auto-suppress");
-            memoryStore.save(entry);
-            LOG.infof("Auto-suppressed recurring FP pattern for %s/%s: %s", workspace, repoSlug, pattern);
-        }
-    }
 
     private void audit(String platform, String eventType, String workspace, String repoSlug,
                         String prId, String author, String action, String payload) {
@@ -385,7 +215,4 @@ public class BitbucketCommentWebhookResource {
         }
     }
 
-    private static Response ok(String action, String reason) {
-        return Response.ok(Map.of("action", action, "reason", reason)).build();
-    }
 }

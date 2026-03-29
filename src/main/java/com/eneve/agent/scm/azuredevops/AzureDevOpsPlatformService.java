@@ -47,8 +47,8 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
 
     private String baseUrl() { return settingsService.get("azuredevops.base.url", "https://dev.azure.com"); }
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     @Override
     public String[] createPullRequest(String org, String project, String repo,

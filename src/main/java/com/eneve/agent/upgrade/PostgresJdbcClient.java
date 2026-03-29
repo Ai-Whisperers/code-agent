@@ -46,10 +46,7 @@ public class PostgresJdbcClient {
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the latest stable PostgreSQL JDBC driver version (e.g. {@code "42.7.3"}),

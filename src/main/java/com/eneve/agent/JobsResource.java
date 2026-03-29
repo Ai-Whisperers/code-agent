@@ -3,6 +3,9 @@ package com.eneve.agent;
 import java.util.Map;
 
 import com.eneve.agent.agent.model.ChatEvent;
+import com.eneve.agent.exception.JobConflictException;
+import com.eneve.agent.exception.JobNotFoundException;
+import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.model.CommentChatRequest;
 import com.eneve.agent.model.JobDiffResponse;
 import com.eneve.agent.model.JobStatusResponse;
@@ -101,7 +104,7 @@ public class JobsResource {
             @PathParam("jobId") String jobId) {
         try {
             return Response.ok(jobsService.getJobDiff(jobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             return Response.status(503).entity(Map.of("error", e.getMessage())).build();
@@ -121,7 +124,7 @@ public class JobsResource {
             @PathParam("jobId") String jobId) {
         try {
             return Response.ok(jobsService.getJobCommits(jobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -143,7 +146,7 @@ public class JobsResource {
             @PathParam("sha") String sha) {
         try {
             return Response.ok(jobsService.getCommitDiff(jobId, sha)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -160,7 +163,7 @@ public class JobsResource {
     public Response getJobReview(@PathParam("jobId") String jobId) {
         try {
             return Response.ok(jobsService.getJobReview(jobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -180,11 +183,11 @@ public class JobsResource {
         try {
             String reviewJobId = jobsService.requestReview(jobId);
             return Response.accepted(Map.of("reviewJobId", reviewJobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             return Response.status(404).entity(Map.of("error", "Cannot resolve repository: " + e.getMessage())).build();
@@ -206,11 +209,11 @@ public class JobsResource {
         try {
             String fixPrJobId = jobsService.requestFixPr(jobId);
             return Response.accepted(Map.of("fixPrJobId", fixPrJobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             return Response.status(404).entity(Map.of("error", "Cannot resolve repository: " + e.getMessage())).build();
@@ -245,9 +248,9 @@ public class JobsResource {
         try {
             String fixCommentJobId = jobsService.requestFixComment(jobId, commentId, filePath, line);
             return Response.accepted(Map.of("fixCommentJobId", fixCommentJobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobQueueFullException e) {
+        } catch (JobQueueFullException e) {
             return Response.status(429).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             return Response.status(404).entity(Map.of("error", "Cannot resolve repository: " + e.getMessage())).build();
@@ -279,7 +282,7 @@ public class JobsResource {
         try {
             jobsService.resolveComment(jobId, commentId);
             return Response.ok(Map.of("resolved", true)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -309,7 +312,7 @@ public class JobsResource {
         try {
             jobsService.markFalsePositive(jobId, commentId);
             return Response.ok(Map.of("falsePositive", true)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -344,7 +347,7 @@ public class JobsResource {
         try {
             long replyId = jobsService.replyToComment(jobId, commentId, message);
             return Response.ok(Map.of("replyId", replyId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             LOG.errorf("Failed to post reply for comment %d: %s", commentId, e.getMessage());
@@ -362,7 +365,7 @@ public class JobsResource {
     public Response getJobEvidence(@PathParam("jobId") String jobId) {
         try {
             return Response.ok(jobsService.getJobEvidence(jobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
     }
@@ -381,7 +384,7 @@ public class JobsResource {
         try {
             String ref = jobsService.uploadScytaleEvidence(jobId);
             return Response.ok(Map.of("ref", ref)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         } catch (Exception e) {
             return Response.status(503).entity(Map.of("error", e.getMessage())).build();
@@ -405,9 +408,9 @@ public class JobsResource {
         try {
             jobsService.approveJob(jobId);
             return Response.ok(Map.of("status", "merged", "jobId", jobId)).build();
-        } catch (JobsService.JobNotFoundException e) {
+        } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
-        } catch (JobsService.JobConflictException e) {
+        } catch (JobConflictException e) {
             return Response.status(409).entity(Map.of("error", e.getMessage())).build();
         } catch (JobsService.Soc2GuardException e) {
             return Response.status(422).entity(Map.of("error", e.getMessage())).build();

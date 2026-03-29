@@ -44,7 +44,7 @@ public class ConfluenceWebhookResource {
     @Inject CustomerRegistryStore registryStore;
     @Inject WebhookAuditStore webhookAuditStore;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject ObjectMapper objectMapper;
 
     @POST
     @Path("/confluence")

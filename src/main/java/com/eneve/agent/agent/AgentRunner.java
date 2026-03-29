@@ -10,6 +10,7 @@ import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scytale.ScytaleService;
+import com.eneve.agent.Soc2Policy;
 import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Instance;
@@ -40,6 +41,7 @@ public class AgentRunner {
     @Inject ScytaleService scytaleService;
     @Inject SettingsService settings;
     @Inject AuditStore auditStore;
+    @Inject Soc2Policy soc2Policy;
 
     private volatile Map<JobType, JobHandler> handlers;
 
@@ -110,17 +112,14 @@ public class AgentRunner {
     private void tryScytaleAutoUpload(JobRecord job) {
         try {
             String apiKey      = settings.get("scytale.api.key",        "");
-            String bugTypes    = settings.get("soc2.bug-issue-types",    "Bug,Defect");
-            String productionBranch = settings.get("soc2.production-branch", "main");
-
             if (apiKey.isBlank()) return;
-            if (!JobStore.isSoc2Applicable(job, bugTypes)) return;
+            if (!JobStore.isSoc2Applicable(job, soc2Policy.bugIssueTypes())) return;
 
             // Only auto-upload when merging to the production branch
             String target = null;
             if (job.getRequest() != null)      target = job.getRequest().targetBranchOrDefault();
             else if (job.getHookRequest() != null) target = job.getHookRequest().targetBranch();
-            if (target == null || !target.equalsIgnoreCase(productionBranch)) return;
+            if (target == null || !target.equalsIgnoreCase(soc2Policy.productionBranch())) return;
 
             List<com.eneve.agent.audit.AuditEntry> rawEntries = auditStore.findByResourceId(job.getJobId(), 200);
             List<Map<String, Object>> checksPayload = List.of(

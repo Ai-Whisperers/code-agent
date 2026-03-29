@@ -43,14 +43,12 @@ public class PackagistClient {
             Pattern.compile("^v?\\d+\\.\\d+\\.\\d+$");
 
     @Inject SettingsService settings;
+    @Inject ObjectMapper objectMapper;
 
     private final Map<String, String> versionCache = new ConcurrentHashMap<>();
     private final Map<String, Instant> expiryCache = new ConcurrentHashMap<>();
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the latest stable version for a Packagist package, using a cached result when
@@ -86,7 +84,7 @@ public class PackagistClient {
                 return Optional.empty();
             }
 
-            JsonNode root = new ObjectMapper().readTree(response.body());
+            JsonNode root = objectMapper.readTree(response.body());
             JsonNode versions = root.path("package").path("versions");
             if (versions.isMissingNode() || !versions.isObject()) {
                 LOG.warnf("PackagistClient: unexpected JSON structure for %s — 'versions' not found", key);

@@ -26,7 +26,7 @@ public class VoyageEmbeddingService {
     private static final Logger LOG = Logger.getLogger(VoyageEmbeddingService.class);
     private static final String VOYAGE_API_URL = "https://api.voyageai.com/v1/embeddings";
     private static final String VOYAGE_RERANK_URL = "https://api.voyageai.com/v1/rerank";
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     /** Holds the original document index and its relevance score after reranking. */
     public record RerankResult(int index, double relevanceScore) {}
@@ -104,14 +104,14 @@ public class VoyageEmbeddingService {
             String apiKey = settingsService.getSecret("voyage.api.key");
             String model = settingsService.get("voyage.rerank.model", "rerank-2");
 
-            var requestBody = MAPPER.createObjectNode();
+            var requestBody = mapper.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("query", query);
             requestBody.put("top_k", topK);
             var docsArray = requestBody.putArray("documents");
             documents.forEach(docsArray::add);
 
-            String json = MAPPER.writeValueAsString(requestBody);
+            String json = mapper.writeValueAsString(requestBody);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(VOYAGE_RERANK_URL))
@@ -129,7 +129,7 @@ public class VoyageEmbeddingService {
                 return List.of();
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             JsonNode data = root.get("data");
             if (data == null || !data.isArray()) {
                 LOG.error("Voyage rerank response missing 'data' array");
@@ -159,13 +159,13 @@ public class VoyageEmbeddingService {
         try {
             String apiKey = settingsService.getSecret("voyage.api.key");
             String model = settingsService.get("voyage.model", "voyage-code-3");
-            var requestBody = MAPPER.createObjectNode();
+            var requestBody = mapper.createObjectNode();
             requestBody.put("model", model);
             requestBody.put("input_type", inputType);
             var inputArray = requestBody.putArray("input");
             texts.forEach(inputArray::add);
 
-            String json = MAPPER.writeValueAsString(requestBody);
+            String json = mapper.writeValueAsString(requestBody);
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(VOYAGE_API_URL))
@@ -183,7 +183,7 @@ public class VoyageEmbeddingService {
                 return List.of();
             }
 
-            JsonNode root = MAPPER.readTree(response.body());
+            JsonNode root = mapper.readTree(response.body());
             JsonNode data = root.get("data");
             if (data == null || !data.isArray()) {
                 LOG.error("Voyage API response missing 'data' array");

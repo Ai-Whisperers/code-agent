@@ -36,14 +36,12 @@ public class NpmRegistryClient {
     private static final String NPM_REGISTRY_BASE = "https://registry.npmjs.org/";
 
     @Inject SettingsService settings;
+    @Inject ObjectMapper objectMapper;
 
     private final Map<String, String> versionCache = new ConcurrentHashMap<>();
     private final Map<String, Instant> expiryCache = new ConcurrentHashMap<>();
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the latest stable version of the given npm package (e.g. {@code "react"},
@@ -82,7 +80,7 @@ public class NpmRegistryClient {
                 return Optional.empty();
             }
 
-            JsonNode root = new ObjectMapper().readTree(response.body());
+            JsonNode root = objectMapper.readTree(response.body());
             JsonNode versionNode = root.get("version");
             if (versionNode == null || versionNode.isNull()) {
                 LOG.warnf("NpmRegistryClient: 'version' field missing for package %s", packageName);

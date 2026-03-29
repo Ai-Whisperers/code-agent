@@ -43,7 +43,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
     private static final Logger LOG = Logger.getLogger(WebhookSignatureFilter.class);
     private static final String HMAC_SHA256 = "HmacSHA256";
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
     private static final long REPLAY_WINDOW_SECONDS = 30;
 
     @Inject
@@ -267,7 +267,7 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
         // Replay-attack guard: dispatched_at must be present and within the allowed window
         try {
-            com.fasterxml.jackson.databind.JsonNode node = MAPPER.readTree(body).path("dispatched_at");
+            com.fasterxml.jackson.databind.JsonNode node = mapper.readTree(body).path("dispatched_at");
             if (node.isMissingNode() || node.isNull()) {
                 LOG.warn("Aikido webhook rejected — dispatched_at field is missing from payload");
                 abort(ctx);

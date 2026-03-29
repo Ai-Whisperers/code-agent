@@ -25,7 +25,7 @@ import java.util.*;
 public class CloudAccountStore {
 
     private static final Logger LOG = Logger.getLogger(CloudAccountStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
     private static final String MASKED = "****";
 
     @Inject
@@ -188,7 +188,7 @@ public class CloudAccountStore {
             String json = encryption.isConfigured()
                     ? encryption.decrypt(encryptedJson)
                     : encryptedJson;
-            Map<String, String> plain = MAPPER.readValue(json, new TypeReference<>() {});
+            Map<String, String> plain = mapper.readValue(json, new TypeReference<>() {});
             if (!mask) return plain;
             Map<String, String> masked = new LinkedHashMap<>();
             plain.forEach((k, v) -> masked.put(k, v != null && !v.isBlank() ? MASKED : ""));
@@ -210,7 +210,7 @@ public class CloudAccountStore {
         if (allMasked) return null;
 
         try {
-            String json = MAPPER.writeValueAsString(credentials);
+            String json = mapper.writeValueAsString(credentials);
             return encryption.isConfigured() ? encryption.encrypt(json) : json;
         } catch (Exception e) {
             LOG.warnf("Failed to encrypt cloud account credentials: %s", e.getMessage());

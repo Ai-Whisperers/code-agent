@@ -24,4 +24,4 @@ public record ReplyCommentRequest(
 
         @Schema(description = "Line number the original comment was anchored to (0 for general comments)")
         int line
-) {}
+) implements JobPayload {}

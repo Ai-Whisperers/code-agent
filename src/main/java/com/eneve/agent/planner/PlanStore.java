@@ -30,7 +30,7 @@ import org.jboss.logging.Logger;
 public class PlanStore {
 
     private static final Logger LOG = Logger.getLogger(PlanStore.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     private static final String SELECT_COLS = """
             plan_id, status, source_type, source_ref, repo_url, target_branch,
@@ -495,24 +495,24 @@ public class PlanStore {
         }
     }
 
-    private static String toJson(PlanData planData) {
+    private String toJson(PlanData planData) {
         if (planData == null) {
             return "{\"phases\":[]}";
         }
         try {
-            return MAPPER.writeValueAsString(planData);
+            return mapper.writeValueAsString(planData);
         } catch (JsonProcessingException e) {
             LOG.warnf("Failed to serialize PlanData: %s", e.getMessage());
             return "{\"phases\":[]}";
         }
     }
 
-    private static PlanData fromJson(String json) {
+    private PlanData fromJson(String json) {
         if (json == null || json.isBlank()) {
             return new PlanData(List.of());
         }
         try {
-            return MAPPER.readValue(json, PlanData.class);
+            return mapper.readValue(json, PlanData.class);
         } catch (JsonProcessingException e) {
             LOG.warnf("Failed to deserialize PlanData: %s", e.getMessage());
             return new PlanData(List.of());

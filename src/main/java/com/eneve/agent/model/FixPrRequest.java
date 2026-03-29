@@ -34,5 +34,5 @@ public record FixPrRequest(
         @Schema(description = "n8n webhook URL for job completion callback",
                 example = "https://n8n.example.com/webhook/abc")
         String n8nWebhookUrl
-) {
+) implements JobPayload {
 }

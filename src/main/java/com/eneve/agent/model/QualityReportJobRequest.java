@@ -26,4 +26,4 @@ public record QualityReportJobRequest(
         @Schema(description = "Repository slug (short name)",
                 example = "my-repo")
         String repoSlug
-) {}
+) implements JobPayload {}

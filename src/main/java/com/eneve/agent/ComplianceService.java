@@ -5,7 +5,6 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.Soc2JobSummary;
-import com.eneve.agent.settings.SettingsService;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -27,7 +26,7 @@ public class ComplianceService {
     private static final Logger LOG = Logger.getLogger(ComplianceService.class);
 
     @Inject JobStore jobStore;
-    @Inject SettingsService settings;
+    @Inject Soc2Policy soc2Policy;
 
     public record Soc2PageResult(List<Soc2JobSummary> items, int total, int page, int limit) {}
 
@@ -38,9 +37,9 @@ public class ComplianceService {
      */
     public Soc2PageResult listSoc2Jobs(String statusParam, String slaStatusParam,
                                         String reviewStatusParam, int limit, int page) {
-        String bugIssueTypes = settings.get("soc2.bug-issue-types", "Bug,Defect");
-        int criticalDays = parseInt(settings.get("soc2.sla.critical-days", "5"), 5);
-        int highDays     = parseInt(settings.get("soc2.sla.high-days", "20"), 20);
+        String bugIssueTypes = soc2Policy.bugIssueTypes();
+        int criticalDays     = soc2Policy.criticalSlaDays();
+        int highDays         = soc2Policy.highSlaDays();
 
         int safeLimit = Math.min(Math.max(1, limit), 200);
         int offset    = Math.max(0, page) * safeLimit;
@@ -156,12 +155,4 @@ public class ComplianceService {
         }
     }
 
-    private static int parseInt(String value, int defaultValue) {
-        if (value == null) return defaultValue;
-        try {
-            return Integer.parseInt(value.trim());
-        } catch (NumberFormatException e) {
-            return defaultValue;
-        }
-    }
 }

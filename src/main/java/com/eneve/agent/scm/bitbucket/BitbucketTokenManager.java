@@ -46,8 +46,8 @@ public class BitbucketTokenManager {
     @Inject
     SettingsService settings;
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject HttpClient httpClient;
+    @Inject ObjectMapper objectMapper;
 
     private volatile String accessToken;
     private volatile Instant tokenExpiry = Instant.EPOCH;

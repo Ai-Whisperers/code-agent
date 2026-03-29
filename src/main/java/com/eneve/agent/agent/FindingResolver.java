@@ -53,7 +53,8 @@ public class FindingResolver {
     private static final int HUNK_PROXIMITY = 5;
     private static final int MAX_RETRIES = 3;
     private static final long INITIAL_BACKOFF_MS = 5_000;
-    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
+    @Inject ObjectMapper mapper;
 
     @Inject
     AnthropicClient client;
@@ -201,7 +202,7 @@ public class FindingResolver {
                     cleaned = cleaned.substring(nl + 1, last).strip();
                 }
             }
-            JsonNode root = OBJECT_MAPPER.readTree(cleaned);
+            JsonNode root = mapper.readTree(cleaned);
             if (!root.isArray()) {
                 LOG.warnf("Batch resolution response is not a JSON array, falling back");
                 throw new IllegalStateException("Response is not a JSON array");

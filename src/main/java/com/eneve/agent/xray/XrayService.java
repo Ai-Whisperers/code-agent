@@ -46,7 +46,7 @@ public class XrayService {
     SettingsService settingsService;
 
     private final HttpClient httpClient = HttpClient.newHttpClient();
-    private final ObjectMapper mapper = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     /** Thread-safe bearer-token cache keyed by {@code clientId}. */
     private final ConcurrentHashMap<String, CachedToken> tokenCache = new ConcurrentHashMap<>();

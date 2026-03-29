@@ -47,10 +47,7 @@ public class MavenCentralClient {
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the latest stable Quarkus platform version, using a cached result when available.

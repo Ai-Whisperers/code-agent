@@ -38,7 +38,7 @@ import java.util.stream.Collectors;
 public class PromptTemplateService {
 
     private static final Logger LOG = Logger.getLogger(PromptTemplateService.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Inject
     PromptTemplateStore store;
@@ -54,7 +54,7 @@ public class PromptTemplateService {
                 defaults = Map.of();
                 return;
             }
-            metadata = MAPPER.readValue(is, new TypeReference<>() {});
+            metadata = mapper.readValue(is, new TypeReference<>() {});
         } catch (IOException e) {
             LOG.errorf("Failed to parse default-prompts.json: %s", e.getMessage());
             defaults = Map.of();

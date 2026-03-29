@@ -51,7 +51,7 @@ public class AzureDevOpsCommentWebhookResource {
 
     private String agentUser() { return settings.get("azuredevops.agent.user", ""); }
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject ObjectMapper objectMapper;
 
     @POST
     @Path("/azuredevops/pull-request-comment")

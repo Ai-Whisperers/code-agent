@@ -43,14 +43,12 @@ public class DotnetReleaseClient {
             "https://dotnetcli.azureedge.net/dotnet/release-metadata/releases-index.json";
 
     @Inject SettingsService settings;
+    @Inject ObjectMapper objectMapper;
 
     private volatile String cachedVersion;
     private volatile Instant cacheExpiry = Instant.EPOCH;
 
-    private final HttpClient httpClient = HttpClient.newBuilder()
-            .connectTimeout(Duration.ofSeconds(15))
-            .followRedirects(HttpClient.Redirect.NORMAL)
-            .build();
+    @Inject HttpClient httpClient;
 
     /**
      * Returns the highest active LTS .NET channel version, using a cached result when available.
@@ -83,7 +81,7 @@ public class DotnetReleaseClient {
                 return Optional.empty();
             }
 
-            JsonNode root = new ObjectMapper().readTree(response.body());
+            JsonNode root = objectMapper.readTree(response.body());
             JsonNode index = root.get("releases-index");
             if (index == null || !index.isArray()) {
                 LOG.warnf("DotnetReleaseClient: unexpected JSON structure — 'releases-index' array missing");

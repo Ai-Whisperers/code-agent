@@ -7,6 +7,9 @@ import java.util.Map;
 import java.util.UUID;
 
 import com.eneve.agent.agent.AgentRunner;
+import com.eneve.agent.exception.JobConflictException;
+import com.eneve.agent.exception.JobNotFoundException;
+import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
@@ -43,20 +46,9 @@ public class RunFixService {
     @Inject AikidoService aikidoService;
     @Inject AuditService auditService;
     @Inject SettingsService settings;
+    @Inject Soc2Policy soc2Policy;
 
-    // ── Custom exceptions ─────────────────────────────────────────────────
-
-    public static class JobNotFoundException extends RuntimeException {
-        public JobNotFoundException(String message) { super(message); }
-    }
-
-    public static class JobConflictException extends RuntimeException {
-        public JobConflictException(String message) { super(message); }
-    }
-
-    public static class JobQueueFullException extends RuntimeException {
-        public JobQueueFullException(String message) { super(message); }
-    }
+    // ── RunFix-specific exceptions ────────────────────────────────────────
 
     public static class AikidoNotConfiguredException extends RuntimeException {
         public AikidoNotConfiguredException(String message) { super(message); }
@@ -422,8 +414,7 @@ public class RunFixService {
         JobRecord job = jobStore.get(jobId)
                 .orElseThrow(() -> new JobNotFoundException("Job not found: " + jobId));
 
-        String bugIssueTypes = settings.get("soc2.bug-issue-types", "Bug,Defect");
-        if (JobStore.isSoc2Applicable(job, bugIssueTypes)) {
+        if (JobStore.isSoc2Applicable(job, soc2Policy.bugIssueTypes())) {
             auditService.log("SOC2", "SOC2_DELETE_BLOCKED", "job", jobId, null);
             throw new Soc2DeletionBlockedException(
                     "SOC II: This job is linked to a Bug ticket and cannot be deleted. "
@@ -612,18 +603,15 @@ public class RunFixService {
     }
 
     private JobStatusResponse buildStatusResponse(JobRecord job, String jobId) {
-        int criticalDays = parseInt(settings.get("soc2.sla.critical-days", "5"), 5);
-        int highDays     = parseInt(settings.get("soc2.sla.high-days",     "20"), 20);
-        String bugTypes  = settings.get("soc2.bug-issue-types", "Bug,Defect");
+        int criticalDays = soc2Policy.criticalSlaDays();
+        int highDays     = soc2Policy.highSlaDays();
+        String bugTypes  = soc2Policy.bugIssueTypes();
         boolean scytaleEnabled = !settings.get("scytale.api.key", "").isBlank();
         List<String> bugList = Arrays.asList(bugTypes.split("\\s*,\\s*"));
         return JobStatusResponse.from(job, jobQueue.getQueuePosition(jobId),
                 criticalDays, highDays, bugList, scytaleEnabled);
     }
 
-    private static int parseInt(String value, int fallback) {
-        try { return Integer.parseInt(value.trim()); } catch (Exception e) { return fallback; }
-    }
 
     private static String slugify(String text) {
         if (text == null || text.isBlank()) return "fix";

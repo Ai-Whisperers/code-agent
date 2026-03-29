@@ -36,7 +36,7 @@ public class TeamsWebhookResource {
 
     @Inject HookEvaluator hookEvaluator;
 
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    @Inject ObjectMapper objectMapper;
 
     @POST
     @Path("/teams")

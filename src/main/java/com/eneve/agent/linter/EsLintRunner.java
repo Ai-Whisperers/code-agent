@@ -15,12 +15,13 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 
 @ApplicationScoped
 public class EsLintRunner implements LinterRunner {
 
     private static final Logger LOG = Logger.getLogger(EsLintRunner.class);
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    @Inject ObjectMapper mapper;
 
     @Override
     public String name() {
@@ -113,7 +114,7 @@ public class EsLintRunner implements LinterRunner {
     private List<LinterFinding> parseJsonOutput(String jsonOutput, Path workspaceRoot) {
         List<LinterFinding> findings = new ArrayList<>();
         try {
-            JsonNode root = MAPPER.readTree(jsonOutput);
+            JsonNode root = mapper.readTree(jsonOutput);
             if (!root.isArray()) return findings;
 
             for (JsonNode fileNode : root) {

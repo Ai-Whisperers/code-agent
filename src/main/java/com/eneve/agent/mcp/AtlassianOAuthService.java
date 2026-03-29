@@ -56,8 +56,8 @@ public class AtlassianOAuthService {
     @Inject
     LinkedAccountService linkedAccountService;
 
-    private final HttpClient    http   = HttpClient.newHttpClient();
-    private final ObjectMapper  mapper = new ObjectMapper();
+    @Inject HttpClient http;
+    @Inject ObjectMapper mapper;
 
     // ── Pending OAuth states ────────────────────────────────────────────────────
 

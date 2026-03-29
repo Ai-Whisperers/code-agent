@@ -23,7 +23,7 @@ public record SyncConfluenceRequest(
 
         @Schema(description = "Override the Confluence parent page ID from repo settings")
         String confluenceParentPageId
-) {
+) implements JobPayload {
     public String branchOrDefault() {
         return (branchName != null && !branchName.isBlank()) ? branchName : "main";
     }

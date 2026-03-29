@@ -40,7 +40,7 @@ public record MetricsJobRequest(
                 + "leave null for standalone jobs)",
                 example = "plan-abc123")
         String planId
-) {
+) implements JobPayload {
     public int effectiveThreshold() {
         return ccThreshold > 0 ? ccThreshold : 10;
     }
