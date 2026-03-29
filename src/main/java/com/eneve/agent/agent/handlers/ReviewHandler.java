@@ -13,6 +13,7 @@ import com.eneve.agent.diff.ReviewPromptResult;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
 import com.eneve.agent.scm.AgentComment;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -33,7 +34,7 @@ public class ReviewHandler implements JobHandler {
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
     @Inject ReviewCommentProcessor reviewProcessor;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject CommentStore commentStore;
     @Inject FindingResolver findingResolver;
     @Inject CodeGraphStore codeGraphStore;
@@ -69,6 +70,8 @@ public class ReviewHandler implements JobHandler {
             lifecycle.failReview(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
@@ -264,7 +267,7 @@ public class ReviewHandler implements JobHandler {
                                 diagramContext, request.prId());
                         if (summaryResult != null) {
                             postOrUpdatePrSummary(coords, request.prId(), existingComments,
-                                    summaryResult, jobIdFinal);
+                                    summaryResult, jobIdFinal, platformService);
                         }
                     } catch (Exception e) {
                         LOG.warnf("PR summary generation failed (non-fatal): %s", e.getMessage());
@@ -340,12 +343,12 @@ public class ReviewHandler implements JobHandler {
     private void postOrUpdatePrSummary(RepoCoordinates coords, String prId,
                                        List<AgentComment> existingComments,
                                        PrSummaryGenerator.SummaryResult summaryResult,
-                                       String jobId) {
+                                       String jobId, GitPlatformService platformService) {
         String org = coords.organization();
         String project = coords.project();
         String repo = coords.repository();
 
-        String body = resolveDiagramPlaceholders(summaryResult, org, repo);
+        String body = resolveDiagramPlaceholders(summaryResult, org, repo, platformService);
 
         Optional<Long> existingId = commentStore.findPrSummaryCommentId(prId, org, repo);
         if (existingId.isPresent()) {
@@ -371,7 +374,7 @@ public class ReviewHandler implements JobHandler {
     }
 
     private String resolveDiagramPlaceholders(PrSummaryGenerator.SummaryResult summaryResult,
-                                              String org, String repo) {
+                                              String org, String repo, GitPlatformService platformService) {
         if (summaryResult.pendingDiagrams().isEmpty()) {
             return summaryResult.body();
         }

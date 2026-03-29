@@ -30,7 +30,9 @@ public class CodeGraphQueryService {
         boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
         int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
-                .filter(f -> f.endsWith(".java") || f.endsWith(".cs"))
+                .filter(f -> f.endsWith(".java") || f.endsWith(".cs")
+                          || f.endsWith(".ts")   || f.endsWith(".tsx")
+                          || f.endsWith(".php"))
                 .toList();
 
         if (sourceFiles.isEmpty()) {
@@ -190,7 +192,9 @@ public class CodeGraphQueryService {
         boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
         int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
-                .filter(f -> f.endsWith(".java") || f.endsWith(".cs"))
+                .filter(f -> f.endsWith(".java") || f.endsWith(".cs")
+                          || f.endsWith(".ts")   || f.endsWith(".tsx")
+                          || f.endsWith(".php"))
                 .limit(MAX_FILES_FOR_DIAGRAM)
                 .toList();
 

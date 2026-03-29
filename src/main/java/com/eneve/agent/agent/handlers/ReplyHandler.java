@@ -5,6 +5,7 @@ import com.eneve.agent.agent.model.CommentContext;
 import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scm.ThreadComment;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -24,7 +25,7 @@ public class ReplyHandler implements JobHandler {
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject CommentStore commentStore;
     @Inject LearningExtractor learningExtractor;
     @Inject JobStore jobStore;
@@ -58,6 +59,8 @@ public class ReplyHandler implements JobHandler {
             lifecycle.failReply(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 

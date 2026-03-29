@@ -847,6 +847,21 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     private String appPassword() {
+        return appPasswordFor("");
+    }
+
+    /**
+     * Returns the Bitbucket app-password/access-token for the given workspace, checking
+     * for a workspace-specific override ({@code bitbucket.app.password.<workspace>})
+     * before falling back to the global key.
+     */
+    String appPasswordFor(String workspace) {
+        if (workspace != null && !workspace.isBlank()) {
+            String wsPassword = settingsService.getSecret("bitbucket.app.password." + workspace);
+            if (wsPassword != null && !wsPassword.isBlank()) {
+                return wsPassword;
+            }
+        }
         return settingsService.getSecret("bitbucket.app.password");
     }
 
@@ -894,7 +909,7 @@ public class BitbucketPlatformService implements GitPlatformService {
             return "https://x-token-auth:" + oauthToken
                     + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
         }
-        return "https://" + bbUser() + ":" + appPassword()
+        return "https://" + bbUser() + ":" + appPasswordFor(workspace)
                 + "@bitbucket.org/" + workspace + "/" + repoSlug + ".git";
     }
 

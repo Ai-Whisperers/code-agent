@@ -26,6 +26,7 @@ import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 
 /**
@@ -41,7 +42,7 @@ public class JobLifecycleHelper {
     @Inject JiraService jiraService;
     @Inject TeamsNotifier teamsNotifier;
     @Inject N8nWebhookNotifier n8nNotifier;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject com.eneve.agent.settings.SettingsService settings;
     @Inject AuditStore auditStore;
 
@@ -192,6 +193,7 @@ public class JobLifecycleHelper {
 
         try {
             RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());
+            GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
             platformService.replyToComment(
                     c.organization(), c.project(), c.repository(), request.prId(),
                     request.parentCommentId(),

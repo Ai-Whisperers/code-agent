@@ -10,6 +10,7 @@ import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.linter.StaticAnalysisDiffReport;
 import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -31,7 +32,7 @@ public class RunFixHandler implements JobHandler {
     @Inject AgentPromptBuilder promptBuilder;
     @Inject BuildAndLintHelper buildAndLintHelper;
     @Inject GitWorkspaceHelper gitHelper;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject JobStore jobStore;
     @Inject JobQueue jobQueue;
     @Inject JobLifecycleHelper lifecycle;
@@ -62,6 +63,8 @@ public class RunFixHandler implements JobHandler {
             lifecycle.failFix(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         WorkspaceContext workspace;
         try {
@@ -362,6 +365,7 @@ public class RunFixHandler implements JobHandler {
                               WorkspaceContext workspace, String summary) {
         long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         RepoCoordinates coords = RepoCoordinates.parse(request.repoUrl());
+        GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
         if (!buildAndLintHelper.runBuildWithRetry(workspace, job)) {
             lifecycle.failFix(job, "Build validation failed after retry attempt(s)");
             return;

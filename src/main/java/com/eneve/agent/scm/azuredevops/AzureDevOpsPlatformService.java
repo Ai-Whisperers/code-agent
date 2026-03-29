@@ -598,7 +598,17 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         }
     }
 
-    private String pat() {
+    /**
+     * Returns the Azure DevOps PAT for the given organization, checking for an org-specific
+     * override ({@code azuredevops.pat.<org>}) before falling back to the global key.
+     */
+    String patFor(String org) {
+        if (org != null && !org.isBlank()) {
+            String orgPat = settingsService.getSecret("azuredevops.pat." + org);
+            if (orgPat != null && !orgPat.isBlank()) {
+                return orgPat;
+            }
+        }
         return settingsService.getSecret("azuredevops.pat");
     }
 
@@ -607,8 +617,12 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     }
 
     private String authHeader() {
+        return authHeaderFor("");
+    }
+
+    private String authHeaderFor(String org) {
         return "Basic " + Base64.getEncoder()
-                .encodeToString((":" + pat()).getBytes(StandardCharsets.UTF_8));
+                .encodeToString((":" + patFor(org)).getBytes(StandardCharsets.UTF_8));
     }
 
     /**
@@ -627,7 +641,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     @Override
     public String buildCloneUrl(String workspace, String project, String repo) {
         String user = !agentUser().isBlank() ? agentUser() : workspace;
-        return "https://" + user + ":" + pat() + "@dev.azure.com/" + workspace + "/" + project + "/_git/" + repo;
+        return "https://" + user + ":" + patFor(workspace) + "@dev.azure.com/" + workspace + "/" + project + "/_git/" + repo;
     }
 
     /**

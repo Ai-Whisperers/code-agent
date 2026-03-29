@@ -646,6 +646,20 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     private String token() {
+        return tokenFor("");
+    }
+
+    /**
+     * Returns the GitLab token for the given namespace/org, checking for a namespace-specific
+     * override ({@code gitlab.token.<org>}) before falling back to the global key.
+     */
+    String tokenFor(String org) {
+        if (org != null && !org.isBlank()) {
+            String orgToken = settingsService.getSecret("gitlab.token." + org);
+            if (orgToken != null && !orgToken.isBlank()) {
+                return orgToken;
+            }
+        }
         return settingsService.getSecret("gitlab.token");
     }
 
@@ -656,7 +670,7 @@ public class GitLabPlatformService implements GitPlatformService {
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
         String user = !agentUser().isBlank() ? agentUser() : "gitlab-ci-token";
-        return "https://" + user + ":" + token() + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
+        return "https://" + user + ":" + tokenFor(workspace) + "@gitlab.com/" + workspace + "/" + repoSlug + ".git";
     }
 
     /**

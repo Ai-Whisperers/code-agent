@@ -6,7 +6,7 @@ import com.eneve.agent.agent.EmbeddingIndexer;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.CodeGraphStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
-import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -29,7 +29,7 @@ public class CodeGraphBuildService {
     @Inject EmbeddingIndexer embeddingIndexer;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject ArchetypeDetector archetypeDetector;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject SettingsService settingsService;
 
     public record BuildResult(int built, int skipped, int alreadyPresent) {}
@@ -59,7 +59,7 @@ public class CodeGraphBuildService {
                 continue;
             }
 
-            String cloneUrl = platformService.buildCloneUrl(repo.workspace(), repo.repoSlug());
+            String cloneUrl = platformRegistry.defaultPlatform().buildCloneUrl(repo.workspace(), repo.repoSlug());
             if (cloneUrl == null) {
                 skipped++;
                 continue;
@@ -116,7 +116,7 @@ public class CodeGraphBuildService {
     private Boolean detectArchetypeOnce(String workspace, String repoSlug) {
         String defaultBranch = settingsService.get("code-graph.scheduler.default-branch", "main");
         long cloneTimeoutMinutes = Long.parseLong(settingsService.get("code-graph.scheduler.clone-timeout-minutes", "10"));
-        String cloneUrl = platformService.buildCloneUrl(workspace, repoSlug);
+        String cloneUrl = platformRegistry.defaultPlatform().buildCloneUrl(workspace, repoSlug);
         if (cloneUrl == null) {
             LOG.debugf("No clone URL for %s/%s — skipping archetype detection", workspace, repoSlug);
             return null;
@@ -160,7 +160,7 @@ public class CodeGraphBuildService {
      * Returns true on success.
      */
     public boolean buildGraph(String workspace, String repoSlug) {
-        String cloneUrl = platformService.buildCloneUrl(workspace, repoSlug);
+        String cloneUrl = platformRegistry.defaultPlatform().buildCloneUrl(workspace, repoSlug);
         if (cloneUrl == null) {
             return false;
         }

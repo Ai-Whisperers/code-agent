@@ -7,6 +7,7 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scytale.ScytaleService;
 import com.eneve.agent.settings.SettingsService;
@@ -32,7 +33,7 @@ public class AgentRunner {
     private static final Logger LOG = Logger.getLogger(AgentRunner.class);
 
     @Inject Instance<JobHandler> handlerInstances;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject JiraService jiraService;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
@@ -79,6 +80,7 @@ public class AgentRunner {
         String repoUrl = lifecycle.resolveRepoUrl(job);
         String jiraKey = lifecycle.resolveJiraKey(job);
         RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
+        GitPlatformService platformService = platformRegistry.resolve(repoUrl);
 
         try {
             platformService.mergePullRequest(
@@ -159,6 +161,7 @@ public class AgentRunner {
         String repoUrl = lifecycle.resolveRepoUrl(job);
         String jiraKey = lifecycle.resolveJiraKey(job);
         RepoCoordinates coords = RepoCoordinates.parse(repoUrl);
+        GitPlatformService platformService = platformRegistry.resolve(repoUrl);
 
         try {
             platformService.declinePullRequest(

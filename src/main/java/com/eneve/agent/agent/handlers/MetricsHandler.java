@@ -6,6 +6,7 @@ import com.eneve.agent.agent.JobLifecycleHelper;
 import com.eneve.agent.agent.store.CodeMetricsStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -22,7 +23,7 @@ public class MetricsHandler implements JobHandler {
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject SettingsService settings;
 
     @Override
@@ -44,6 +45,8 @@ public class MetricsHandler implements JobHandler {
             lifecycle.failMetrics(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         LOG.infof("Metrics job %s: analysing %s/%s (branch: %s, threshold: %d)",
                 job.getJobId(), coords.organization(), coords.repository(),

@@ -5,6 +5,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
 import com.eneve.agent.rules.CursorRulesLoader;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -27,7 +28,7 @@ public class FixPrHandler implements JobHandler {
     @Inject CursorRulesLoader rulesLoader;
     @Inject BuildAndLintHelper buildAndLintHelper;
     @Inject GitWorkspaceHelper gitHelper;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
@@ -52,6 +53,8 @@ public class FixPrHandler implements JobHandler {
             lifecycle.failFixPr(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 

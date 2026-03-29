@@ -6,6 +6,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -26,7 +27,7 @@ public class GenerateTestsHandler implements JobHandler {
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject CoverageReporter coverageReporter;
     @Inject JsCoverageReporter jsCoverageReporter;
     @Inject BuildAndLintHelper buildAndLintHelper;
@@ -58,6 +59,8 @@ public class GenerateTestsHandler implements JobHandler {
             lifecycle.failGenerateTests(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         WorkspaceContext workspace;
         try {
@@ -328,6 +331,7 @@ public class GenerateTestsHandler implements JobHandler {
             RepoCoordinates coords, GenerateTestsRequest request,
             String testBranch, long timeoutMinutes,
             String initialHeadSha, String agentSummary) {
+        GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
         try {
             // Stage and commit anything the agent left uncommitted.
             boolean uncommittedSaved = workspace.commitAll(

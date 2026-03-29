@@ -21,7 +21,7 @@ import com.eneve.agent.planner.PlanOrchestratorService;
 import com.eneve.agent.planner.PlanStatus;
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.PlannerService;
-import com.eneve.agent.scm.GitPlatformService;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.util.UrlUtils;
 
 import com.eneve.agent.settings.SettingsService;
@@ -68,7 +68,7 @@ public class UpgradeService {
     @Inject PlanStore planStore;
     @Inject PlanOrchestratorService orchestratorService;
     @Inject TeamsNotifier teamsNotifier;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject AikidoService aikidoService;
     @Inject SettingsService settings;
 
@@ -239,7 +239,7 @@ public class UpgradeService {
     private String startUpgrade(RepoSettings repo, String archetype,
                                  String latestVersion, String migrationNotes) {
         String currentVersion = repo.archetypeVersion();
-        String cloneUrl = platformService.buildCloneUrl(repo.workspace(), repo.repoSlug());
+        String cloneUrl = platformRegistry.defaultPlatform().buildCloneUrl(repo.workspace(), repo.repoSlug());
         if (cloneUrl == null) {
             LOG.warnf("UpgradeService: cannot build clone URL for %s/%s — skipping",
                     repo.workspace(), repo.repoSlug());

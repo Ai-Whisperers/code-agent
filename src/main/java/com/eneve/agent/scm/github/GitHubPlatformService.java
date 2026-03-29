@@ -386,6 +386,20 @@ public class GitHubPlatformService implements GitPlatformService {
     }
 
     private String token() {
+        return tokenFor("");
+    }
+
+    /**
+     * Returns the GitHub token for the given org/owner, checking for an org-specific
+     * override ({@code github.token.<org>}) before falling back to the global key.
+     */
+    String tokenFor(String org) {
+        if (org != null && !org.isBlank()) {
+            String orgToken = settingsService.getSecret("github.token." + org);
+            if (orgToken != null && !orgToken.isBlank()) {
+                return orgToken;
+            }
+        }
         return settingsService.getSecret("github.token");
     }
 
@@ -396,7 +410,7 @@ public class GitHubPlatformService implements GitPlatformService {
     @Override
     public String buildCloneUrl(String workspace, String repoSlug) {
         String user = !agentUser().isBlank() ? agentUser() : "x-access-token";
-        return "https://" + user + ":" + token() + "@github.com/" + workspace + "/" + repoSlug + ".git";
+        return "https://" + user + ":" + tokenFor(workspace) + "@github.com/" + workspace + "/" + repoSlug + ".git";
     }
 
     /**

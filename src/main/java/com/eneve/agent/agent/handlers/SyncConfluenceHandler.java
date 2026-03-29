@@ -7,6 +7,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -30,7 +31,7 @@ public class SyncConfluenceHandler implements JobHandler {
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject SettingsService settings;
 
     @Override
@@ -61,6 +62,8 @@ public class SyncConfluenceHandler implements JobHandler {
             lifecycle.failSyncConfluence(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         String ws = coords.organization();
         String repoSlug = coords.repository();

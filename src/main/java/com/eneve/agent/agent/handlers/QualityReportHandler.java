@@ -9,6 +9,7 @@ import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.model.*;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -30,7 +31,7 @@ public class QualityReportHandler implements JobHandler {
     @Inject QualityReportStore reportStore;
     @Inject JobStore jobStore;
     @Inject JobLifecycleHelper lifecycle;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject SettingsService settings;
     @Inject HookEvaluator hookEvaluator;
 
@@ -53,6 +54,8 @@ public class QualityReportHandler implements JobHandler {
             lifecycle.failQualityReport(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         String workspaceName = request.workspace() != null ? request.workspace() : coords.organization();
         String repoSlug = request.repoSlug() != null ? request.repoSlug() : coords.repository();

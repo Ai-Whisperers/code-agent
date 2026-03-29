@@ -165,12 +165,11 @@ public class QueryCodeGraphTool implements ToolExecutor {
             return sb.toString();
         }
 
-        List<CodeGraphStore.CrossRepoEdgeResult> crossResults;
-        if (relation.equalsIgnoreCase("implementations")) {
-            crossResults = codeGraphStore.findImplementationsAcrossWorkspace(ws, repo, symbol);
-        } else {
-            crossResults = codeGraphStore.findCallersAcrossWorkspace(ws, repo, symbol);
-        }
+        List<CodeGraphStore.CrossRepoEdgeResult> crossResults = switch (relation.toLowerCase()) {
+            case "implementations" -> codeGraphStore.findImplementationsAcrossWorkspace(ws, repo, symbol);
+            case "dependents"      -> codeGraphStore.findDependentsAcrossWorkspace(ws, repo, symbol);
+            default                -> codeGraphStore.findCallersAcrossWorkspace(ws, repo, symbol);
+        };
 
         if (crossResults.isEmpty()) {
             sb.append("(none found in other repositories)\n");

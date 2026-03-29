@@ -8,6 +8,7 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.agent.GitWorkspaceHelper;
@@ -38,7 +39,7 @@ public class PromoteHandler implements JobHandler {
 
     private static final Logger LOG = Logger.getLogger(PromoteHandler.class);
 
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject JobStore jobStore;
     @Inject JobQueue jobQueue;
     @Inject JobLifecycleHelper lifecycle;
@@ -75,11 +76,13 @@ public class PromoteHandler implements JobHandler {
             return;
         }
 
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
+
         // ── 1. Fetch commit SHAs from the original PR ─────────────────────
         List<String> commitShas;
         try {
             commitShas = fetchCommitShas(coords, request.originalPrId(), request.fixBranchName(),
-                    request.repoUrl(), timeoutMinutes);
+                    request.repoUrl(), timeoutMinutes, platformService);
             if (commitShas.isEmpty()) {
                 failPromote(job, "No commits found for fix branch " + request.fixBranchName()
                         + " (prId=" + request.originalPrId() + ")");
@@ -190,7 +193,8 @@ public class PromoteHandler implements JobHandler {
     }
 
     private List<String> fetchCommitShas(RepoCoordinates coords, String prId, String fixBranchName,
-                                          String repoUrl, long timeoutMinutes) throws Exception {
+                                          String repoUrl, long timeoutMinutes,
+                                          GitPlatformService platformService) throws Exception {
         // Primary: use SCM API to get commits from the original PR
         if (prId != null && !prId.isBlank()) {
             List<PrCommitEntry> commits = platformService.getPrCommits(

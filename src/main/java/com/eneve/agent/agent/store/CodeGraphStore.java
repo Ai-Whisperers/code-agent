@@ -292,6 +292,16 @@ public class CodeGraphStore {
         return queryEdgesAcrossWorkspace(sql, workspace, excludeRepo, symbolName);
     }
 
+    public List<CrossRepoEdgeResult> findDependentsAcrossWorkspace(String workspace, String excludeRepo,
+                                                                   String symbolName) {
+        String sql = """
+                SELECT repo_slug, source_node, source_file FROM code_graph_edges
+                WHERE workspace = ? AND repo_slug != ? AND target_node = ?
+                LIMIT 20
+                """;
+        return queryEdgesAcrossWorkspace(sql, workspace, excludeRepo, symbolName);
+    }
+
     private List<CrossRepoEdgeResult> queryEdgesAcrossWorkspace(String sql, String workspace,
                                                                 String excludeRepo, String symbolName) {
         List<CrossRepoEdgeResult> results = new ArrayList<>();

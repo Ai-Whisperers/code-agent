@@ -8,6 +8,7 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -23,7 +24,7 @@ public class GenerateDocsHandler implements JobHandler {
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject DocsEmbeddingService docsEmbeddingService;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject JobStore jobStore;
@@ -58,6 +59,8 @@ public class GenerateDocsHandler implements JobHandler {
             lifecycle.failGenerateDocs(job, "Invalid repo URL: " + e.getMessage());
             return;
         }
+
+        final GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
 
         String ws = coords.organization();
         String repoSlug = coords.repository();
