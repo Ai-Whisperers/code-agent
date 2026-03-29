@@ -1,6 +1,6 @@
 # Code Agent Runner
 
-A self-hosted coding agent that automates issue fixing, dependency upgrades, and AI-powered code reviews. Built with Quarkus (Java 21), it clones your repos from Bitbucket Cloud or Azure DevOps, uses Claude (Anthropic) in an agentic tool-use loop to make changes, validates with Maven, creates pull requests, and keeps JIRA and Teams in sync.
+A self-hosted coding agent that automates issue fixing, dependency upgrades, and AI-powered code reviews. Built with Quarkus 3.23.0.CR1 (Java 17), it clones your repos from Bitbucket Cloud or Azure DevOps, uses Claude (Anthropic) in an agentic tool-use loop to make changes, validates with Maven/npm/dotnet, creates pull requests, and keeps JIRA and Teams in sync.
 
 ## Architecture
 
@@ -106,6 +106,18 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 | PATCH | `/settings/repos/{workspace}/{repoSlug}/disable` | Disable automated review for a repo |
 | DELETE | `/settings/repos/{workspace}/{repoSlug}` | Remove settings (revert to defaults) |
 
+### Automation Hooks
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/settings/hooks` | List all automation hooks |
+| GET | `/settings/hooks/{name}` | Get a specific automation hook |
+| POST | `/settings/hooks` | Create a new automation hook |
+| PUT | `/settings/hooks/{name}` | Update an existing automation hook |
+| PATCH | `/settings/hooks/{name}/enable` | Enable an automation hook |
+| PATCH | `/settings/hooks/{name}/disable` | Disable an automation hook |
+| DELETE | `/settings/hooks/{name}` | Delete an automation hook |
+
 ### AI Statistics
 
 | Method | Path | Description |
@@ -128,6 +140,197 @@ A self-hosted coding agent that automates issue fixing, dependency upgrades, and
 All submission endpoints queue jobs instead of rejecting them. Jobs are processed FIFO up to `RUN_FIX_MAX_CONCURRENT_JOBS` in parallel. A 429 is only returned when the queue itself is full (default capacity: 20). Poll `/status/{jobId}` to see queue position.
 
 Swagger UI is available at `/q/swagger-ui`.
+
+---
+
+## Database Schema
+
+The application uses PostgreSQL with Flyway migrations. Current tables:
+
+### agent_comments
+Tracks AI-generated review comments on pull requests.
+```sql
+comment_id    BIGINT PRIMARY KEY
+pr_id         TEXT NOT NULL
+workspace     TEXT NOT NULL
+repo_slug     TEXT NOT NULL
+project       TEXT NOT NULL DEFAULT ''
+file_path     TEXT
+line_number   INTEGER
+category      TEXT
+severity      TEXT
+finding_text  TEXT NOT NULL
+review_job_id TEXT
+created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+
+### ai_calls
+Stores telemetry data for all AI API calls for cost tracking and analysis.
+```sql
+id                          BIGSERIAL PRIMARY KEY
+job_id                      TEXT
+job_type                    TEXT
+model                       TEXT NOT NULL
+iteration                   INTEGER
+input_tokens                BIGINT NOT NULL DEFAULT 0
+output_tokens               BIGINT NOT NULL DEFAULT 0
+cache_creation_input_tokens BIGINT NOT NULL DEFAULT 0
+cache_read_input_tokens     BIGINT NOT NULL DEFAULT 0
+stop_reason                 TEXT
+tool_names                  TEXT
+duration_ms                 BIGINT NOT NULL DEFAULT 0
+is_error                    BOOLEAN NOT NULL DEFAULT FALSE
+error_message               TEXT
+created_at                  TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+
+### review_memory
+Stores learned team preferences and patterns for consistent PR reviews.
+```sql
+id                BIGSERIAL PRIMARY KEY
+workspace         TEXT NOT NULL
+repo_slug         TEXT NOT NULL
+memory_text       TEXT NOT NULL
+category          TEXT
+source            TEXT NOT NULL
+source_comment_id BIGINT
+source_pr_id      TEXT
+is_active         BOOLEAN NOT NULL DEFAULT TRUE
+created_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+created_by        TEXT
+```
+
+### repo_settings
+Per-repository configuration for automated reviews and rules.
+```sql
+id              BIGSERIAL PRIMARY KEY
+workspace       TEXT NOT NULL
+repo_slug       TEXT NOT NULL
+review_enabled  BOOLEAN NOT NULL DEFAULT TRUE
+rule_names      TEXT
+review_prompt   TEXT
+disabled_hooks  TEXT
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+UNIQUE(workspace, repo_slug)
+```
+
+### automation_hooks
+Configurable automation triggers for PR events and scheduled tasks.
+```sql
+id              BIGSERIAL PRIMARY KEY
+name            TEXT NOT NULL UNIQUE
+description     TEXT
+enabled         BOOLEAN NOT NULL DEFAULT TRUE
+trigger_type    TEXT NOT NULL
+pr_event        TEXT
+branch_pattern  TEXT
+cron_expr       TEXT
+action_type     TEXT NOT NULL
+prompt          TEXT NOT NULL
+rule_names      TEXT
+extra_rules     TEXT
+target_branch   TEXT
+commit_direct   BOOLEAN NOT NULL DEFAULT FALSE
+created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+```
+
+---
+
+## Configuration Properties
+
+All configuration is done via environment variables. Key properties:
+
+### Anthropic (Claude)
+- `ANTHROPIC_API_KEY` - Claude API key (required)
+- `ANTHROPIC_MODEL` - Model name (default: `claude-sonnet-4-20250514`)
+- `ANTHROPIC_MAX_TOKENS` - Max response tokens (default: `8192`)
+- `ANTHROPIC_PRICING_INPUT` - Input cost per million tokens (default: `3.0`)
+- `ANTHROPIC_PRICING_OUTPUT` - Output cost per million tokens (default: `15.0`)
+- `ANTHROPIC_PRICING_CACHE_WRITE` - Cache write cost per million tokens (default: `3.75`)
+- `ANTHROPIC_PRICING_CACHE_READ` - Cache read cost per million tokens (default: `0.30`)
+
+### JIRA Integration
+- `JIRA_BASE_URL` - JIRA Cloud base URL (default: `https://eneve.atlassian.net`)
+- `JIRA_USER` - JIRA username/email
+- `JIRA_API_TOKEN` - JIRA API token
+- `JIRA_TRANSITION_IN_REVIEW` - Transition ID for "In Review" status
+- `JIRA_TRANSITION_DONE` - Transition ID for "Done" status
+- `JIRA_TRANSITION_REJECTED` - Transition ID for "Rejected" status
+- `JIRA_DEFAULT_WORKLOG` - Default worklog time (default: `30m`)
+- `JIRA_AGENT_ASSIGNEE` - Agent user for auto-triggering
+- `JIRA_AGENT_LABEL` - Label for issue sync (default: `WALL-E`)
+- `JIRA_AGENT_DEFAULT_REPO_URL` - Default repo URL for issues
+
+### Git Platform
+- `GIT_PLATFORM` - Platform selection: `bitbucket` or `azuredevops` (default: `bitbucket`)
+
+### Bitbucket Cloud
+- `BITBUCKET_BASE_URL` - API base URL (default: `https://api.bitbucket.org/2.0`)
+- `BITBUCKET_WORKSPACE` - Workspace slug
+- `BITBUCKET_USER` - Username
+- `BITBUCKET_APP_PASSWORD` - App password
+
+### Azure DevOps
+- `AZUREDEVOPS_BASE_URL` - API base URL (default: `https://dev.azure.com`)
+- `AZUREDEVOPS_PAT` - Personal Access Token
+- `AZUREDEVOPS_AGENT_USER` - Agent user name
+
+### Git Credentials
+- `GIT_USERNAME` - Git username (defaults to Bitbucket user)
+- `GIT_PASSWORD` - Git password (defaults to Bitbucket app password)
+- `GIT_AUTHOR_NAME` - Commit author name (default: `code-agent`)
+- `GIT_AUTHOR_EMAIL` - Commit author email
+
+### Integrations
+- `TEAMS_WEBHOOK_URL` - Microsoft Teams webhook URL (optional)
+- `N8N_WEBHOOK_URL` - n8n webhook URL (optional)
+- `RULES_REPO_URL` - Shared cursor rules repository URL (optional)
+- `RULES_REPO_CACHE_DIR` - Local cache directory (default: `/tmp/cursor-rules-cache`)
+- `RULES_AUTO_READ_TARGET_REPO` - Auto-read target repo rules (default: `true`)
+
+### Aikido Security
+- `AIKIDO_BASE_URL` - Aikido base URL (default: `https://app.aikido.dev`)
+- `AIKIDO_CLIENT_ID` - OAuth client ID
+- `AIKIDO_CLIENT_SECRET` - OAuth client secret
+- `AIKIDO_CI_API_SECRET` - CI API secret for triggering scans
+
+### Security
+- `API_KEY` - Shared API key for REST endpoints (optional)
+- `WEBHOOK_SECRET_BITBUCKET` - HMAC-SHA256 secret for Bitbucket webhooks (optional)
+- `WEBHOOK_SECRET_AZUREDEVOPS` - HMAC-SHA256 secret for Azure DevOps webhooks (optional)
+- `WEBHOOK_SECRET_JIRA` - HMAC-SHA256 secret for JIRA webhooks (optional)
+
+### Job Queue & Performance
+- `RUN_FIX_MAX_CONCURRENT_JOBS` - Max parallel jobs (default: `3`)
+- `RUN_FIX_MAX_QUEUE_SIZE` - Queue capacity (default: `20`)
+- `REVIEW_WEBHOOK_SKIP_AUTHORS` - Skip PR reviews from these authors (default: `code-agent`)
+- `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` - Only review PRs with this keyword in title (default: none)
+
+### Agent Guardrails
+- `RUN_FIX_BLOCKED_PATHS` - Paths agent cannot modify (default: `src/main/security,src/main/billing,.github,.env`)
+- `RUN_FIX_ALLOWED_COMMANDS` - Allowed shell commands (default: `mvn,git diff,git status,ls,find,cat,dotnet,npm,npx`)
+- `RUN_FIX_MAX_FILES_CHANGED` - Max files per job (default: `10`)
+- `RUN_FIX_MAX_LINES_CHANGED` - Max lines per job (default: `500`)
+- `RUN_FIX_MAX_LOOP_ITERATIONS` - Max AI tool-use iterations (default: `50`)
+- `RUN_FIX_JOB_TIMEOUT_MINUTES` - Job timeout (default: `30`)
+
+### PostgreSQL Database
+- `DATABASE_URL` - JDBC URL (default: `jdbc:postgresql://localhost:5432/code_agent`)
+- `DATABASE_USER` - Database username (default: `code_agent`)
+- `DATABASE_PASSWORD` - Database password
+
+### Linter/SAST
+- `LINTER_ENABLED` - Enable linting (default: `true`)
+- `LINTER_CHECKSTYLE_ENABLED` - Enable Checkstyle (default: `true`)
+- `LINTER_PMD_ENABLED` - Enable PMD (default: `true`)
+- `LINTER_SPOTBUGS_ENABLED` - Enable SpotBugs (default: `true`)
+- `LINTER_ESLINT_ENABLED` - Enable ESLint (default: `true`)
+- `LINTER_DOTNET_FORMAT_ENABLED` - Enable dotnet format (default: `true`)
+- `LINTER_MAX_FIX_ITERATIONS` - Max fix attempts (default: `2`)
+- `LINTER_FAIL_ON_NEW_ISSUES` - Fail build on new issues (default: `false`)
+- `LINTER_TIMEOUT_MINUTES` - Linter timeout (default: `10`)
 
 ---
 
@@ -303,694 +506,154 @@ curl -X POST http://localhost:8080/sync-jira
   ],
   "skipped": [
     { "key": "JTP-10950", "reason": "Active job exists" },
-    { "key": "JTP-10960", "reason": "Active job exists" },
-    { "key": "JTP-10970", "reason": "No repo URL available" }
-  ]
+    { "key": "JTP-10960", "reason": "Active job exists" }
+  ],
+  "errors": []
 }
 ```
 
-## Configuration
+### Automation Hooks System
 
-All config via environment variables (or `application.properties` for local dev):
+**NEW:** The agent now supports configurable automation hooks that can trigger jobs based on PR events or schedules.
 
-### Core
+#### Built-in Hooks
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `ANTHROPIC_API_KEY` | Anthropic API key | (required) |
-| `ANTHROPIC_MODEL` | Claude model ID | `claude-sonnet-4-20250514` |
-| `ANTHROPIC_MAX_TOKENS` | Max tokens per API call | `8192` |
-| `ANTHROPIC_PRICING_INPUT` | USD per million input tokens | `3.0` |
-| `ANTHROPIC_PRICING_OUTPUT` | USD per million output tokens | `15.0` |
-| `ANTHROPIC_PRICING_CACHE_WRITE` | USD per million cache-write tokens | `3.75` |
-| `ANTHROPIC_PRICING_CACHE_READ` | USD per million cache-read tokens | `0.30` |
+The system comes with one pre-configured hook:
+- `update-readme` - Automatically updates README.md when a PR is merged to develop
 
-### JIRA Cloud
+#### Hook Configuration
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `JIRA_BASE_URL` | JIRA Cloud URL (e.g. `https://you.atlassian.net`) | (required) |
-| `JIRA_USER` | JIRA user email | (required) |
-| `JIRA_API_TOKEN` | Atlassian API token | (required) |
-| `JIRA_TRANSITION_IN_REVIEW` | Transition ID for "In Review" | (optional) |
-| `JIRA_TRANSITION_DONE` | Transition ID for "Done" | (optional) |
-| `JIRA_TRANSITION_REJECTED` | Transition ID for rejected | (optional) |
-| `JIRA_DEFAULT_WORKLOG` | Default time logged per fix | `30m` |
-| `JIRA_AGENT_ASSIGNEE` | Display name, email, or account ID of the agent user in JIRA | (optional) |
-| `JIRA_AGENT_LABEL` | JIRA label used by `/sync-jira` to find issues | `WALL-E` |
-| `JIRA_AGENT_DEFAULT_REPO_URL` | Default repo URL when not resolvable from Aikido | (optional) |
-
-### Git Platform
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `GIT_PLATFORM` | SCM platform: `bitbucket` or `azuredevops` | `bitbucket` |
-| `GIT_USERNAME` | Git clone/push user (defaults to platform user) | |
-| `GIT_PASSWORD` | Git clone/push password (defaults to platform token) | |
-| `GIT_AUTHOR_NAME` | Git commit author name | `code-agent` |
-| `GIT_AUTHOR_EMAIL` | Git commit author email | (optional) |
-
-### Bitbucket Cloud
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `BITBUCKET_BASE_URL` | Bitbucket Cloud API base | `https://api.bitbucket.org/2.0` |
-| `BITBUCKET_WORKSPACE` | Bitbucket workspace slug | (required) |
-| `BITBUCKET_USER` | Bitbucket username | (required) |
-| `BITBUCKET_APP_PASSWORD` | Bitbucket App Password | (required) |
-
-### Azure DevOps
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AZUREDEVOPS_BASE_URL` | Azure DevOps base URL | `https://dev.azure.com` |
-| `AZUREDEVOPS_PAT` | Azure DevOps Personal Access Token | (required) |
-| `AZUREDEVOPS_AGENT_USER` | Agent user display name in Azure DevOps | (optional) |
-
-### Notifications
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `TEAMS_WEBHOOK_URL` | Teams incoming webhook URL | (optional) |
-| `N8N_WEBHOOK_URL` | Default n8n webhook URL | (optional) |
-
-### Cursor Rules
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RULES_REPO_URL` | Default shared Cursor rules repo | (optional) |
-| `RULES_REPO_CACHE_DIR` | Local cache for rules repo | `/tmp/cursor-rules-cache` |
-| `RULES_AUTO_READ_TARGET_REPO` | Auto-load `.cursor/rules` from target repo | `true` |
-
-### Aikido Security
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `AIKIDO_CLIENT_ID` | Aikido OAuth2 client ID (Settings > Public API) | (optional) |
-| `AIKIDO_CLIENT_SECRET` | Aikido OAuth2 client secret | (optional) |
-| `AIKIDO_CI_API_SECRET` | Aikido CI integration token (for post-PR scan) | (optional) |
-| `AIKIDO_BASE_URL` | Aikido API base URL | `https://app.aikido.dev` |
-
-### Security
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `API_KEY` | Shared API key to protect REST endpoints (blank = disabled) | (optional) |
-| `WEBHOOK_SECRET_BITBUCKET` | HMAC-SHA256 secret for Bitbucket webhooks | (optional) |
-| `WEBHOOK_SECRET_AZUREDEVOPS` | HMAC/basic-auth secret for Azure DevOps webhooks | (optional) |
-| `WEBHOOK_SECRET_JIRA` | Secret for JIRA webhook verification | (optional) |
-
-### PR Review Webhooks
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `REVIEW_WEBHOOK_SKIP_AUTHORS` | Comma-separated PR authors to skip (avoid self-review) | `code-agent` |
-| `REVIEW_WEBHOOK_REQUIRE_TITLE_KEYWORD` | Only review PRs whose title contains this keyword | (optional) |
-
-### Job Queue & Guardrails
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `RUN_FIX_MAX_CONCURRENT_JOBS` | Max jobs running in parallel | `3` |
-| `RUN_FIX_MAX_QUEUE_SIZE` | Max jobs waiting in the queue | `20` |
-| `RUN_FIX_BLOCKED_PATHS` | Comma-separated blocked paths | `src/main/security,...` |
-| `RUN_FIX_ALLOWED_COMMANDS` | Comma-separated allowed command prefixes | `mvn,git diff,...` |
-| `RUN_FIX_MAX_FILES_CHANGED` | Max files the agent may change | `10` |
-| `RUN_FIX_MAX_LINES_CHANGED` | Max lines the agent may change | `500` |
-| `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `50` |
-| `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
-
-### Linter / SAST
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `LINTER_ENABLED` | Enable linter integration | `true` |
-| `LINTER_CHECKSTYLE_ENABLED` | Enable Checkstyle | `true` |
-| `LINTER_PMD_ENABLED` | Enable PMD | `true` |
-| `LINTER_SPOTBUGS_ENABLED` | Enable SpotBugs | `true` |
-| `LINTER_MAX_FIX_ITERATIONS` | Max iterations for auto-fixing linter issues | `2` |
-| `LINTER_FAIL_ON_NEW_ISSUES` | Fail the build on new linter issues | `false` |
-| `LINTER_TIMEOUT_MINUTES` | Linter execution timeout | `10` |
-
-### Database
-
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL JDBC URL | `jdbc:postgresql://localhost:5432/code_agent` |
-| `DATABASE_USER` | Database user | `code_agent` |
-| `DATABASE_PASSWORD` | Database password | (required) |
-
-### Finding JIRA transition IDs
-
-```bash
-curl -u user@email.com:API_TOKEN \
-  https://your-domain.atlassian.net/rest/api/3/issue/PROJ-123/transitions
-```
-
-## Build
-
-```bash
-mvn -B package -DskipTests
-```
-
-## Run locally
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-export JIRA_BASE_URL=https://your-domain.atlassian.net
-export JIRA_USER=you@example.com
-export JIRA_API_TOKEN=your-token
-export BITBUCKET_USER=your-bb-user
-export BITBUCKET_APP_PASSWORD=your-app-password
-export BITBUCKET_WORKSPACE=your-workspace
-export DATABASE_PASSWORD=your-db-password
-
-mvn quarkus:dev
-```
-
-The server starts on `http://localhost:8080`. Swagger UI is available at `http://localhost:8080/q/swagger-ui`.
-
-## Docker
-
-```bash
-docker build -t code-agent-runner .
-
-docker run -p 8080:8080 \
-  -e ANTHROPIC_API_KEY=sk-ant-... \
-  -e JIRA_BASE_URL=https://your-domain.atlassian.net \
-  -e JIRA_USER=you@example.com \
-  -e JIRA_API_TOKEN=... \
-  -e BITBUCKET_USER=... \
-  -e BITBUCKET_APP_PASSWORD=... \
-  -e BITBUCKET_WORKSPACE=... \
-  -e DATABASE_URL=jdbc:postgresql://host:5432/code_agent \
-  -e DATABASE_USER=code_agent \
-  -e DATABASE_PASSWORD=... \
-  code-agent-runner
-```
-
-## AWS Deployment (ECS Fargate)
-
-This section covers deploying Code Agent Runner on AWS ECS Fargate with proper security practices.
-
-### Prerequisites
-
-- An AWS account with ECS, ECR, Secrets Manager, and RDS access
-- A VPC with private subnets and a NAT gateway (the agent needs outbound internet for Bitbucket, JIRA, Anthropic, and Aikido APIs)
-- A PostgreSQL database (RDS recommended) accessible from the ECS tasks
-- The Docker image pushed to ECR
-
-### 1. Push the Docker image
-
-Build and push to your ECR registry:
-
-```bash
-aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com
-
-docker buildx build --platform=linux/amd64 -t <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com/julesenergy/code-agent-runner:1.0.0-SNAPSHOT .
-
-docker push <ACCOUNT_ID>.dkr.ecr.eu-central-1.amazonaws.com/julesenergy/code-agent-runner:1.0.0-SNAPSHOT
-```
-
-**Cross-account ECR pull:** If the image lives in a different account, add a resource policy on the source ECR repository:
-
-```bash
-aws ecr set-repository-policy \
-  --repository-name julesenergy/code-agent-runner \
-  --region eu-central-1 \
-  --policy-text '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Sid": "AllowCrossAccountPull",
-      "Effect": "Allow",
-      "Principal": { "AWS": "arn:aws:iam::<TARGET_ACCOUNT_ID>:root" },
-      "Action": [
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchGetImage",
-        "ecr:BatchCheckLayerAvailability"
-      ]
-    }]
-  }'
-```
-
-### 2. Store secrets in AWS Secrets Manager
-
-Never put credentials in the task definition as plaintext environment variables. Store them in Secrets Manager:
-
-```bash
-aws secretsmanager create-secret \
-  --name code-agent-runner/secrets \
-  --region eu-central-1 \
-  --secret-string '{
-    "ANTHROPIC_API_KEY": "sk-ant-...",
-    "JIRA_API_TOKEN": "ATATT3x...",
-    "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
-    "DATABASE_PASSWORD": "...",
-    "TEAMS_WEBHOOK_URL": "https://...",
-    "AIKIDO_CLIENT_SECRET": "AIK_SECRET_...",
-    "NEXUS_PASSWORD": "..."
-  }'
-```
-
-### 3. Create IAM roles
-
-**Execution role** — used by ECS to pull images and inject secrets:
+Create a new automation hook:
 
 ```json
 {
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": [
-        "ecr:GetAuthorizationToken",
-        "ecr:BatchCheckLayerAvailability",
-        "ecr:GetDownloadUrlForLayer",
-        "ecr:BatchGetImage"
-      ],
-      "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": "secretsmanager:GetSecretValue",
-      "Resource": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "logs:CreateLogGroup",
-        "logs:CreateLogStream",
-        "logs:PutLogEvents"
-      ],
-      "Resource": "*"
+  "name": "security-audit",
+  "description": "Run security audit on main branch weekly",
+  "enabled": true,
+  "triggerType": "pr_event",
+  "prEvent": "pullrequest:fulfilled",
+  "branchPattern": "^main$",
+  "actionType": "FIX",
+  "prompt": "Run a comprehensive security audit and fix any issues found",
+  "ruleNames": ["security-standards"],
+  "targetBranch": "main",
+  "commitDirect": false
+}
+```
+
+**Trigger Types:**
+- `pr_event` - Triggered by PR events (create, update, merge, etc.)
+- `schedule` - Triggered by cron expression (future enhancement)
+
+**PR Events:**
+- `pullrequest:created` - New PR created
+- `pullrequest:updated` - PR updated (new commits)
+- `pullrequest:fulfilled` - PR merged
+- `pullrequest:rejected` - PR declined
+
+**Action Types:**
+- `FIX` - Run agent fix job
+- `REVIEW` - Run agent review job
+
+**Branch Pattern:** Regex pattern to match target branches (e.g., `^main$`, `^feature/.*$`)
+
+### AI Statistics & Cost Tracking
+
+**NEW:** Track AI usage and costs with detailed analytics:
+
+```bash
+# Get recent AI calls with pagination
+GET /stats/ai-calls?limit=50&offset=0&jobType=FIX&from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
+
+# Get aggregated summary by model and job type
+GET /stats/ai-calls/summary?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
+
+# Get all AI calls for a specific job with cost estimate
+GET /stats/ai-calls/by-job/550e8400-e29b-41d4-a716-446655440000
+
+# Get daily aggregation for time-series charts
+GET /stats/ai-calls/daily?from=2024-01-01T00:00:00Z&to=2024-01-31T23:59:59Z
+```
+
+**Response example:**
+```json
+{
+  "jobId": "550e8400-...",
+  "calls": [...],
+  "totalCalls": 15,
+  "totalInputTokens": 125000,
+  "totalOutputTokens": 8500,
+  "totalCacheWriteTokens": 50000,
+  "totalCacheReadTokens": 75000,
+  "totalDurationMs": 45000,
+  "estimatedCostUsd": 1.85
+}
+```
+
+### Container-to-Repository Mapping
+
+**Enhanced:** The system includes a comprehensive mapping of Docker container images to source code repositories for Aikido integration:
+
+```json
+{
+  "mappings": {
+    "julesenergy/ms-meter": {
+      "repoUrl": "https://bitbucket.org/csarenergy/ms-meter.git",
+      "codeRepo": "ms-meter",
+      "confidence": "medium"
     }
-  ]
-}
-```
-
-The role's trust policy must allow `ecs-tasks.amazonaws.com` to assume it.
-
-**Task role** — only needed if the application calls AWS services at runtime. A minimal empty role is sufficient for most setups.
-
-### 4. Register the task definition
-
-Key settings for the task definition:
-
-| Setting | Recommended value | Notes |
-|---------|-------------------|-------|
-| CPU | 2048 (2 vCPU) | Increase to 4096 if running 3+ concurrent jobs on large repos |
-| Memory | 4096 (4 GB) | Increase to 8192 for heavy workloads |
-| Platform | `LINUX/X86_64` | The Docker image is built for `linux/amd64` |
-| Ephemeral storage | 30–50 GB | Default is 20 GB; increase if cloning many large repos concurrently |
-
-Secrets should reference Secrets Manager using `valueFrom` with the secret ARN and JSON key:
-
-```json
-"secrets": [
-  {
-    "name": "ANTHROPIC_API_KEY",
-    "valueFrom": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/secrets:ANTHROPIC_API_KEY::"
-  },
-  {
-    "name": "JIRA_API_TOKEN",
-    "valueFrom": "arn:aws:secretsmanager:eu-central-1:<ACCOUNT_ID>:secret:code-agent-runner/secrets:JIRA_API_TOKEN::"
   }
-]
-```
-
-Non-sensitive configuration (model names, JIRA base URL, guardrail settings, etc.) can be set as plain `environment` entries.
-
-### 5. Health checks
-
-The application includes the `quarkus-smallrye-health` extension. Configure the ECS health check:
-
-```json
-"healthCheck": {
-  "command": ["CMD-SHELL", "curl -f http://localhost:8080/q/health/ready || exit 1"],
-  "interval": 30,
-  "timeout": 5,
-  "retries": 3,
-  "startPeriod": 60
 }
 ```
 
-If using an ALB, point the target group health check at `/q/health/ready`.
+This mapping enables automatic repository resolution when processing Aikido security vulnerabilities.
 
-### 6. Networking
+### Multi-Platform Support
 
-- Place ECS tasks in **private subnets** with a NAT gateway for outbound access.
-- The agent needs outbound HTTPS (443) to: Bitbucket API, JIRA Cloud, Anthropic API, Aikido API, and optionally Teams/n8n webhooks.
-- Use a **security group** that allows inbound on port 8080 only from your ALB or VPN.
-- The database security group should allow inbound PostgreSQL (5432) only from the ECS task security group.
+The agent supports both **Bitbucket Cloud** and **Azure DevOps**:
 
-### 7. Nexus / private Maven mirror
+- **Bitbucket Cloud:** Full webhook support for PR events and comments
+- **Azure DevOps:** Service hooks for PR events and thread comments
+- **Linting:** Supports Java (Checkstyle, PMD, SpotBugs), JavaScript (ESLint), and .NET (dotnet format)
+- **Build Systems:** Maven, npm/npx, and .NET CLI
 
-If the repositories the agent builds depend on private artifacts from a Nexus server, the Docker image includes a `settings.xml` that reads Nexus credentials from environment variables at runtime:
-
-| Variable | Description |
-|----------|-------------|
-| `NEXUS_URL` | Full URL to the Nexus repository (e.g. `https://nexus.company.com/repository/maven-public/`) |
-| `NEXUS_USERNAME` | Nexus username |
-| `NEXUS_PASSWORD` | Nexus password (store in Secrets Manager) |
-
-The `settings.xml` configures Nexus as a mirror for all Maven repositories (`<mirrorOf>*</mirrorOf>`), so any `mvn` command the agent runs against target repos will resolve artifacts through your Nexus.
-
-### 8. Service setup
-
-Create an ECS service with:
-
-- **Desired count:** 1 (the agent handles concurrency internally via its job queue)
-- **Deployment:** rolling update (minimum healthy 100%, maximum 200%)
-- **Load balancer:** Application Load Balancer with HTTPS listener if you need to receive webhooks from the public internet
-- **Auto-scaling:** Generally not needed — scale the internal job queue settings instead (`RUN_FIX_MAX_CONCURRENT_JOBS`)
-
-## Bitbucket Configuration
-
-### App Password
-
-The agent uses a Bitbucket App Password for Git operations and the Bitbucket API.
-
-1. Go to **Personal settings > App passwords** (or use a team service account)
-2. Click **Create app password** with these permissions:
-   - **Repositories:** Read, Write
-   - **Pull requests:** Read, Write
-3. Set the credentials in your environment:
-
-| Variable | Value |
-|----------|-------|
-| `BITBUCKET_USER` | `x-token-auth` (for App Passwords) or your Bitbucket username |
-| `BITBUCKET_APP_PASSWORD` | The generated app password |
-| `BITBUCKET_WORKSPACE` | Your Bitbucket workspace slug |
-| `GIT_USERNAME` | `x-token-auth` |
-| `GIT_PASSWORD` | Same as `BITBUCKET_APP_PASSWORD` |
-
-### Webhooks
-
-#### PR auto-review webhook
-
-1. Go to **Repository Settings > Webhooks** (per repo) or configure at workspace level
-2. Click **Add webhook**:
-   - **Title:** `Code Agent PR Review`
-   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request`
-   - **Secret:** A random string (set the same value as `WEBHOOK_SECRET_BITBUCKET`)
-   - **Events:** select `Pull Request: Created` and `Pull Request: Updated`
-3. The agent automatically skips PRs authored by itself (configurable via `REVIEW_WEBHOOK_SKIP_AUTHORS`)
-
-#### PR comment interaction webhook
-
-1. Add another webhook:
-   - **Title:** `Code Agent Comment Reply`
-   - **URL:** `https://<your-agent-host>/webhooks/bitbucket/pull-request-comment`
-   - **Secret:** Same as above
-   - **Events:** select `Pull Request: Comment Created`
-2. This enables developers to reply to agent review comments and have the agent respond or fix code
-
-#### JIRA auto-trigger webhook
-
-See [JIRA Webhook (auto-trigger on assignment)](#jira-webhook-auto-trigger-on-assignment) for setup instructions. When the agent creates PRs from JIRA-triggered jobs, it uses the Bitbucket credentials above.
-
-### Security best practices
-
-- **Webhook signature verification:** Always set `WEBHOOK_SECRET_BITBUCKET` in production. The agent verifies incoming webhooks via HMAC-SHA256 using the `X-Hub-Signature` header. Without this, anyone who discovers the webhook URL can trigger jobs.
-- **API key protection:** Set `API_KEY` to require an `X-API-Key` header on all REST endpoints. Health checks and Swagger UI are excluded. Webhook endpoints use their own signature verification instead.
-- **Least-privilege App Password:** Only grant the Bitbucket App Password the minimum permissions needed (repo read/write, PR read/write). Do not grant admin or webhook management scopes.
-- **Secrets management:** Never store API tokens, passwords, or webhook secrets as plaintext environment variables in ECS task definitions. Use AWS Secrets Manager with `valueFrom` references. Rotate credentials periodically.
-- **Network isolation:** Run ECS tasks in private subnets. Expose the agent only through an ALB with HTTPS. Restrict the ALB security group to known IP ranges (Bitbucket webhook IPs, your office VPN, JIRA Cloud IPs).
-- **Blocked paths:** The agent respects `RUN_FIX_BLOCKED_PATHS` to prevent modifications to sensitive directories (security modules, billing code, CI config, `.env` files). Review and adjust this list for your codebase.
-- **Command allowlist:** Only commands matching `RUN_FIX_ALLOWED_COMMANDS` prefixes can be executed by the agent. This prevents arbitrary command execution.
-- **Change limits:** `RUN_FIX_MAX_FILES_CHANGED` and `RUN_FIX_MAX_LINES_CHANGED` cap the blast radius of any single job. The agent aborts if it exceeds these limits.
-- **Job timeout:** `RUN_FIX_JOB_TIMEOUT_MINUTES` (default 30) prevents runaway jobs from consuming resources indefinitely.
-- **Bitbucket IP allowlisting:** If your ALB is public, restrict inbound to [Bitbucket Cloud's IP ranges](https://support.atlassian.com/organization-administration/docs/ip-addresses-and-domains-for-atlassian-cloud-products/) for the webhook paths and your own network for the API paths.
-
-## Cursor Rules Integration
-
-The runner loads coding standards from two sources:
-
-1. **Shared rules repo** — pass `rulesRepoUrl` and optional `ruleNames` in the request. The runner clones/caches the repo and loads `.cursor/rules/{name}.mdc` files by name. If `ruleNames` is omitted, all `alwaysApply: true` rules are loaded.
-
-2. **Target repo** — after cloning the repo being fixed, the runner scans for `.cursor/rules/*.mdc`, `.cursorrules`, and `AGENTS.md`. All `alwaysApply: true` rules are included automatically.
-
-Rules are prepended to the system prompt in order: shared rules, repo rules, inline `extraRules`, then mandatory guardrails. This ensures the agent follows the same conventions your team uses in Cursor IDE.
-
-## AI Code Review
-
-The agent performs automated code reviews on pull requests, triggered either via the `/review-pr` endpoint or automatically through Bitbucket/Azure DevOps webhooks.
-
-### What it reviews
-
-- **Security** — injection vulnerabilities, hardcoded secrets, auth issues
-- **Design** — SOLID principles, separation of concerns, API design
-- **Code quality** — naming, complexity, duplication, error handling
-- **Testing** — coverage gaps, missing edge cases, test quality
-- **Performance** — N+1 queries, unnecessary allocations, algorithm complexity
-- **Best practices** — framework conventions, idiomatic patterns
-
-### Review memory
-
-The agent learns team preferences over time. When a developer replies to a review comment with `/learn <preference>`, the agent stores it and respects it in future reviews of that repository. Memories can also be managed via the `/memory` REST endpoints.
-
-### Comment interaction
-
-When a developer replies to an agent review comment:
-1. The agent classifies the intent as either a **fix request** or a **discussion**
-2. For fix requests, the agent modifies the code and pushes the change
-3. For discussions, the agent replies conversationally in the same thread
-
-### Repo settings
-
-Each repository can be individually configured to control review behavior. Settings are stored in PostgreSQL and managed via the `/settings/repos` REST endpoints.
-
-**Enable/disable review:** Turn automated PR review on or off per repo. Disabled repos silently skip incoming webhooks.
+### Health & Monitoring
 
 ```bash
-# Disable review for a repo
-curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/disable
-
-# Re-enable
-curl -X PATCH http://localhost:8080/settings/repos/myworkspace/my-repo/enable
+GET /health
 ```
 
-**Per-repo rule names:** Configure which shared rules to load from the rules repo, instead of relying on request parameters or global defaults.
+Returns system health including:
+- Queue status (active jobs, queue size, available slots)
+- Database connectivity
+- External service status
 
-**Custom review prompt:** Override the default review prompt template for a repo. The template supports placeholders that are substituted at review time: `{{PR_TITLE}}`, `{{TARGET_BRANCH}}`, `{{PREVIOUS_COMMENTS}}`, `{{MEMORY_SECTION}}`, `{{DIFF_NOTE}}`, `{{DIFF}}`.
+### Development
 
+**Java 17** is required. The project uses:
+- **Quarkus 3.23.0.CR1** - Reactive web framework
+- **PostgreSQL** - Primary database with Flyway migrations
+- **Anthropic Claude** - AI model integration
+- **Maven** - Build system
+
+**Build:**
 ```bash
-curl -X PUT http://localhost:8080/settings/repos/myworkspace/my-repo \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "reviewEnabled": true,
-    "ruleNames": ["java-conventions", "security-standards"],
-    "reviewPrompt": "You are reviewing a pull request for {{PR_TITLE}}.\n\n{{MEMORY_SECTION}}\n\nFocus only on security and performance issues.\n\n## Diff\n```\n{{DIFF}}\n```"
-  }'
+mvn clean package
 ```
 
-**Startup sync:** On application startup, the agent fetches all repositories from the configured Bitbucket workspace and ensures each has a settings row in the database. New repos default to review enabled (opt-out model). Existing settings are left untouched.
-
-### Linter integration
-
-During reviews, the agent can run Checkstyle, PMD, and SpotBugs to surface static analysis findings alongside AI-powered observations. Each linter can be individually enabled/disabled.
-
-## Aikido Security Integration
-
-The `/aikido-fix` endpoint provides a closed-loop vulnerability fix pipeline powered by Aikido Security.
-
-### How it works
-
-1. Aikido detects a vulnerability in your codebase and creates a JIRA ticket
-2. You (or automation) call `POST /aikido-fix` with just `{"jiraKey": "JTP-10967"}`
-3. The agent resolves the full vulnerability context from Aikido:
-   - Package name, current version, fixed version
-   - CVE details (severity, CVSS score, description)
-   - Changelog summary between versions
-4. Builds an enriched prompt with all this context for Claude
-5. Claude upgrades the dependency, makes necessary code changes, runs tests
-6. A PR is created and JIRA is updated
-
-### Issue resolution strategies
-
-The agent uses three strategies to find the Aikido issue (in order):
-
-1. **Aikido API search** — queries open issue groups for one linked to the JIRA key
-2. **JIRA description parsing** — extracts Aikido URLs from the ticket description (supports `groupId=`, `sidebarIssue=`, and `/issues/groups/` URL formats)
-3. **Direct ID** — pass `aikidoGroupId` in the request to skip lookup
-
-### Setup
-
-1. In Aikido, go to **Settings > Public API** and create an OAuth client
-2. Set `AIKIDO_CLIENT_ID` and `AIKIDO_CLIENT_SECRET` in your `.env`
-3. (Optional) For post-PR scan verification, set `AIKIDO_CI_API_SECRET` from **Settings > CI Integration**
-
-## JIRA Webhook (auto-trigger on assignment)
-
-The agent can automatically start fixing issues when they are assigned to a dedicated JIRA user (e.g. "Code Agent"). Any issue type (Bug, Task, Story, etc.) is supported — the webhook triggers based solely on the assignee.
-
-### How it works
-
-1. Any issue is assigned to the "Code Agent" user in JIRA
-2. JIRA fires a webhook to `POST /webhooks/jira`
-3. The agent checks: is the assignee the agent user? Did the assignee actually change?
-4. If Aikido is configured, it tries the Aikido-enriched flow (package, CVE, changelog)
-5. Otherwise, falls back to JIRA description as the prompt
-6. A fix job is submitted automatically
-
-### Setup in JIRA Cloud
-
-1. Create a JIRA user for the agent (e.g. "Code Agent") or use an existing service account
-2. Go to **JIRA Settings > System > Webhooks** (admin required)
-3. Click **Create a WebHook**:
-   - **URL:** `https://your-agent-host:8080/webhooks/jira`
-   - **Events:** check `Issue created` and `Issue updated`
-   - **JQL filter (optional):** `assignee = "Code Agent"` to reduce noise
-4. Configure in `.env`:
-   ```
-   JIRA_AGENT_ASSIGNEE=Code Agent
-   JIRA_AGENT_DEFAULT_REPO_URL=https://bitbucket.org/your-workspace/your-repo.git
-   ```
-
-`JIRA_AGENT_ASSIGNEE` can be the display name, email address, or Atlassian account ID.
-`JIRA_AGENT_DEFAULT_REPO_URL` is used as a fallback when the repo can't be resolved from Aikido.
-
-## Bitbucket / Azure DevOps PR Webhooks (auto-review)
-
-The agent can automatically review every pull request created or updated in your repositories.
-
-### Setup in Bitbucket Cloud
-
-1. Go to **Repository Settings > Webhooks**
-2. Click **Add webhook**:
-   - **URL:** `https://your-agent-host:8080/webhooks/bitbucket/pull-request`
-   - **Events:** `Pull Request: Created`, `Pull Request: Updated`
-3. (Optional) For comment interaction, add another webhook:
-   - **URL:** `https://your-agent-host:8080/webhooks/bitbucket/pull-request-comment`
-   - **Events:** `Pull Request: Comment Created`
-4. Set `WEBHOOK_SECRET_BITBUCKET` for HMAC-SHA256 verification
-
-### Setup in Azure DevOps
-
-1. Go to **Project Settings > Service Hooks**
-2. Create a **Web Hook** subscription:
-   - **Event:** `Pull request created` and `Pull request updated`
-   - **URL:** `https://your-agent-host:8080/webhooks/azuredevops/pull-request`
-3. (Optional) For comment interaction:
-   - **Event:** `Pull request comment event`
-   - **URL:** `https://your-agent-host:8080/webhooks/azuredevops/pull-request-comment`
-4. Set `WEBHOOK_SECRET_AZUREDEVOPS` for request verification
-
-## API Security
-
-The agent supports two security mechanisms:
-
-- **API key** — set `API_KEY` to protect all REST endpoints. Requests must include `X-API-Key` header. Health checks (`/health`), Swagger UI (`/q/*`), and webhook endpoints are excluded.
-- **Webhook signatures** — set `WEBHOOK_SECRET_BITBUCKET`, `WEBHOOK_SECRET_AZUREDEVOPS`, or `WEBHOOK_SECRET_JIRA` to verify incoming webhook payloads via HMAC-SHA256.
-
-## n8n Approval Flow
-
-1. n8n triggers `POST /run-fix` with the job payload
-2. Runner processes the job and calls n8n webhook on completion
-3. n8n sends a Teams notification with PR details
-4. Human reviews the PR in Bitbucket
-5. Human approves/rejects via n8n (form, Teams node, or manual trigger)
-6. n8n calls `POST /jobs/{jobId}/approve` or `POST /jobs/{jobId}/reject`
-7. Runner merges or declines the PR and updates JIRA
-
-## Database
-
-The agent uses PostgreSQL for persistent storage. Flyway handles schema migrations automatically at startup.
-
-**Tables:**
-
-| Table | Purpose |
-|-------|---------|
-| `agent_comments` | Maps comment IDs to agent findings for reply tracking |
-| `ai_calls` | AI call metrics (tokens, cost, duration) per job |
-| `review_memory` | Team preferences learned during PR reviews |
-| `repo_settings` | Per-repo configuration (review enabled, rule names, custom prompt) |
-
-## Project Structure
-
+**Run tests:**
+```bash
+mvn test
 ```
-src/main/java/com/eneve/agent/
-├── RunFixResource.java          # REST endpoints (/run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr)
-├── MemoryResource.java          # REST endpoints (/memory)
-├── RepoSettingsResource.java    # REST endpoints (/settings/repos)
-├── AiStatsResource.java         # REST endpoints (/stats/ai-calls)
-├── agent/
-│   ├── AgentRunner.java         # Job orchestrator (fix + review)
-│   ├── AgentPromptBuilder.java  # System prompt construction
-│   ├── ClaudeToolUseLoop.java   # Agentic tool-use loop (with rate-limit retry)
-│   ├── ToolDefinitions.java     # Tool schemas for Claude
-│   ├── BuildValidator.java      # Maven build validation
-│   ├── IntentClassifier.java    # Classifies PR comment replies (fix vs. discussion)
-│   ├── ReviewCommentProcessor.java # Turns PR comments into fix instructions
-│   ├── LearningExtractor.java   # Extracts learnable patterns from interactions
-│   ├── JobQueue.java            # Concurrent job queue
-│   ├── JobStore.java            # In-memory job store
-│   ├── CommentStore.java        # Tracks agent comments for reply detection
-│   ├── MemoryStore.java         # Review memory persistence (PostgreSQL)
-│   ├── AiCallStore.java         # AI call metrics persistence (PostgreSQL)
-│   ├── RepoSettings.java        # Per-repo settings record
-│   ├── RepoSettingsStore.java   # Repo settings persistence (PostgreSQL)
-│   └── RepoSyncService.java     # Syncs Bitbucket repos into settings on startup
-├── aikido/
-│   ├── AikidoService.java       # Aikido REST API client (OAuth2, issues, CVE, CI scan)
-│   └── AikidoIssueInfo.java     # Enriched vulnerability context DTO
-├── diff/
-│   ├── DiffParser.java          # Unified diff parser
-│   ├── DiffFormatter.java       # Formats diffs for Claude review prompt
-│   └── ...                      # DiffHunk, DiffLine, ParsedDiffFile, ReviewPromptResult
-├── jira/
-│   └── JiraService.java         # JIRA Cloud API (comments, transitions, issue fetch)
-├── linter/
-│   ├── LinterService.java       # Orchestrates Checkstyle, PMD, SpotBugs
-│   ├── LinterRunner.java        # Linter execution engine
-│   ├── CheckstyleLinter.java    # Checkstyle integration
-│   ├── PmdLinter.java           # PMD integration
-│   └── SpotBugsLinter.java      # SpotBugs integration
-├── model/
-│   ├── RunFixRequest.java
-│   ├── QuickFixRequest.java
-│   ├── AikidoFixRequest.java
-│   ├── ReviewPrRequest.java
-│   ├── FixPrRequest.java
-│   ├── ReplyCommentRequest.java
-│   ├── JobRecord.java
-│   ├── JobStatus.java
-│   ├── JobType.java
-│   ├── JobStatusResponse.java
-│   ├── RunResult.java
-│   ├── RejectRequest.java
-│   └── RepoCoordinates.java
-├── notifications/
-│   ├── TeamsNotifier.java
-│   └── N8nWebhookNotifier.java
-├── rules/
-│   ├── CursorRulesLoader.java
-│   ├── MdcParser.java
-│   └── MdcRule.java
-├── scm/
-│   ├── GitPlatformService.java          # SCM abstraction interface
-│   ├── GitPlatformProducer.java         # CDI producer (selects BB or ADO)
-│   ├── bitbucket/
-│   │   └── BitbucketPlatformService.java
-│   └── azuredevops/
-│       └── AzureDevOpsPlatformService.java
-├── security/
-│   ├── ApiKeyFilter.java                # API key authentication filter
-│   └── WebhookSignatureFilter.java      # HMAC-SHA256 webhook verification
-├── tools/
-│   ├── GuardrailConfig.java
-│   ├── ToolExecutor.java
-│   ├── ToolRegistry.java
-│   ├── ReadFileTool.java
-│   ├── WriteFileTool.java
-│   ├── RunCommandTool.java
-│   └── ListFilesTool.java
-├── webhooks/
-│   ├── JiraWebhookResource.java
-│   ├── BitbucketWebhookResource.java
-│   ├── BitbucketCommentWebhookResource.java
-│   ├── AzureDevOpsWebhookResource.java
-│   └── AzureDevOpsCommentWebhookResource.java
-└── workspace/
-    └── WorkspaceContext.java
+
+**Local development:**
+```bash
+mvn quarkus:dev
 ```
+
+**Docker build:**
+```bash
+docker build -t code-agent-runner .
+```
+
+The application exposes health checks, metrics, and Swagger UI for API documentation at `/q/swagger-ui`.
