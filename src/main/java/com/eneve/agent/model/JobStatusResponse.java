@@ -54,6 +54,12 @@ public record JobStatusResponse(
         @Schema(description = "Before/after coverage snapshots captured during a GENERATE_TESTS job")
         JobCoverageData coverageData,
 
+        @Schema(description = "Bitbucket/GitLab workspace or organisation that owns the repository")
+        String workspace,
+
+        @Schema(description = "Repository slug within the workspace")
+        String repoSlug,
+
         // ── SOC II / SLA fields ───────────────────────────────────────────────
 
         @Schema(description = "Pull request identifier (numeric or slug, platform-specific)")
@@ -164,6 +170,8 @@ public record JobStatusResponse(
                 sourceBranch,
                 targetBranch,
                 record.getCoverageData(),
+                record.getWorkspace(),
+                record.getRepoSlug(),
                 record.getPrId(),
                 record.getJiraIssueType(),
                 record.getJiraPriority(),
@@ -186,6 +194,7 @@ public record JobStatusResponse(
                 jobId, jobType, status, createdAt, summary, errorMessage,
                 prUrl, filesChanged, linesChanged, 0, priority, jiraKey,
                 null, null, null,
+                null, null,
                 null, null, null, null, null, "NOT_APPLICABLE",
                 null, false, null, false
         );

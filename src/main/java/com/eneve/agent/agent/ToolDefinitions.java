@@ -250,7 +250,11 @@ public final class ToolDefinitions {
     private static Tool runCommand() {
         return Tool.builder()
                 .name("run_command")
-                .description("Run a shell command in the repository root. Only allowed commands: ./mvnw, mvn, gradle, git diff, git status, ls, find, cat. Prefer ./mvnw over mvn when a Maven wrapper is present. Returns exit code and output.")
+                .description("Run a shell command in the repository root. "
+                        + "Allowed command prefixes: ./mvnw, mvn, gradle, git diff, git status, git log, git add, git commit, ls, find, cat, grep, dotnet, npm, npx. "
+                        + "Prefer ./mvnw over mvn when a Maven wrapper is present. "
+                        + "For JavaScript/TypeScript projects: always run 'npm ci' (or 'npm install' when no package-lock.json) before running 'npm test', because node_modules are not present in a fresh clone. "
+                        + "Returns exit code and stdout/stderr output.")
                 .inputSchema(Tool.InputSchema.builder()
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("command", JsonValue.from(Map.of(
@@ -1276,6 +1280,57 @@ public final class ToolDefinitions {
                                 .build())
                         .addRequired("testRunId")
                         .addRequired("status")
+                        .build())
+                .build();
+    }
+
+    // ─── Comment-chat action tools ────────────────────────────────────────────────
+
+    /**
+     * Minimal tool set for the comment-chat loop.
+     * Provides three action tools that the AI can invoke as a conversation conclusion.
+     * commentId and jobId are read from WorkspaceContext metadata — no tool inputs required.
+     */
+    public static List<ToolUnion> commentChat() {
+        return List.of(
+                ToolUnion.ofTool(resolveCommentTool()),
+                ToolUnion.ofTool(markFalsePositiveTool()),
+                ToolUnion.ofTool(requestFixTool())
+        );
+    }
+
+    private static Tool resolveCommentTool() {
+        return Tool.builder()
+                .name("resolve_comment")
+                .description("Resolve this review comment on the SCM platform (GitHub, GitLab, Bitbucket, etc.) "
+                        + "when the developer has confirmed the concern is addressed or agrees to fix it. "
+                        + "Always acknowledge what you are about to do before calling this tool.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder().build())
+                        .build())
+                .build();
+    }
+
+    private static Tool markFalsePositiveTool() {
+        return Tool.builder()
+                .name("mark_false_positive")
+                .description("Mark this finding as a false positive when the developer has convinced you "
+                        + "that it is not a real issue. Records the feedback so this pattern is suppressed "
+                        + "in future reviews. Always acknowledge what you are about to do before calling this tool.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder().build())
+                        .build())
+                .build();
+    }
+
+    private static Tool requestFixTool() {
+        return Tool.builder()
+                .name("request_fix")
+                .description("Start an automated fix job for this review comment. "
+                        + "Only invoke this tool after the developer explicitly asks you to start an automated fix. "
+                        + "Always confirm what you are about to do before calling this tool.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder().build())
                         .build())
                 .build();
     }

@@ -9,4 +9,10 @@ package com.eneve.agent.scm;
  * @param line     line number on the new side (0 for general or file-level comments)
  * @param content  raw Markdown content of the comment
  */
-public record AgentComment(long id, String filePath, int line, String content) {}
+public record AgentComment(long id, String filePath, int line, String content, long parentId) {
+
+    /** Convenience constructor for root (non-reply) comments. */
+    public AgentComment(long id, String filePath, int line, String content) {
+        this(id, filePath, line, content, 0L);
+    }
+}

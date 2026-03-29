@@ -373,13 +373,14 @@ public class BitbucketPlatformService implements GitPlatformService {
                         }
 
                         long commentId = comment.path("id").asLong(0);
+                        long parentId = comment.path("parent").path("id").asLong(0);
                         JsonNode inline = comment.path("inline");
                         if (!inline.isMissingNode() && inline.has("path")) {
                             String file = inline.path("path").asText("");
                             int line = inline.path("to").asInt(inline.path("from").asInt(0));
-                            comments.add(new AgentComment(commentId, file, line, raw));
+                            comments.add(new AgentComment(commentId, file, line, raw, parentId));
                         } else {
-                            comments.add(new AgentComment(commentId, "", 0, raw));
+                            comments.add(new AgentComment(commentId, "", 0, raw, parentId));
                         }
                     }
                 }

@@ -309,7 +309,7 @@ public class GitHubPlatformService implements GitPlatformService {
                         if (agentUser().isEmpty() || !author.equalsIgnoreCase(agentUser())) continue;
                         String content = comment.path("body").asText("").trim();
                         if (!content.isEmpty()) {
-                            comments.add(new AgentComment(comment.path("id").asLong(0), "", 0, content));
+                            comments.add(new AgentComment(comment.path("id").asLong(0), "", 0, content, 0L));
                         }
                     }
                 }
@@ -336,7 +336,8 @@ public class GitHubPlatformService implements GitPlatformService {
                         if (content.isEmpty()) continue;
                         String filePath = comment.path("path").asText("");
                         int line = comment.path("line").asInt(0);
-                        comments.add(new AgentComment(comment.path("id").asLong(0), filePath, line, content));
+                        long inReplyToId = comment.path("in_reply_to_id").asLong(0);
+                        comments.add(new AgentComment(comment.path("id").asLong(0), filePath, line, content, inReplyToId));
                     }
                 }
                 url = nextPageUrl(response);

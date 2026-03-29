@@ -60,7 +60,8 @@ public class BuildValidator {
             return "dotnet test";
         }
         if (Files.exists(root.resolve("package.json")) && hasNpmTestScript(root)) {
-            return "npm test";
+            String installCmd = Files.exists(root.resolve("package-lock.json")) ? "npm ci" : "npm install";
+            return installCmd + " --ignore-scripts && npm test";
         }
         return null;
     }

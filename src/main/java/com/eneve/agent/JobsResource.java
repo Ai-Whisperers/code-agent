@@ -27,6 +27,9 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobReviewResponse;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobStatusResponse;
+import com.eneve.agent.agent.model.ChatEvent;
+import com.eneve.agent.agent.service.CommentChatService;
+import com.eneve.agent.model.CommentChatRequest;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewCommentEntry;
@@ -36,7 +39,10 @@ import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.scytale.ScytaleService;
 import com.eneve.agent.settings.SettingsService;
 
+import io.smallrye.common.annotation.Blocking;
+import io.smallrye.mutiny.Multi;
 import org.eclipse.microprofile.openapi.annotations.Operation;
+import org.jboss.resteasy.reactive.RestStreamElementType;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -96,6 +102,9 @@ public class JobsResource {
 
     @Inject
     CommentFeedbackStore commentFeedbackStore;
+
+    @Inject
+    CommentChatService commentChatService;
 
     @GET
     @Operation(
@@ -877,6 +886,170 @@ public class JobsResource {
                     .entity(Map.of("error", result.errorMessage() != null ? result.errorMessage() : "Upload failed"))
                     .build();
         }
+    }
+
+    // ── Approve & merge endpoint ──────────────────────────────────────────
+
+    @POST
+    @Path("/{jobId}/approve")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(operationId = "approveJob", summary = "Approve and merge the pull request",
+               description = "Merges the PR, archives the job, logs audit events, triggers JIRA transitions, "
+                       + "and (for bug PRs targeting protected branches) schedules a promotion PR.")
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "PR merged successfully"),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not awaiting approval"),
+            @APIResponse(responseCode = "422", description = "SOC2 guard blocked the merge"),
+            @APIResponse(responseCode = "500", description = "Merge failed")
+    })
+    public Response approveJob(@PathParam("jobId") String jobId) {
+        var jobOpt = jobStore.get(jobId);
+        if (jobOpt.isEmpty()) {
+            return Response.status(404).entity(Map.of("error", "Job not found: " + jobId)).build();
+        }
+        JobRecord job = jobOpt.get();
+
+        if (job.getStatus() != JobStatus.AWAITING_APPROVAL) {
+            return Response.status(409)
+                    .entity(Map.of("error", "Job is not awaiting approval. Current status: " + job.getStatus()))
+                    .build();
+        }
+
+        // ── SOC II merge guard ────────────────────────────────────────────
+        String protectedBranches = settings.get("soc2.protected-branches", "develop,main,master,production");
+        String bugIssueTypes     = settings.get("soc2.bug-issue-types",     "Bug,Defect");
+        String productionBranch  = settings.get("soc2.production-branch",   "main");
+
+        String target    = resolveTargetBranch(job);
+        String issueType = job.getJiraIssueType();
+
+        if (issueType != null && isBugType(issueType, bugIssueTypes) && isProtected(target, protectedBranches)) {
+            boolean reviewed = jobStore.findByPrId(job.getPrId()).stream()
+                    .anyMatch(j -> j.getJobType() == JobType.REVIEW && j.getStatus() == JobStatus.SUCCESS);
+            if (!reviewed) {
+                String jiraKey = extractJobJiraKey(job);
+                auditService.log("SOC2", "APPROVAL_BLOCKED_SOC2", "job", jobId,
+                        Map.of("reason", "no_bot_review",
+                               "jiraKey", jiraKey != null ? jiraKey : "unknown",
+                               "targetBranch", target != null ? target : "unknown"));
+                return Response.status(422).entity(Map.of(
+                        "error", "SOC II CC8.1: A completed bot review is required before merging "
+                                + (jiraKey != null ? jiraKey : "this job") + " to " + target
+                )).build();
+            }
+        }
+        // ── end SOC II guard ──────────────────────────────────────────────
+
+        try {
+            RepoCoordinates coords = resolveCoords(job);
+            gitPlatformService.mergePullRequest(
+                    coords.organization(), coords.project(), coords.repository(), job.getPrId());
+            job.setStatus(JobStatus.SUCCESS);
+            jobStore.archive(job);
+            auditService.log("JOBS", "JOB_APPROVED",    "job", jobId, Map.of());
+            auditService.log("JOBS", "MERGE_COMPLETED", "job", jobId,
+                    Map.of("prId", job.getPrId() != null ? job.getPrId() : "unknown"));
+
+            if (issueType != null && isBugType(issueType, bugIssueTypes)
+                    && target != null && !target.equalsIgnoreCase(productionBranch)
+                    && isProtected(productionBranch, protectedBranches)) {
+                schedulePromotion(job, target, productionBranch, jobId);
+            }
+
+            return Response.ok(Map.of("status", "merged", "jobId", jobId)).build();
+        } catch (Exception e) {
+            LOG.errorf("approve failed for job %s: %s", jobId, e.getMessage());
+            return Response.status(500)
+                    .entity(Map.of("error", "Merge failed: " + e.getMessage()))
+                    .build();
+        }
+    }
+
+    private static boolean isBugType(String issueType, String configuredTypes) {
+        return Arrays.stream(configuredTypes.split("\\s*,\\s*"))
+                .anyMatch(t -> t.equalsIgnoreCase(issueType));
+    }
+
+    private static boolean isProtected(String branch, String configuredBranches) {
+        if (branch == null) return false;
+        return Arrays.stream(configuredBranches.split("\\s*,\\s*"))
+                .anyMatch(b -> b.equalsIgnoreCase(branch));
+    }
+
+    private static String resolveTargetBranch(JobRecord job) {
+        if (job.getRequest() != null) return job.getRequest().targetBranchOrDefault();
+        if (job.getGenerateTestsRequest() != null) return job.getGenerateTestsRequest().targetBranchOrDefault();
+        if (job.getGenerateDocsRequest() != null) return job.getGenerateDocsRequest().targetBranchOrDefault();
+        if (job.getHookRequest() != null) return job.getHookRequest().targetBranch();
+        return null;
+    }
+
+    private static String extractJobJiraKey(JobRecord job) {
+        if (job.getRequest() != null) return job.getRequest().jiraKey();
+        if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
+        if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
+        return null;
+    }
+
+    private void schedulePromotion(JobRecord originalJob, String fromBranch, String toBranch, String originalJobId) {
+        try {
+            String repoUrl = null;
+            if (originalJob.getRequest() != null) repoUrl = originalJob.getRequest().repoUrl();
+            if (repoUrl == null && originalJob.getFixPrRequest() != null)
+                repoUrl = originalJob.getFixPrRequest().repoUrl();
+            if (repoUrl == null) {
+                LOG.warnf("Cannot schedule promotion for job %s: no repoUrl", originalJobId);
+                return;
+            }
+
+            String jiraKey = extractJobJiraKey(originalJob);
+            String promotionJobId = UUID.randomUUID().toString();
+            originalJob.setPromotionJobId(promotionJobId);
+            jobStore.update(originalJob);
+
+            auditService.log("SOC2", "SOC2_PROMOTION_CREATED", "job", originalJobId,
+                    Map.of("promotionJobId", promotionJobId,
+                           "fromBranch", fromBranch,
+                           "toBranch", toBranch,
+                           "jiraKey", jiraKey != null ? jiraKey : "unknown"));
+
+            LOG.infof("SOC2 promotion placeholder created for job %s: %s → %s (promotionJobId=%s)",
+                    originalJobId, fromBranch, toBranch, promotionJobId);
+        } catch (Exception e) {
+            LOG.warnf("Failed to schedule promotion for job %s: %s", originalJobId, e.getMessage());
+        }
+    }
+
+    // ── Comment chat endpoint ─────────────────────────────────────────────
+
+    @POST
+    @Path("/{jobId}/comment-chat")
+    @Blocking
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.SERVER_SENT_EVENTS)
+    @RestStreamElementType(MediaType.APPLICATION_JSON)
+    @Operation(
+            operationId = "commentChat",
+            summary = "Discuss a review comment with the AI",
+            description = "Opens a stateless streaming chat session about a specific review comment. "
+                    + "The full message history must be sent on every request. "
+                    + "The AI can resolve the comment, mark it as a false positive, or start an automated fix as a conversation conclusion. "
+                    + "No conversation history is stored in the database."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "SSE stream of ChatEvent objects"),
+            @APIResponse(responseCode = "400", description = "Missing or invalid request body"),
+            @APIResponse(responseCode = "404", description = "Job or comment not found")
+    })
+    public Multi<ChatEvent> commentChat(
+            @PathParam("jobId") String jobId,
+            CommentChatRequest request) {
+
+        if (request == null || request.commentId() <= 0) {
+            return Multi.createFrom().item(new ChatEvent.Error("commentId is required"));
+        }
+        return commentChatService.chatStream(jobId, request);
     }
 
     // ── Repo coordinate resolution ────────────────────────────────────────
