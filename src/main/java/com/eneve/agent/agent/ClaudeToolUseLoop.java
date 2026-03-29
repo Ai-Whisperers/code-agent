@@ -386,11 +386,11 @@ public class ClaudeToolUseLoop {
                         .build();
 
                 // Stream the response, accumulating into a full Message for tool processing.
-                // Text deltas and ToolStart events are buffered and flushed after the stream closes,
-                // once we know whether this iteration uses tools (thinking) or is the final answer.
-                // This preserves correct ordering: thinking text → tool_start → tool_end.
+                // Text deltas are emitted immediately as they arrive so the browser sees them
+                // token-by-token. ToolStart events are still buffered until the stream closes
+                // so they are emitted after any preceding text, preserving the logical order:
+                // streaming text → tool_start → (tool execution) → tool_end.
                 MessageAccumulator accumulator = MessageAccumulator.create();
-                List<String> textBuffer = new ArrayList<>();
                 List<ChatEvent.ToolStart> toolStartBuffer = new ArrayList<>();
                 long startNs = System.nanoTime();
 
@@ -399,18 +399,18 @@ public class ClaudeToolUseLoop {
                     stream.stream().forEach(event -> {
                         accumulator.accumulate(event);
 
-                        // Buffer text deltas — type (thinking vs text) is resolved after the stream closes
+                        // Emit text deltas immediately so the client receives each token in real time
                         if (event.isContentBlockDelta()) {
                             var delta = event.asContentBlockDelta().delta();
                             if (delta.isText()) {
                                 String text = delta.asText().text();
                                 if (text != null && !text.isEmpty()) {
-                                    textBuffer.add(text);
+                                    eventSink.accept(new ChatEvent.TextDelta(text));
                                 }
                             }
                         }
 
-                        // Buffer ToolStart events so they are emitted after the thinking text
+                        // Buffer ToolStart events so they are emitted after the preceding text
                         if (event.isContentBlockStart()) {
                             var block = event.asContentBlockStart().contentBlock();
                             if (block.isToolUse()) {
@@ -436,15 +436,7 @@ public class ClaudeToolUseLoop {
                         .map(ContentBlock::asToolUse)
                         .toList();
 
-                // Flush thinking/text deltas first, then tool_start events — preserving logical order
-                boolean isThinkingIteration = !toolUseBlocks.isEmpty();
-                for (String chunk : textBuffer) {
-                    if (isThinkingIteration) {
-                        eventSink.accept(new ChatEvent.ThinkingDelta(chunk));
-                    } else {
-                        eventSink.accept(new ChatEvent.TextDelta(chunk));
-                    }
-                }
+                // Flush buffered tool_start events after any preceding streaming text
                 toolStartBuffer.forEach(eventSink);
 
                 List<ContentBlockParam> assistantBlocks = new ArrayList<>();
