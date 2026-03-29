@@ -11,6 +11,7 @@ import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.QualityReportStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.QualityReportJobRequest;
+import com.eneve.agent.scm.GitPlatformService;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.parameters.Parameter;
@@ -45,6 +46,7 @@ public class QualityReportResource {
     @Inject QualityReportStore reportStore;
     @Inject JobStore jobStore;
     @Inject JobQueue jobQueue;
+    @Inject GitPlatformService platformService;
 
     @GET
     @Path("/{workspace}/{repoSlug}/{branch}")
@@ -166,9 +168,19 @@ public class QualityReportResource {
             @RequestBody(description = "Repository URL and optional overrides", required = true)
             TriggerQualityReportRequest request) {
 
+        String resolvedRepoUrl = (request != null && request.repoUrl() != null && !request.repoUrl().isBlank())
+                ? request.repoUrl()
+                : platformService.buildCloneUrl(workspace, repoSlug);
+
+        if (resolvedRepoUrl == null || resolvedRepoUrl.isBlank()) {
+            return Response.status(400)
+                    .entity(Map.of("error", "repoUrl is required and could not be resolved for " + workspace + "/" + repoSlug))
+                    .build();
+        }
+
         String jobId = UUID.randomUUID().toString();
         QualityReportJobRequest jobRequest = new QualityReportJobRequest(
-                request.repoUrl(), branch, workspace, repoSlug);
+                resolvedRepoUrl, branch, workspace, repoSlug);
         JobRecord job = new JobRecord(jobId, jobRequest);
         jobStore.put(job);
 

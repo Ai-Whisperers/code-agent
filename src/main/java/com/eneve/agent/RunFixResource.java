@@ -102,10 +102,6 @@ public class RunFixResource {
         if (request.branchName() == null || request.branchName().isBlank()) {
             return Response.status(400).entity(Map.of("error", "branchName is required")).build();
         }
-        if (request.jiraKey() == null || request.jiraKey().isBlank()) {
-            return Response.status(400).entity(Map.of("error", "jiraKey is required")).build();
-        }
-
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
         jobStore.put(job);
@@ -114,9 +110,11 @@ public class RunFixResource {
             return Response.status(429).entity(Map.of("error", "Job queue is full")).build();
         }
 
-        LOG.infof("Job %s accepted for %s", jobId, request.jiraKey());
+        String effectiveJiraKey = request.jiraKey() != null && !request.jiraKey().isBlank()
+                ? request.jiraKey() : "N/A";
+        LOG.infof("Job %s accepted for %s", jobId, effectiveJiraKey);
         auditService.log("JOBS", "JOB_SUBMITTED", "job", jobId,
-                Map.of("jobType", "FIX", "jiraKey", request.jiraKey()));
+                Map.of("jobType", "FIX", "jiraKey", effectiveJiraKey));
         return Response.accepted(Map.of("jobId", jobId)).build();
     }
 

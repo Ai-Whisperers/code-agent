@@ -131,9 +131,11 @@ public class RunFixHandler implements JobHandler {
 
             String effectivePrompt = promptFuture.join();
             if (effectivePrompt == null) {
+                String jiraRef = (request.jiraKey() != null && !request.jiraKey().isBlank())
+                        ? request.jiraKey() : "this job";
                 lifecycle.failFix(job,
                         "No prompt provided and could not fetch JIRA issue description for "
-                                + request.jiraKey());
+                                + jiraRef);
                 return;
             }
 
@@ -178,9 +180,11 @@ public class RunFixHandler implements JobHandler {
             }
 
             boolean hasChanges;
+            String commitScope = (request.jiraKey() != null && !request.jiraKey().isBlank())
+                    ? request.jiraKey() : "linter";
             try {
                 hasChanges = workspace.commitAll(
-                        "fix(" + request.jiraKey() + "): automated fix\n\n" + summary);
+                        "fix(" + commitScope + "): automated fix\n\n" + summary);
             } catch (Exception e) {
                 lifecycle.failFix(job, "Commit failed: " + e.getMessage());
                 return;
@@ -236,12 +240,14 @@ public class RunFixHandler implements JobHandler {
                 String prUrl;
                 String prId;
                 try {
-                    String title = request.jiraKey() + ": Automated fix";
+                    boolean hasJira = request.jiraKey() != null && !request.jiraKey().isBlank();
+                    String title = hasJira ? request.jiraKey() + ": Automated fix" : "Automated fix";
                     String linterSummaryLine = linterDiffReport != null
                             ? "\n\n" + BuildAndLintHelper.buildLinterDiffSummaryLine(linterDiffReport)
                             : "";
                     String description = "**Automated PR created by Code Agent Runner**\n\n"
-                            + "JIRA: " + request.jiraKey() + "\n\n" + summary + linterSummaryLine;
+                            + (hasJira ? "JIRA: " + request.jiraKey() + "\n\n" : "")
+                            + summary + linterSummaryLine;
                     String[] prResult = platformService.createPullRequest(
                             coords.organization(), coords.project(), coords.repository(),
                             request.branchName(), request.targetBranchOrDefault(),
