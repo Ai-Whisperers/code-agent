@@ -62,7 +62,8 @@ public class AtlassianOAuthService {
 
     // ── Pending OAuth states ────────────────────────────────────────────────────
 
-    private record StateEntry(String userId, Instant expiresAt) {}
+    /** Binds an OAuth state token to the user who started the flow and the exact redirect URI used. */
+    private record StateEntry(String userId, Instant expiresAt, String redirectUri) {}
 
     private final ConcurrentHashMap<String, StateEntry> pendingStates = new ConcurrentHashMap<>();
 
@@ -85,7 +86,8 @@ public class AtlassianOAuthService {
         }
 
         String state = UUID.randomUUID().toString();
-        pendingStates.put(state, new StateEntry(userId, Instant.now().plusSeconds(STATE_TTL_SEC)));
+        // Store the redirectUri so the token exchange can replay the exact same value.
+        pendingStates.put(state, new StateEntry(userId, Instant.now().plusSeconds(STATE_TTL_SEC), redirectUri));
         // Lazy cleanup of expired entries
         pendingStates.entrySet().removeIf(e -> e.getValue().expiresAt().isBefore(Instant.now()));
 
@@ -116,6 +118,9 @@ public class AtlassianOAuthService {
      * @param state       CSRF state token
      * @param redirectUri must match the one used in {@link #generateAuthorizationUrl}
      */
+    /**
+     * @param redirectUri ignored – kept for API compatibility; the stored URI is always used.
+     */
     public CallbackResult handleCallback(String code, String state, String redirectUri) {
         StateEntry entry = pendingStates.remove(state);
         if (entry == null || entry.expiresAt().isBefore(Instant.now())) {
@@ -123,6 +128,13 @@ public class AtlassianOAuthService {
                     "Invalid or expired OAuth state. Please try again.");
         }
         String userId = entry.userId();
+        // Always replay the URI that was embedded in the authorisation request.
+        // Any mismatch between this value and what Atlassian received causes HTTP 400.
+        String storedRedirectUri = entry.redirectUri();
+        if (!storedRedirectUri.equals(redirectUri)) {
+            LOG.warnf("OAuth redirect_uri drift detected – stored='%s' derived='%s'; using stored value",
+                    storedRedirectUri, redirectUri);
+        }
 
         try {
             String clientId     = settings.get("atlassian.oauth.client-id", "");
@@ -137,7 +149,7 @@ public class AtlassianOAuthService {
                     + "&client_id="     + enc(clientId)
                     + "&client_secret=" + enc(clientSecret)
                     + "&code="          + enc(code)
-                    + "&redirect_uri="  + enc(redirectUri);
+                    + "&redirect_uri="  + enc(storedRedirectUri);
 
             HttpRequest tokenReq = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
@@ -148,10 +160,12 @@ public class AtlassianOAuthService {
 
             HttpResponse<String> tokenResp = http.send(tokenReq, HttpResponse.BodyHandlers.ofString());
             if (tokenResp.statusCode() != 200) {
-                LOG.warnf("Atlassian token exchange failed (%d): %s",
-                        tokenResp.statusCode(), tokenResp.body());
+                LOG.warnf("Atlassian token exchange failed (%d) redirect_uri='%s': %s",
+                        tokenResp.statusCode(), storedRedirectUri, tokenResp.body());
+                String detail = extractErrorDescription(tokenResp.body());
                 return new CallbackResult(false, "jira",
-                        "Token exchange failed (HTTP " + tokenResp.statusCode() + "). Please try again.");
+                        "Token exchange failed (HTTP " + tokenResp.statusCode() + ")"
+                        + (detail.isBlank() ? "" : ": " + detail) + ". Please try again.");
             }
 
             JsonNode tokenJson    = mapper.readTree(tokenResp.body());
@@ -262,6 +276,18 @@ public class AtlassianOAuthService {
 
     private static String enc(String value) {
         return URLEncoder.encode(value, StandardCharsets.UTF_8);
+    }
+
+    /** Extracts error_description (or error) from an Atlassian JSON error body; returns "" on failure. */
+    private String extractErrorDescription(String body) {
+        try {
+            JsonNode node = mapper.readTree(body);
+            String desc = node.path("error_description").asText("");
+            if (!desc.isBlank()) return desc;
+            return node.path("error").asText("");
+        } catch (Exception ignored) {
+            return "";
+        }
     }
 
     // ── Token refresh ────────────────────────────────────────────────────────────
