@@ -4,6 +4,14 @@ FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb
 RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
     echo 'Acquire::AllowInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99insecure
 
+COPY fortigate-ca.crt /usr/local/share/ca-certificates/fortigate-ca.crt
+RUN update-ca-certificates && \
+    keytool -importcert -noprompt -trustcacerts \
+        -alias fortigate-ca \
+        -file /usr/local/share/ca-certificates/fortigate-ca.crt \
+        -keystore $JAVA_HOME/lib/security/cacerts \
+        -storepass changeit
+
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
 ENV PATH="${MAVEN_HOME}/bin:${PATH}"
@@ -23,6 +31,14 @@ FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb
 
 RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
     echo 'Acquire::AllowInsecureRepositories "true";' >> /etc/apt/apt.conf.d/99insecure
+
+COPY fortigate-ca.crt /usr/local/share/ca-certificates/fortigate-ca.crt
+RUN update-ca-certificates && \
+    keytool -importcert -noprompt -trustcacerts \
+        -alias fortigate-ca \
+        -file /usr/local/share/ca-certificates/fortigate-ca.crt \
+        -keystore $JAVA_HOME/lib/security/cacerts \
+        -storepass changeit
 
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven

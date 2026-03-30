@@ -17,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
@@ -538,6 +539,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -573,6 +575,7 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")

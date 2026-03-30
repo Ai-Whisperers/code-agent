@@ -13,6 +13,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
@@ -139,6 +140,7 @@ public class AtlassianOAuthService {
                     + "&redirect_uri="  + enc(redirectUri);
 
             HttpRequest tokenReq = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(AUTH_BASE + "/oauth/token"))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .POST(HttpRequest.BodyPublishers.ofString(tokenBody))
@@ -162,6 +164,7 @@ public class AtlassianOAuthService {
 
             // ── Retrieve the user's accessible Atlassian cloud sites ────────────
             HttpRequest resourcesReq = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(API_BASE + "/oauth/token/accessible-resources"))
                     .header("Authorization", "Bearer " + accessToken)
                     .header("Accept", "application/json")
@@ -193,6 +196,7 @@ public class AtlassianOAuthService {
 
             // ── Resolve the user's email / account ID from /myself ──────────────
             HttpRequest myselfReq = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(jiraBaseUrl + "/rest/api/3/myself"))
                     .header("Authorization", "Bearer " + accessToken)
                     .header("Accept", "application/json")
@@ -281,6 +285,7 @@ public class AtlassianOAuthService {
                     + "&refresh_token=" + enc(refreshToken);
 
             HttpRequest req = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(AUTH_BASE + "/oauth/token"))
                     .header("Content-Type", "application/x-www-form-urlencoded")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -331,6 +336,7 @@ public class AtlassianOAuthService {
                     "client_secret", clientSecret
             ));
             HttpRequest req = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(tokenUrl))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))

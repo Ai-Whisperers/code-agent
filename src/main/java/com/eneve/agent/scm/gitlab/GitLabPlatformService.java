@@ -18,6 +18,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -544,6 +545,7 @@ public class GitLabPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("PRIVATE-TOKEN", token())
                     .header("Accept", "application/json")
@@ -578,6 +580,7 @@ public class GitLabPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("PRIVATE-TOKEN", token())
                     .header("Content-Type", "application/json")
@@ -614,6 +617,7 @@ public class GitLabPlatformService implements GitPlatformService {
                     + URLEncoder.encode(branchName, StandardCharsets.UTF_8);
             requireTrustedUrl(checkUrl);
             HttpRequest checkRequest = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(checkUrl))
                     .header("PRIVATE-TOKEN", token())
                     .header("Accept", "application/json")

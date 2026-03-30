@@ -17,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.*;
 
 /**
@@ -146,9 +147,11 @@ public class BitbucketPlatformService implements GitPlatformService {
             requireTrustedUrl(url);
             // Bitbucket Cloud may 302-redirect to the actual diff file; use NORMAL redirect policy.
             HttpClient redirectingClient = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(15))
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .build();
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Accept", "text/plain")
@@ -416,6 +419,7 @@ public class BitbucketPlatformService implements GitPlatformService {
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "multipart/form-data; boundary=" + boundary)
@@ -624,6 +628,7 @@ public class BitbucketPlatformService implements GitPlatformService {
         requireTrustedUrl(baseUrl() + deletePath);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + deletePath))
                     .header("Authorization", authHeader())
                     .DELETE()
@@ -676,6 +681,7 @@ public class BitbucketPlatformService implements GitPlatformService {
         requireTrustedUrl(baseUrl() + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -715,6 +721,7 @@ public class BitbucketPlatformService implements GitPlatformService {
         requireTrustedUrl(baseUrl() + path);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
@@ -985,9 +992,11 @@ public class BitbucketPlatformService implements GitPlatformService {
             String url = baseUrl() + "/repositories/" + org + "/" + repo + "/diff/" + safeSha;
             requireTrustedUrl(url);
             HttpClient redirectingClient = HttpClient.newBuilder()
+                    .connectTimeout(Duration.ofSeconds(15))
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .build();
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Accept", "text/plain")

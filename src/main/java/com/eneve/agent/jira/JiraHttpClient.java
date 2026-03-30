@@ -10,6 +10,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.OffsetDateTime;
 import java.util.Base64;
 
@@ -28,6 +29,7 @@ class JiraHttpClient {
     String get(String path, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Accept", "application/json")
@@ -51,6 +53,7 @@ class JiraHttpClient {
     String postForBody(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
@@ -75,6 +78,7 @@ class JiraHttpClient {
     void post(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
@@ -96,6 +100,7 @@ class JiraHttpClient {
     String putForBody(String path, String body, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(settingsService.get("jira.base.url", "") + path))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
@@ -122,6 +127,7 @@ class JiraHttpClient {
             String auth = Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
                     .header("Authorization", "Basic " + auth)
                     .header("Accept", "application/json")
@@ -146,6 +152,7 @@ class JiraHttpClient {
             String auth = Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
                     .header("Authorization", "Basic " + auth)
                     .header("Content-Type", "application/json")
@@ -171,6 +178,7 @@ class JiraHttpClient {
             String auth = Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
                     .header("Authorization", "Basic " + auth)
                     .header("Content-Type", "application/json")
@@ -191,6 +199,7 @@ class JiraHttpClient {
             String auth = Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
                     .header("Authorization", "Basic " + auth)
                     .header("Content-Type", "application/json")
@@ -210,6 +219,7 @@ class JiraHttpClient {
         if (contentUrl == null || contentUrl.isBlank()) return null;
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(contentUrl))
                     .header("Authorization", "Basic " + basicAuth())
                     .GET()
@@ -247,13 +257,14 @@ class JiraHttpClient {
             String auth = Base64.getEncoder()
                     .encodeToString((testUser + ":" + testApiToken).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(testBaseUrl + "/rest/api/3/myself"))
                     .header("Authorization", "Basic " + auth)
                     .header("Accept", "application/json")
                     .GET()
                     .build();
 
-            HttpClient client = HttpClient.newHttpClient();
+            HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
             HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
             return response.statusCode() >= 200 && response.statusCode() < 300;
         } catch (Exception e) {

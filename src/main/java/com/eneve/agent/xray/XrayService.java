@@ -11,6 +11,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -45,7 +46,9 @@ public class XrayService {
     @Inject
     SettingsService settingsService;
 
-    private final HttpClient httpClient = HttpClient.newHttpClient();
+    private final HttpClient httpClient = HttpClient.newBuilder()
+            .connectTimeout(Duration.ofSeconds(15))
+            .build();
     @Inject ObjectMapper mapper;
 
     /** Thread-safe bearer-token cache keyed by {@code clientId}. */
@@ -122,6 +125,7 @@ public class XrayService {
                     "client_secret", creds.clientSecret()
             ));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.authUrl()))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -156,8 +160,9 @@ public class XrayService {
                     "client_id", clientId,
                     "client_secret", clientSecret
             ));
-            HttpClient client = HttpClient.newHttpClient();
+            HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl + "/api/v1/authenticate"))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -181,6 +186,7 @@ public class XrayService {
                     "variables", variables
             ));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.graphqlUrl()))
                     .header("Authorization", "Bearer " + token)
                     .header("Content-Type", "application/json")

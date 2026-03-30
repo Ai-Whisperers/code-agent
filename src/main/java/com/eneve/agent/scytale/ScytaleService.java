@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
@@ -82,6 +83,7 @@ public class ScytaleService {
             String uploadUrl = baseUrl.stripTrailing() + "/v1/evidence";
 
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(uploadUrl))
                     .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")

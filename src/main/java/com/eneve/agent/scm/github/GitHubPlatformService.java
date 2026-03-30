@@ -17,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -129,6 +130,7 @@ public class GitHubPlatformService implements GitPlatformService {
             String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId;
             requireTrustedUrl(url);
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", "Bearer " + token())
                     .header("Accept", "application/vnd.github.diff")
@@ -423,6 +425,7 @@ public class GitHubPlatformService implements GitPlatformService {
             String checkUrl = baseUrl() + "/repos/" + org + "/" + repo + "/git/ref/heads/" + branchName;
             requireTrustedUrl(checkUrl);
             HttpRequest checkRequest = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(checkUrl))
                     .header("Authorization", "Bearer " + token())
                     .header("Accept", "application/vnd.github+json")
@@ -575,6 +578,7 @@ public class GitHubPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", "Bearer " + token())
                     .header("Accept", "application/vnd.github+json")
@@ -614,6 +618,7 @@ public class GitHubPlatformService implements GitPlatformService {
         requireTrustedUrl(url);
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", "Bearer " + token())
                     .header("Content-Type", "application/json")
@@ -699,6 +704,7 @@ public class GitHubPlatformService implements GitPlatformService {
             String url = baseUrl() + "/repos/" + org + "/" + repo + "/commits/" + safeSha;
             requireTrustedUrl(url);
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", "Bearer " + token())
                     .header("Accept", "application/vnd.github.v3.diff")

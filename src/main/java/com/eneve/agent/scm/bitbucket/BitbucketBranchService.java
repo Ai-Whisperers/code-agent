@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.util.Base64;
 import java.util.Optional;
 
@@ -45,6 +46,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo + "/refs/branches/" + branch;
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -75,6 +77,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo;
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -110,6 +113,7 @@ public class BitbucketBranchService {
                 """.formatted(escapeJson(branchName), escapeJson(fromHash));
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
@@ -145,6 +149,7 @@ public class BitbucketBranchService {
                 """.formatted(escapeJson(branchName));
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .header("Content-Type", "application/json")
@@ -175,6 +180,7 @@ public class BitbucketBranchService {
         String path = "/repositories/" + workspace + "/" + repo + "/refs/branches/" + branchName;
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", authHeader())
                     .DELETE()

@@ -66,6 +66,7 @@ public class ConfluenceService {
             String credentials = testUser + ":" + testApiToken;
             String auth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(testBaseUrl + "/wiki/rest/api/space"))
                     .header("Authorization", auth)
                     .header("Accept", "application/json")
@@ -139,6 +140,7 @@ public class ConfluenceService {
             String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/search?cql=" + encoded + "&limit=1";
 
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -200,6 +202,7 @@ public class ConfluenceService {
 
         String url = settingsService.get("confluence.base.url", "") + "/wiki/rest/api/content/" + pageId + "/child/attachment";
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
@@ -235,6 +238,7 @@ public class ConfluenceService {
                 + "/child/attachment/" + attachmentId + "/data";
 
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Content-Type", "multipart/form-data; boundary=" + boundary)
@@ -254,6 +258,7 @@ public class ConfluenceService {
                 + "/child/attachment?filename=" + URLEncoder.encode(filename, StandardCharsets.UTF_8);
 
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Accept", "application/json")
@@ -315,6 +320,7 @@ public class ConfluenceService {
 
         String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages";
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Content-Type", "application/json")
@@ -352,6 +358,7 @@ public class ConfluenceService {
 
         String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId;
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Content-Type", "application/json")
@@ -372,6 +379,7 @@ public class ConfluenceService {
     private int getCurrentVersion(String pageId) throws Exception {
         String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId;
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Accept", "application/json")
@@ -390,6 +398,7 @@ public class ConfluenceService {
     private String resolveSpaceId(String spaceKey) throws Exception {
         String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/spaces?keys=" + URLEncoder.encode(spaceKey, StandardCharsets.UTF_8) + "&limit=1";
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", authHeader())
                 .header("Accept", "application/json")
@@ -439,6 +448,7 @@ public class ConfluenceService {
                         + (cursor != null ? "&cursor=" + URLEncoder.encode(cursor, StandardCharsets.UTF_8) : "");
 
                 HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                         .uri(URI.create(url))
                         .header("Authorization", authHeader())
                         .header("Accept", "application/json")
@@ -492,6 +502,7 @@ public class ConfluenceService {
             String url = settingsService.get("confluence.base.url", "") + "/wiki/api/v2/pages/" + pageId
                     + "?body-format=storage";
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", authHeader())
                     .header("Accept", "application/json")
@@ -578,6 +589,7 @@ public class ConfluenceService {
             String auth = "Basic " + Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", auth)
                     .header("Accept", "application/json")
@@ -617,6 +629,7 @@ public class ConfluenceService {
             String auth = "Basic " + Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", auth)
                     .header("Accept", "application/json")
@@ -670,6 +683,7 @@ public class ConfluenceService {
             String auth = "Basic " + Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", auth)
                     .header("Content-Type", "application/json")
@@ -719,6 +733,7 @@ public class ConfluenceService {
             String auth = "Basic " + Base64.getEncoder()
                     .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(url))
                     .header("Authorization", auth)
                     .header("Content-Type", "application/json")
@@ -747,6 +762,7 @@ public class ConfluenceService {
         String auth = "Basic " + Base64.getEncoder()
                 .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", auth)
                 .header("Accept", "application/json")
@@ -770,6 +786,7 @@ public class ConfluenceService {
         String auth = "Basic " + Base64.getEncoder()
                 .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
         HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                 .uri(URI.create(url))
                 .header("Authorization", auth)
                 .header("Accept", "application/json")

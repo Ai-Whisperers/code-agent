@@ -4,6 +4,7 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -85,6 +86,7 @@ public class AikidoService {
                     java.util.Map.of("grant_type", "client_credentials"));
 
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + "/api/oauth/token"))
                     .header("Authorization", "Basic " + basicAuth)
                     .header("Content-Type", "application/json")
@@ -454,6 +456,7 @@ public class AikidoService {
             ));
 
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + "/api/integrations/continuous_integration/scan/repository"))
                     .header("X-AIK-API-SECRET", ciApiSecret())
                     .header("Content-Type", "application/json")
@@ -484,6 +487,7 @@ public class AikidoService {
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + "/api/integrations/continuous_integration/scan/repository/" + scanId))
                     .header("X-AIK-API-SECRET", ciApiSecret())
                     .header("Accept", "application/json")
@@ -513,6 +517,7 @@ public class AikidoService {
     private String get(String path, String operation) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(baseUrl() + path))
                     .header("Authorization", "Bearer " + getAccessToken())
                     .header("Accept", "application/json")

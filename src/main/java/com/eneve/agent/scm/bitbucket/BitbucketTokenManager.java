@@ -12,6 +12,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 
@@ -88,6 +89,7 @@ public class BitbucketTokenManager {
 
         try {
             HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(TOKEN_URL))
                     .header("Authorization", "Basic " + credentials)
                     .header("Content-Type", "application/x-www-form-urlencoded")
