@@ -113,6 +113,15 @@ public final class ToolDefinitions {
         );
     }
 
+    /**
+     * Returns the read-only tool set for the Ask mode.
+     * Identical to {@code chat(false, false)}: knowledge/search/code/Jira-read/Confluence-read only.
+     * No Jira write, Confluence write, agent action, or AWS tools are included.
+     */
+    public static List<ToolUnion> chatAsk() {
+        return chat(false, false);
+    }
+
     public static List<ToolUnion> chat() {
         return chat(true);
     }

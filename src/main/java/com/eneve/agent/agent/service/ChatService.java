@@ -131,12 +131,20 @@ public class ChatService {
                         || (effectiveContext != null
                             && effectiveContext.customerIds() != null
                             && !effectiveContext.customerIds().isEmpty());
-                String systemPrompt = buildSystemPrompt(
+                boolean isAskMode = "ask".equals(request.mode());
+                String baseSystemPrompt = buildSystemPrompt(
                         request.productId(),
                         effectiveContext,
                         userId,
                         hasCustomer);
-                List<ToolUnion> tools = ToolDefinitions.chat(canExecuteJobs, hasCustomer);
+                String systemPrompt = isAskMode
+                        ? baseSystemPrompt + "\n\n**IMPORTANT — Ask Mode:** You are operating in Ask mode. "
+                                + "You may only read and answer — never create, update, or delete Jira issues, "
+                                + "Confluence pages, or any other resource."
+                        : baseSystemPrompt;
+                List<ToolUnion> tools = isAskMode
+                        ? ToolDefinitions.chatAsk()
+                        : ToolDefinitions.chat(canExecuteJobs, hasCustomer);
                 
                 // Create final reference for lambda
                 final WorkspaceContext finalWorkspace = workspace;

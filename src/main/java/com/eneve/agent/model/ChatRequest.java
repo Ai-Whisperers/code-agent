@@ -18,8 +18,8 @@ public record ChatRequest(
         @Schema(description = "Optional attachment IDs to include in the request")
         java.util.List<String> attachmentIds,
 
-        @Schema(description = "Chat mode: 'ask' for questions, 'plan' for planning requests", 
-                example = "ask")
+        @Schema(description = "Chat mode: 'chat' for general chat, 'ask' for read-only questions, 'plan' for planning requests",
+                example = "chat")
         String mode,
 
         @Schema(description = "Optional conversation context including customers, products, and issues")
