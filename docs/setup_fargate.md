@@ -12,17 +12,22 @@ This guide covers deploying the Code Agent on AWS ECS Fargate. It focuses on the
 ```
 Internet
   │
-  ▼
-Application Load Balancer (HTTPS :443)
-  │  ↳ target group → port 8080
-  ▼
-ECS Service (Fargate)
-  └─ Task: code-agent
-       ├─ Container: code-agent          (this image, port 8080)
-       └─ Sidecar optional: log router   (FireLens / awslogs)
+  ├─▶ CloudFront Distribution (HTTPS)
+  │     └─ Origin: S3 bucket (code-agent-ui static files, OAC)
+  │
+  └─▶ Application Load Balancer (HTTPS :443)
+        │  ↳ target group → port 8080
+        ▼
+      ECS Service (Fargate)
+        └─ Task: code-agent
+             ├─ Container: code-agent          (this image, port 8080)
+             ├─ Mount: EFS volume              (/workspace)
+             └─ Sidecar optional: log router   (FireLens / awslogs)
 
 Supporting services (same VPC, private subnets):
   ├─ RDS PostgreSQL 15+ with pgvector   (port 5432)
+  ├─ EFS File System                    (persistent workspace storage)
+  ├─ S3 Bucket (code-agent-ui)          (static files, CloudFront origin)
   ├─ AWS Secrets Manager                (credentials at boot)
   └─ ECR                                (image registry)
 ```
@@ -321,6 +326,220 @@ Set `attachment.s3.bucket` and `attachment.s3.region` in the Settings UI, or pas
 ```json
 { "name": "ATTACHMENT_S3_BUCKET", "value": "code-agent-attachments" }
 ```
+
+---
+
+## CloudFront + S3 for Static UI Files
+
+The frontend (`code-agent-ui`) is a static React build served via CloudFront from a private S3 bucket. CloudFront is the only authorized reader via an **Origin Access Control (OAC)** policy.
+
+### 1. Create the S3 bucket
+
+```bash
+aws s3api create-bucket \
+  --bucket code-agent-ui \
+  --region eu-central-1 \
+  --create-bucket-configuration LocationConstraint=eu-central-1
+
+aws s3api put-public-access-block \
+  --bucket code-agent-ui \
+  --public-access-block-configuration \
+    BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+```
+
+### 2. Create an Origin Access Control
+
+```bash
+aws cloudfront create-origin-access-control \
+  --origin-access-control-config \
+    Name=code-agent-ui-oac,OriginAccessControlOriginType=s3,SigningBehavior=always,SigningProtocol=sigv4
+```
+
+Note the returned `Id` — you will use it when creating the distribution.
+
+### 3. Attach the bucket policy
+
+Replace `<DISTRIBUTION_ARN>` with the ARN of your CloudFront distribution after creation:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontOAC",
+      "Effect": "Allow",
+      "Principal": {
+        "Service": "cloudfront.amazonaws.com"
+      },
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::code-agent-ui/*",
+      "Condition": {
+        "StringEquals": {
+          "AWS:SourceArn": "<DISTRIBUTION_ARN>"
+        }
+      }
+    }
+  ]
+}
+```
+
+### 4. Create the CloudFront distribution
+
+Key settings:
+
+| Setting | Value |
+|---------|-------|
+| Origin domain | `code-agent-ui.s3.eu-central-1.amazonaws.com` |
+| Origin access | OAC (from step 2) |
+| Viewer protocol policy | Redirect HTTP to HTTPS |
+| Default root object | `index.html` |
+| Custom error response | 403 → `/index.html` (status 200) for SPA routing |
+| Price class | `PriceClass_100` (EU + NA) or adjust to your audience |
+| ACM certificate | Your domain certificate (us-east-1 region, required for CloudFront) |
+
+**Cache behaviors:**
+
+| Path pattern | Cache TTL | Notes |
+|---|---|---|
+| `/assets/*` | 1 year (31536000 s) | Vite hashed filenames — safe to cache forever |
+| `*` (default) | 0 / no-cache | `index.html` and other entry points must always be fresh |
+
+### 5. Attach the security headers CloudFront Function
+
+The function at `infra/cloudfront-security-headers.js` applies security response headers (CSP, HSTS, X-Frame-Options, etc.) on the viewer-response event.
+
+```bash
+aws cloudfront create-function \
+  --name code-agent-ui-security-headers \
+  --function-config Comment="Security headers",Runtime=cloudfront-js-2.0 \
+  --function-code fileb://infra/cloudfront-security-headers.js
+
+aws cloudfront publish-function --name code-agent-ui-security-headers --if-match <ETAG>
+```
+
+Associate it with the **default cache behavior** on the **Viewer response** event via the Console or in your distribution config JSON.
+
+### 6. Deploy and invalidate
+
+After each UI build, sync the `dist/` folder to S3 and invalidate the CloudFront cache for `index.html`:
+
+```bash
+aws s3 sync dist/ s3://code-agent-ui --delete
+
+aws cloudfront create-invalidation \
+  --distribution-id <DISTRIBUTION_ID> \
+  --paths "/index.html" "/"
+```
+
+> `--delete` removes files from S3 that are no longer in `dist/`. Hashed asset files are unaffected because their paths change on each build.
+
+---
+
+## EFS Volume for External Storage
+
+Fargate tasks are ephemeral — any files written inside the container are lost when the task stops. For the code-agent, which clones repositories and runs builds under `/workspace`, an EFS (Elastic File System) mount provides durable, shared storage across task restarts and multiple running tasks.
+
+### 1. Create the EFS file system
+
+```bash
+aws efs create-file-system \
+  --region eu-central-1 \
+  --performance-mode generalPurpose \
+  --throughput-mode elastic \
+  --encrypted \
+  --tags Key=Name,Value=code-agent-workspace
+```
+
+Note the returned `FileSystemId` (e.g. `fs-0abc1234`).
+
+### 2. Create an EFS access point
+
+The access point enforces ownership by `appuser` (UID/GID 1001) so the container does not need elevated privileges:
+
+```bash
+aws efs create-access-point \
+  --file-system-id fs-0abc1234 \
+  --posix-user Uid=1001,Gid=1001 \
+  --root-directory "Path=/workspace,CreationInfo={OwnerUid=1001,OwnerGid=1001,Permissions=750}"
+```
+
+Note the returned `AccessPointId` (e.g. `fsap-0def5678`).
+
+### 3. Create mount targets
+
+Create one mount target per private subnet where Fargate tasks run:
+
+```bash
+aws efs create-mount-target \
+  --file-system-id fs-0abc1234 \
+  --subnet-id subnet-xxxxxxxx \
+  --security-groups sg-efs-nfs
+```
+
+Repeat for each private subnet (typically two AZs).
+
+### 4. Security group for EFS
+
+Create a dedicated security group `sg-efs-nfs` and allow inbound NFS only from the ECS task security group:
+
+| Type | Protocol | Port | Source |
+|------|----------|------|--------|
+| NFS | TCP | 2049 | ECS task security group |
+
+### 5. Add the EFS volume to the task definition
+
+Add the `volumes` block at the task-definition level and a `mountPoints` entry inside the container definition:
+
+```json
+"volumes": [
+  {
+    "name": "workspace",
+    "efsVolumeConfiguration": {
+      "fileSystemId": "fs-0abc1234",
+      "transitEncryption": "ENABLED",
+      "authorizationConfig": {
+        "accessPointId": "fsap-0def5678",
+        "iam": "ENABLED"
+      }
+    }
+  }
+]
+```
+
+Inside `containerDefinitions`:
+
+```json
+"mountPoints": [
+  {
+    "sourceVolume": "workspace",
+    "containerPath": "/workspace",
+    "readOnly": false
+  }
+]
+```
+
+### 6. IAM permissions for EFS
+
+Add the following statement to the **task role** (`code-agent-task-role`) to allow the container to mount and write via the access point:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": [
+    "elasticfilesystem:ClientMount",
+    "elasticfilesystem:ClientWrite",
+    "elasticfilesystem:DescribeMountTargets"
+  ],
+  "Resource": "arn:aws:elasticfilesystem:eu-central-1:123456789:file-system/fs-0abc1234",
+  "Condition": {
+    "StringEquals": {
+      "elasticfilesystem:AccessPointArn": "arn:aws:elasticfilesystem:eu-central-1:123456789:access-point/fsap-0def5678"
+    }
+  }
+}
+```
+
+> `transitEncryption: ENABLED` combined with `iam: ENABLED` ensures traffic between the Fargate task and EFS is both encrypted and authenticated.
 
 ---
 

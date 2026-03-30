@@ -33,6 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
  * <ul>
  *   <li>{@code atlassian.oauth.client-id} — OAuth 2.0 client ID</li>
  *   <li>{@code atlassian.oauth.client-secret} — OAuth 2.0 client secret</li>
+ *   <li>{@code atlassian.oauth.redirect-uri} — (optional) fixed redirect URI registered in the
+ *       Atlassian Developer Console; overrides the value derived from the browser origin so that
+ *       deployments behind a TLS-terminating proxy always use the correct {@code https://} URL</li>
  * </ul>
  */
 @ApplicationScoped
@@ -85,9 +88,14 @@ public class AtlassianOAuthService {
                     "Add it in System Settings → Atlassian.");
         }
 
+        // If an explicit redirect URI is configured (needed when behind a TLS-terminating proxy
+        // so that the correct https:// URL is always used), prefer it over the browser-derived one.
+        String configuredUri = settings.get("atlassian.oauth.redirect-uri", "").strip();
+        String effectiveUri  = configuredUri.isBlank() ? redirectUri : configuredUri;
+
         String state = UUID.randomUUID().toString();
-        // Store the redirectUri so the token exchange can replay the exact same value.
-        pendingStates.put(state, new StateEntry(userId, Instant.now().plusSeconds(STATE_TTL_SEC), redirectUri));
+        // Store the effectiveUri so the token exchange can replay the exact same value.
+        pendingStates.put(state, new StateEntry(userId, Instant.now().plusSeconds(STATE_TTL_SEC), effectiveUri));
         // Lazy cleanup of expired entries
         pendingStates.entrySet().removeIf(e -> e.getValue().expiresAt().isBefore(Instant.now()));
 
@@ -95,7 +103,7 @@ public class AtlassianOAuthService {
                 + "?audience="      + enc("api.atlassian.com")
                 + "&client_id="     + enc(clientId)
                 + "&scope="         + enc(SCOPES)
-                + "&redirect_uri="  + enc(redirectUri)
+                + "&redirect_uri="  + enc(effectiveUri)
                 + "&state="         + enc(state)
                 + "&response_type=code"
                 + "&prompt=consent";
