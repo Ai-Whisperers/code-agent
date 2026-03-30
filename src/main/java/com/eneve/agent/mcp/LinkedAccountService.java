@@ -173,7 +173,7 @@ public class LinkedAccountService {
         // Fallback to system credentials
         if (Boolean.parseBoolean(settings.get("mcp.system-credential-fallback.enabled", "false")) && confluenceService.isEnabled()) {
             LOG.debugf("No linked Confluence account for user=%s, using system credentials", userId);
-            return Optional.of(new ConfluenceService.ConfluenceCredentials(
+            return Optional.of(ConfluenceService.ConfluenceCredentials.basic(
                     confluenceService.getBaseUrl(),
                     confluenceService.getUser(),
                     confluenceService.getApiToken()
