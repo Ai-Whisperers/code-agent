@@ -70,7 +70,29 @@ public class JiraService {
     /** Remote link (e.g. a linked Confluence page) on a Jira issue. */
     public record JiraRemoteLink(String title, String url) {}
 
-    public record JiraCredentials(String baseUrl, String username, String apiToken) {}
+    /**
+     * Credentials for a per-user Jira request.
+     *
+     * <ul>
+     *   <li>{@code "apitoken"} — Basic auth using {@code username:apiToken}</li>
+     *   <li>{@code "oauth"}    — Bearer auth using {@code apiToken} as the access token
+     *                            ({@code username} is ignored for HTTP auth but kept for display)</li>
+     * </ul>
+     */
+    public record JiraCredentials(String baseUrl, String username, String apiToken, String authType) {
+
+        /** Basic-auth (username + API token) credentials. */
+        public static JiraCredentials basic(String baseUrl, String username, String apiToken) {
+            return new JiraCredentials(baseUrl, username, apiToken, "apitoken");
+        }
+
+        /** OAuth Bearer-token credentials. */
+        public static JiraCredentials oauth(String baseUrl, String username, String accessToken) {
+            return new JiraCredentials(baseUrl, username, accessToken, "oauth");
+        }
+
+        public boolean isOAuth() { return "oauth".equalsIgnoreCase(authType); }
+    }
 
     public record WorklogEntry(String id, String author, String timeSpent, String started, String comment) {}
 
@@ -298,5 +320,9 @@ public class JiraService {
 
     public static boolean testConnection(String testBaseUrl, String testUser, String testApiToken) {
         return JiraHttpClient.testConnection(testBaseUrl, testUser, testApiToken);
+    }
+
+    public static boolean testConnectionOAuth(String testBaseUrl, String accessToken) {
+        return JiraHttpClient.testConnectionOAuth(testBaseUrl, accessToken);
     }
 }

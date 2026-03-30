@@ -419,19 +419,27 @@ aws cloudfront publish-function --name code-agent-ui-security-headers --if-match
 
 Associate it with the **default cache behavior** on the **Viewer response** event via the Console or in your distribution config JSON.
 
-### 6. Deploy and invalidate
+### 6. Deploy with cache-control headers
 
-After each UI build, sync the `dist/` folder to S3 and invalidate the CloudFront cache for `index.html`:
+Use a two-pass sync that sets the correct `Cache-Control` headers per file type. This eliminates the need for CloudFront invalidations entirely:
 
 ```bash
-aws s3 sync dist/ s3://code-agent-ui --delete
+# Pass 1 — hashed assets: cache forever (filenames change on every build)
+aws s3 sync dist/assets/ s3://code-agent-ui/assets/ \
+  --delete \
+  --cache-control "public,max-age=31536000,immutable"
 
-aws cloudfront create-invalidation \
-  --distribution-id <DISTRIBUTION_ID> \
-  --paths "/index.html" "/"
+# Pass 2 — entry points (index.html, etc.): never cache
+aws s3 sync dist/ s3://code-agent-ui/ \
+  --delete \
+  --exclude "assets/*" \
+  --cache-control "no-cache,no-store,must-revalidate"
 ```
 
-> `--delete` removes files from S3 that are no longer in `dist/`. Hashed asset files are unaffected because their paths change on each build.
+- **`/assets/*`** — Vite embeds a content hash in every filename (e.g. `index-Dh3kL9aB.js`), so a cached copy can never be stale. CloudFront serves them at full edge speed indefinitely.
+- **`index.html` and other root files** — `no-cache` tells CloudFront (and browsers) to always revalidate with the origin before serving, so users always receive the latest entry point without any manual invalidation step.
+
+> `--delete` removes files from S3 that no longer exist in `dist/`. Run pass 1 before pass 2 so the `--exclude` pattern in pass 2 does not accidentally delete newly uploaded assets.
 
 ---
 

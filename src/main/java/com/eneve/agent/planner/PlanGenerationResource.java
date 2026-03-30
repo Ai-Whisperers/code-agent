@@ -111,7 +111,7 @@ public class PlanGenerationResource {
                 : "ORDER BY updated DESC";
         int cap = Math.min(Math.max(1, maxResults), 20);
 
-        var creds = new JiraService.JiraCredentials(
+        var creds = JiraService.JiraCredentials.basic(
                 jiraService.getBaseUrl(), jiraService.getUser(), jiraService.getApiToken());
 
         List<JiraSearchResult> results = jiraService.searchIssues(jql, cap, creds).stream()

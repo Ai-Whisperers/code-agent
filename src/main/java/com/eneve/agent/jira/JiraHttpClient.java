@@ -122,14 +122,22 @@ class JiraHttpClient {
         }
     }
 
+    /** Builds the correct Authorization header value for any auth type. */
+    private static String authHeader(JiraService.JiraCredentials creds) {
+        if (creds.isOAuth()) {
+            return "Bearer " + creds.apiToken();
+        }
+        String encoded = Base64.getEncoder()
+                .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
+        return "Basic " + encoded;
+    }
+
     String getWithCreds(String path, String operation, JiraService.JiraCredentials creds) {
         try {
-            String auth = Base64.getEncoder()
-                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
-                    .header("Authorization", "Basic " + auth)
+                    .header("Authorization", authHeader(creds))
                     .header("Accept", "application/json")
                     .GET()
                     .build();
@@ -149,12 +157,10 @@ class JiraHttpClient {
 
     String postForBodyWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
-            String auth = Base64.getEncoder()
-                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
-                    .header("Authorization", "Basic " + auth)
+                    .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -175,12 +181,10 @@ class JiraHttpClient {
 
     boolean postWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
-            String auth = Base64.getEncoder()
-                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
-                    .header("Authorization", "Basic " + auth)
+                    .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
@@ -196,12 +200,10 @@ class JiraHttpClient {
 
     boolean putWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
-            String auth = Base64.getEncoder()
-                    .encodeToString((creds.username() + ":" + creds.apiToken()).getBytes(StandardCharsets.UTF_8));
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(creds.baseUrl() + path))
-                    .header("Authorization", "Basic " + auth)
+                    .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
                     .PUT(HttpRequest.BodyPublishers.ofString(body))
@@ -260,6 +262,25 @@ class JiraHttpClient {
                     .timeout(Duration.ofSeconds(30))
                     .uri(URI.create(testBaseUrl + "/rest/api/3/myself"))
                     .header("Authorization", "Basic " + auth)
+                    .header("Accept", "application/json")
+                    .GET()
+                    .build();
+
+            HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build();
+            HttpResponse<String> response = client.send(request, HttpResponse.BodyHandlers.ofString());
+            return response.statusCode() >= 200 && response.statusCode() < 300;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** Tests a Jira connection using an OAuth Bearer access token. */
+    static boolean testConnectionOAuth(String testBaseUrl, String accessToken) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
+                    .uri(URI.create(testBaseUrl + "/rest/api/3/myself"))
+                    .header("Authorization", "Bearer " + accessToken)
                     .header("Accept", "application/json")
                     .GET()
                     .build();

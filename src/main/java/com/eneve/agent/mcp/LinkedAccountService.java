@@ -123,18 +123,18 @@ public class LinkedAccountService {
     public Optional<JiraService.JiraCredentials> resolveJira(String userId) {
         Optional<AccountRow> row = store.findByUserAndProvider(userId, "jira");
         if (row.isPresent()) {
-            String token = encryption.decrypt(row.get().apiTokenEnc());
-            return Optional.of(new JiraService.JiraCredentials(
-                    row.get().baseUrl(),
-                    row.get().username(),
-                    token
-            ));
+            AccountRow r = row.get();
+            String token = encryption.decrypt(r.apiTokenEnc());
+            JiraService.JiraCredentials creds = "oauth".equalsIgnoreCase(r.authType())
+                    ? JiraService.JiraCredentials.oauth(r.baseUrl(), r.username(), token)
+                    : JiraService.JiraCredentials.basic(r.baseUrl(), r.username(), token);
+            return Optional.of(creds);
         }
 
         // Fallback to system credentials
         if (Boolean.parseBoolean(settings.get("mcp.system-credential-fallback.enabled", "false")) && jiraService.isConfigured()) {
             LOG.debugf("No linked Jira account for user=%s, using system credentials", userId);
-            return Optional.of(new JiraService.JiraCredentials(
+            return Optional.of(JiraService.JiraCredentials.basic(
                     jiraService.getBaseUrl(),
                     jiraService.getUser(),
                     jiraService.getApiToken()
@@ -154,24 +154,20 @@ public class LinkedAccountService {
     public Optional<ConfluenceService.ConfluenceCredentials> resolveConfluence(String userId) {
         Optional<AccountRow> row = store.findByUserAndProvider(userId, "confluence");
         if (row.isPresent()) {
-            String token = encryption.decrypt(row.get().apiTokenEnc());
+            AccountRow r = row.get();
+            String token = encryption.decrypt(r.apiTokenEnc());
             return Optional.of(new ConfluenceService.ConfluenceCredentials(
-                    row.get().baseUrl(),
-                    row.get().username(),
-                    token
-            ));
+                    r.baseUrl(), r.username(), token, r.authType()));
         }
 
         // Jira and Confluence share the same Atlassian Cloud credentials — fall back to linked Jira account
         Optional<AccountRow> jiraRow = store.findByUserAndProvider(userId, "jira");
         if (jiraRow.isPresent()) {
             LOG.debugf("No linked Confluence account for user=%s, using linked Jira credentials", userId);
-            String token = encryption.decrypt(jiraRow.get().apiTokenEnc());
+            AccountRow r = jiraRow.get();
+            String token = encryption.decrypt(r.apiTokenEnc());
             return Optional.of(new ConfluenceService.ConfluenceCredentials(
-                    jiraRow.get().baseUrl(),
-                    jiraRow.get().username(),
-                    token
-            ));
+                    r.baseUrl(), r.username(), token, r.authType()));
         }
 
         // Fallback to system credentials
@@ -222,9 +218,13 @@ public class LinkedAccountService {
     public Optional<Boolean> testStoredJiraConnection(String userId) {
         Optional<AccountRow> row = store.findByUserAndProvider(userId, "jira");
         if (row.isEmpty()) return Optional.empty();
-        String token = encryption.decrypt(row.get().apiTokenEnc());
+        AccountRow r = row.get();
+        String token = encryption.decrypt(r.apiTokenEnc());
         try {
-            return Optional.of(JiraService.testConnection(row.get().baseUrl(), row.get().username(), token));
+            boolean ok = "oauth".equalsIgnoreCase(r.authType())
+                    ? JiraService.testConnectionOAuth(r.baseUrl(), token)
+                    : JiraService.testConnection(r.baseUrl(), r.username(), token);
+            return Optional.of(ok);
         } catch (Exception e) {
             LOG.warnf("Jira stored connection test failed: %s", e.getMessage());
             return Optional.of(false);
@@ -238,9 +238,13 @@ public class LinkedAccountService {
     public Optional<Boolean> testStoredConfluenceConnection(String userId) {
         Optional<AccountRow> row = store.findByUserAndProvider(userId, "confluence");
         if (row.isEmpty()) return Optional.empty();
-        String token = encryption.decrypt(row.get().apiTokenEnc());
+        AccountRow r = row.get();
+        String token = encryption.decrypt(r.apiTokenEnc());
         try {
-            return Optional.of(ConfluenceService.testConnection(row.get().baseUrl(), row.get().username(), token));
+            boolean ok = "oauth".equalsIgnoreCase(r.authType())
+                    ? ConfluenceService.testConnectionOAuth(r.baseUrl(), token)
+                    : ConfluenceService.testConnection(r.baseUrl(), r.username(), token);
+            return Optional.of(ok);
         } catch (Exception e) {
             LOG.warnf("Confluence stored connection test failed: %s", e.getMessage());
             return Optional.of(false);
