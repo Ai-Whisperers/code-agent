@@ -25,6 +25,7 @@ import jakarta.ws.rs.PATCH;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
 import jakarta.ws.rs.Produces;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
@@ -106,6 +107,43 @@ public class ConversationsResource {
                 .forEach(plan -> planStore.delete(plan.planId()));
         conversationRepository.deleteConversation(conversationId, userId);
         LOG.debugf("DELETE /conversations/%s — userId=%s", conversationId, userId);
+        return Response.noContent().build();
+    }
+
+    @DELETE
+    @Path("/{conversationId}/messages")
+    @Operation(
+            operationId = "truncateConversationMessages",
+            summary = "Truncate messages from a conversation from a given sequence number",
+            description = "Deletes all messages with sequence_num >= fromSequence. "
+                    + "Used to rewind a conversation when the user edits a prior message."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "204", description = "Messages truncated"),
+            @APIResponse(responseCode = "400", description = "Missing or invalid fromSequence"),
+            @APIResponse(responseCode = "401", description = "Not authenticated"),
+            @APIResponse(responseCode = "404", description = "Conversation not found or not owned by user")
+    })
+    public Response truncateMessages(
+            @Parameter(description = "Conversation ID", required = true)
+            @PathParam("conversationId") String conversationId,
+            @Parameter(description = "First message sequence number to delete (inclusive)", required = true)
+            @QueryParam("fromSequence") Integer fromSequence) {
+        if (fromSequence == null || fromSequence < 0) {
+            throw new WebApplicationException(
+                    Response.status(400)
+                            .entity(Map.of("error", "fromSequence query parameter is required and must be >= 0"))
+                            .build());
+        }
+        String userId = resolveUserId();
+        if (!conversationRepository.exists(conversationId, userId)) {
+            return Response.status(Response.Status.NOT_FOUND)
+                    .entity(Map.of("error", "Conversation not found"))
+                    .build();
+        }
+        conversationRepository.truncateMessages(conversationId, userId, fromSequence);
+        LOG.debugf("DELETE /conversations/%s/messages?fromSequence=%d — userId=%s",
+                conversationId, fromSequence, userId);
         return Response.noContent().build();
     }
 

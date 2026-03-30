@@ -132,6 +132,37 @@ public class ConversationRepository {
     }
 
     /**
+     * Deletes all messages with {@code sequence_num >= fromSequence} from a conversation.
+     * Only succeeds if the conversation is owned by {@code userId}.
+     *
+     * @param conversationId target conversation
+     * @param userId         owning user (JWT sub claim)
+     * @param fromSequence   first sequence number to delete (inclusive)
+     */
+    public void truncateMessages(String conversationId, String userId, int fromSequence) {
+        String sql = """
+                DELETE FROM chat_messages
+                WHERE conversation_id = ?
+                  AND sequence_num >= ?
+                  AND conversation_id IN (
+                      SELECT conversation_id FROM chat_conversations
+                      WHERE conversation_id = ? AND user_id = ?
+                  )
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, conversationId);
+            ps.setInt(2, fromSequence);
+            ps.setString(3, conversationId);
+            ps.setString(4, userId);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("Failed to truncate messages for conversation %s from seq %d: %s",
+                    conversationId, fromSequence, e.getMessage());
+        }
+    }
+
+    /**
      * Deletes a conversation and all its messages (CASCADE). Only succeeds if the conversation
      * is owned by {@code userId}.
      */
