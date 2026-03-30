@@ -451,20 +451,6 @@ public class RunFixResource {
         }
     }
 
-    @GET
-    @Path("/health")
-    @Tag(name = "Health")
-    @Operation(
-            operationId = "healthCheck",
-            summary = "Health check",
-            description = "Returns service health status and available job slots."
-    )
-    @APIResponse(responseCode = "200", description = "Service is healthy",
-            content = @Content(schema = @Schema(example = "{\"status\": \"UP\", \"availableSlots\": 3, \"runningJobs\": 0, \"queuedJobs\": 0}")))
-    public Response health() {
-        return Response.ok(runFixService.health()).build();
-    }
-
     @POST
     @Path("/sync-jira")
     @RolesAllowed({"app_developer", "app_admin"})
