@@ -66,6 +66,13 @@ public class AgentUpdateRepoSettingsTool implements ToolExecutor {
         String confluenceSpaceKey = (String) input.get("confluenceSpaceKey");
         String confluenceParentPageId = (String) input.get("confluenceParentPageId");
         String gitPlatformUrl = (String) input.get("gitPlatformUrl");
+        String description = (String) input.get("description");
+        String primaryLanguage = (String) input.get("primaryLanguage");
+
+        @SuppressWarnings("unchecked")
+        List<String> jiraComponents = (List<String>) input.get("jiraComponents");
+        @SuppressWarnings("unchecked")
+        List<String> tags = (List<String>) input.get("tags");
 
         try {
             boolean enabled = reviewEnabled != null ? reviewEnabled : true;
@@ -76,10 +83,12 @@ public class AgentUpdateRepoSettingsTool implements ToolExecutor {
             boolean arch = archived != null ? archived : false;
             List<String> rules = ruleNames != null ? ruleNames : List.of();
             List<String> hooks = disabledHooks != null ? disabledHooks : List.of();
+            List<String> components = jiraComponents != null ? jiraComponents : List.of();
+            List<String> tagList = tags != null ? tags : List.of();
 
             settingsStore.upsert(workspaceName, repoSlug, enabled, vecEnabled, docEnabled, upgEnabled,
                     qualEnabled, arch, rules, reviewPrompt, hooks, confluenceSpaceKey, confluenceParentPageId,
-                    gitPlatformUrl);
+                    gitPlatformUrl, description, primaryLanguage, components, tagList);
 
             // Sync webhooks if needed
             if (enabled && !arch) {

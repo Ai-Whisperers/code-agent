@@ -28,12 +28,17 @@ public record RepoSettings(
         String archetype,
         String archetypeVersion,
         Map<String, String> dependencyVersions,
+        String description,
+        String primaryLanguage,
+        List<String> jiraComponents,
+        List<String> tags,
         Instant createdAt,
         Instant updatedAt
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
         return new RepoSettings(null, workspace, repoSlug, true, false, true, true, false, false,
-                List.of(), null, List.of(), null, null, null, null, null, Map.of(), Instant.now(), Instant.now());
+                List.of(), null, List.of(), null, null, null, null, null, Map.of(),
+                null, null, List.of(), List.of(), Instant.now(), Instant.now());
     }
 }

@@ -244,7 +244,8 @@ class AikidoWebhookResourceTest {
         return new RepoSettings(1L, workspace, repoSlug,
                 true, false, true, true, false, false,
                 List.of(), null, List.of(), null, null, null,
-                "quarkus", "3.8", Map.of(), Instant.now(), Instant.now());
+                "quarkus", "3.8", Map.of(),
+                null, null, List.of(), List.of(), Instant.now(), Instant.now());
     }
 
     private static long currentEpoch() {

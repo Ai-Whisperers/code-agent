@@ -277,6 +277,17 @@ public class JiraService {
         return worklogs.getWorklogs(issueKey, creds);
     }
 
+    // ─── Meta (projects / components) ────────────────────────────────────────
+
+    public String listProjectsRaw() {
+        return httpClient.get("/rest/api/3/project", "list projects");
+    }
+
+    public String listComponentsRaw(String projectKey) {
+        return httpClient.get("/rest/api/3/project/" + JiraHttpClient.escapeJson(projectKey) + "/components",
+                "list components for " + projectKey);
+    }
+
     // ─── Configuration ────────────────────────────────────────────────────────
 
     public boolean isConfigured() { return httpClient.isConfigured(); }

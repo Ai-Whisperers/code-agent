@@ -63,11 +63,14 @@ public class RepoSettingsService {
                        boolean qualityReportEnabled, boolean archived,
                        List<String> ruleNames, String reviewPrompt,
                        List<String> disabledHooks, String confluenceSpaceKey,
-                       String confluenceParentPageId, String gitPlatformUrl) {
+                       String confluenceParentPageId, String gitPlatformUrl,
+                       String description, String primaryLanguage,
+                       List<String> jiraComponents, List<String> tags) {
 
         settingsStore.upsert(workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled,
                 upgradeEnabled, qualityReportEnabled, archived, ruleNames, reviewPrompt,
-                disabledHooks, confluenceSpaceKey, confluenceParentPageId, gitPlatformUrl);
+                disabledHooks, confluenceSpaceKey, confluenceParentPageId, gitPlatformUrl,
+                description, primaryLanguage, jiraComponents, tags);
 
         try {
             if (reviewEnabled && !archived) {

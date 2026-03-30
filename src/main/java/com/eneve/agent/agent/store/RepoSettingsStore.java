@@ -33,7 +33,9 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                       archetype, archetype_version, dependency_versions,
+                       description, primary_language, jira_components, tags,
+                       created_at, updated_at
                 FROM repo_settings
                 WHERE workspace = ? AND repo_slug = ?
                 """;
@@ -57,7 +59,9 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                       archetype, archetype_version, dependency_versions,
+                       description, primary_language, jira_components, tags,
+                       created_at, updated_at
                 FROM repo_settings
                 ORDER BY workspace, repo_slug
                 """;
@@ -80,13 +84,17 @@ public class RepoSettingsStore {
                        List<String> ruleNames, String reviewPrompt,
                        List<String> disabledHooks,
                        String confluenceSpaceKey, String confluenceParentPageId,
-                       String gitPlatformUrl) {
+                       String gitPlatformUrl,
+                       String description, String primaryLanguage,
+                       List<String> jiraComponents, List<String> tags) {
         String sql = """
                 INSERT INTO repo_settings
                     (workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                      upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
-                     confluence_space_key, confluence_parent_page_id, git_platform_url, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
+                     confluence_space_key, confluence_parent_page_id, git_platform_url,
+                     description, primary_language, jira_components, tags,
+                     created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, now(), now())
                 ON CONFLICT (workspace, repo_slug)
                 DO UPDATE SET review_enabled           = EXCLUDED.review_enabled,
                               vector_enabled           = EXCLUDED.vector_enabled,
@@ -100,6 +108,10 @@ public class RepoSettingsStore {
                               confluence_space_key     = EXCLUDED.confluence_space_key,
                               confluence_parent_page_id = EXCLUDED.confluence_parent_page_id,
                               git_platform_url         = COALESCE(EXCLUDED.git_platform_url, repo_settings.git_platform_url),
+                              description              = EXCLUDED.description,
+                              primary_language         = EXCLUDED.primary_language,
+                              jira_components          = EXCLUDED.jira_components,
+                              tags                     = EXCLUDED.tags,
                               updated_at               = now()
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -118,6 +130,10 @@ public class RepoSettingsStore {
             setNullableString(ps, 12, confluenceSpaceKey);
             setNullableString(ps, 13, confluenceParentPageId);
             setNullableString(ps, 14, gitPlatformUrl);
+            setNullableString(ps, 15, description);
+            setNullableString(ps, 16, primaryLanguage);
+            setNullableString(ps, 17, toJson(jiraComponents));
+            setNullableString(ps, 18, toJson(tags));
             ps.executeUpdate();
             LOG.debugf("Upserted repo settings for %s/%s (reviewEnabled=%s, vectorEnabled=%s, docsEnabled=%s, upgradeEnabled=%s, qualityReportEnabled=%s, archived=%s)",
                     workspace, repoSlug, reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled, qualityReportEnabled, archived);
@@ -340,7 +356,9 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                       archetype, archetype_version, dependency_versions,
+                       description, primary_language, jira_components, tags,
+                       created_at, updated_at
                 FROM repo_settings
                 WHERE lower(archetype) = lower(?) AND archetype_version IS NOT NULL
                 ORDER BY workspace, repo_slug
@@ -371,7 +389,9 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                       archetype, archetype_version, dependency_versions,
+                       description, primary_language, jira_components, tags,
+                       created_at, updated_at
                 FROM repo_settings
                 WHERE dependency_versions IS NOT NULL
                   AND dependency_versions::jsonb ? ?
@@ -448,7 +468,9 @@ public class RepoSettingsStore {
                 SELECT id, workspace, repo_slug, review_enabled, vector_enabled, docs_enabled,
                        upgrade_enabled, quality_report_enabled, archived, rule_names, review_prompt, disabled_hooks,
                        confluence_space_key, confluence_parent_page_id, git_platform_url,
-                       archetype, archetype_version, dependency_versions, created_at, updated_at
+                       archetype, archetype_version, dependency_versions,
+                       description, primary_language, jira_components, tags,
+                       created_at, updated_at
                 FROM repo_settings
                 WHERE quality_report_enabled = TRUE AND archived = FALSE
                 ORDER BY workspace, repo_slug
@@ -488,6 +510,10 @@ public class RepoSettingsStore {
                 rs.getString("archetype"),
                 rs.getString("archetype_version"),
                 fromJsonMap(rs.getString("dependency_versions")),
+                rs.getString("description"),
+                rs.getString("primary_language"),
+                fromJson(rs.getString("jira_components")),
+                fromJson(rs.getString("tags")),
                 createdTs != null ? createdTs.toInstant() : null,
                 updatedTs != null ? updatedTs.toInstant() : null
         );

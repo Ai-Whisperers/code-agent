@@ -115,11 +115,16 @@ public class RepoSettingsResource {
         List<String> ruleNames        = request.ruleNames()             != null ? request.ruleNames()             : List.of();
         List<String> disabledHooks    = request.disabledHooks()         != null ? request.disabledHooks()         : List.of();
 
+        List<String> jiraComponents = request.jiraComponents() != null ? request.jiraComponents() : List.of();
+        List<String> tags            = request.tags()            != null ? request.tags()            : List.of();
+
         repoSettingsService.upsert(workspace, repoSlug,
                 reviewEnabled, vectorEnabled, docsEnabled, upgradeEnabled,
                 qualityReportEnabled, archived, ruleNames, request.reviewPrompt(),
                 disabledHooks, request.confluenceSpaceKey(),
-                request.confluenceParentPageId(), request.gitPlatformUrl());
+                request.confluenceParentPageId(), request.gitPlatformUrl(),
+                request.description(), request.primaryLanguage(),
+                jiraComponents, tags);
 
         return Response.ok(RepoSettingsService.upsertResponse(workspace, repoSlug,
                 reviewEnabled, vectorEnabled, docsEnabled,
@@ -471,6 +476,10 @@ public class RepoSettingsResource {
             List<String> disabledHooks,
             String confluenceSpaceKey,
             String confluenceParentPageId,
-            String gitPlatformUrl
+            String gitPlatformUrl,
+            String description,
+            String primaryLanguage,
+            List<String> jiraComponents,
+            List<String> tags
     ) {}
 }
