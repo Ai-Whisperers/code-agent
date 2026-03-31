@@ -4,9 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-import com.eneve.agent.agent.service.VoyageEmbeddingService.RerankResult;
+import com.eneve.agent.agent.service.BedrockEmbeddingService.RerankResult;
 import com.eneve.agent.agent.store.EmbeddingStore;
-import com.eneve.agent.agent.service.VoyageEmbeddingService;
+import com.eneve.agent.agent.service.BedrockEmbeddingService;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.workspace.WorkspaceContext;
 
@@ -19,7 +19,7 @@ import jakarta.inject.Inject;
  * find library implementations, shared utilities, and related code in other repos.
  * <p>
  * Uses a two-stage retrieval pipeline: vector similarity search to fetch a broad
- * candidate set (topK * 3), followed by optional Voyage reranking to reorder by
+ * candidate set (topK * 3), followed by optional Bedrock reranking to reorder by
  * true semantic relevance, then score-threshold filtering.
  */
 @ApplicationScoped
@@ -30,7 +30,7 @@ public class SemanticSearchTool implements ToolExecutor {
     private static final int CANDIDATE_MULTIPLIER = 3;
     private static final int MAX_SOURCE_DISPLAY_CHARS = 2000;
 
-    @Inject VoyageEmbeddingService voyageService;
+    @Inject BedrockEmbeddingService bedrockService;
     @Inject EmbeddingStore embeddingStore;
     @Inject SettingsService settingsService;
 
@@ -46,8 +46,8 @@ public class SemanticSearchTool implements ToolExecutor {
 
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
-        if (!voyageService.isConfigured()) {
-            return "ERROR: Semantic search is not configured (no Voyage API key set)";
+        if (!bedrockService.isConfigured()) {
+            return "ERROR: Semantic search is not configured (Bedrock credentials unavailable)";
         }
 
         String query = (String) input.get("query");
@@ -71,7 +71,7 @@ public class SemanticSearchTool implements ToolExecutor {
             repoSlug = workspace.getMetadata("repoSlug");
         }
 
-        float[] queryVector = voyageService.embedSingle(query, "query");
+        float[] queryVector = bedrockService.embedSingle(query, "query");
         if (queryVector == null) {
             return "ERROR: Failed to generate embedding for query";
         }
@@ -159,7 +159,7 @@ public class SemanticSearchTool implements ToolExecutor {
     }
 
     /**
-     * Reranks the candidate results using Voyage's rerank endpoint and returns the top-K
+     * Reranks the candidate results using the Bedrock Rerank API and returns the top-K
      * results above the score threshold, preserving the original {@link EmbeddingStore.SearchResult}
      * metadata but ordered by rerank relevance.
      */
@@ -171,7 +171,7 @@ public class SemanticSearchTool implements ToolExecutor {
                 .map(EmbeddingStore.SearchResult::sourceText)
                 .toList();
 
-        List<RerankResult> rerankResults = voyageService.rerank(query, sources, topK);
+        List<RerankResult> rerankResults = bedrockService.rerank(query, sources, topK);
 
         if (rerankResults.isEmpty()) {
             // Rerank failed — fall back to vector similarity order with threshold

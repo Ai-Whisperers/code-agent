@@ -173,6 +173,15 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sts</artifactId>
         </dependency>
+        <!-- AWS SDK v2: Bedrock embeddings (InvokeModel) and reranking -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>bedrockruntime</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>bedrockagentruntime</artifactId>
+        </dependency>
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>cloudwatchlogs</artifactId>

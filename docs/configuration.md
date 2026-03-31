@@ -28,21 +28,29 @@ ANTHROPIC_MODEL=claude-sonnet-4-20250514
 ANTHROPIC_MAX_TOKENS=8192
 ```
 
-### Voyage AI Embeddings
+### AWS Bedrock Embeddings & Reranking
+
+No API key required — authentication is via the AWS credential chain (IAM role on ECS/EC2, or `~/.aws` / env vars locally).
 
 | Variable | Default | Required | Description |
 |----------|---------|----------|-------------|
-| `VOYAGE_API_KEY` | - | ❌ | Voyage AI API key for vector embeddings |
-| `VOYAGE_MODEL` | `voyage-code-3` | ❌ | Embedding model identifier |
-| `VOYAGE_BATCH_SIZE` | `128` | ❌ | Max texts per API call |
+| `BEDROCK_REGION` | `eu-central-1` | ❌ | AWS region for Bedrock API calls |
+| `BEDROCK_CODE_EMBEDDING_MODEL` | `cohere.embed-multilingual-v3` | ❌ | Embedding model for code (→ `code_embeddings` table) |
+| `BEDROCK_TEXT_EMBEDDING_MODEL` | `amazon.titan-embed-text-v2:0` | ❌ | Embedding model for knowledge/docs (→ `knowledge_embeddings` table) |
+| `BEDROCK_RERANK_MODEL` | `amazon.rerank-v1:0` | ❌ | Rerank model for code semantic search |
 | `EMBEDDING_MAX_SOURCE_CHARS` | `16000` | ❌ | Max source code chars per embedding |
+
+Both models produce 1024-dimensional vectors — no database migration is required.
 
 **Example:**
 ```bash
-VOYAGE_API_KEY=pa-xyz123
-VOYAGE_MODEL=voyage-code-3
-VOYAGE_BATCH_SIZE=128
+BEDROCK_REGION=eu-central-1
+BEDROCK_CODE_EMBEDDING_MODEL=cohere.embed-multilingual-v3
+BEDROCK_TEXT_EMBEDDING_MODEL=amazon.titan-embed-text-v2:0
+BEDROCK_RERANK_MODEL=amazon.rerank-v1:0
 ```
+
+**GDPR / data privacy:** AWS Bedrock does not use customer inputs to train models. Calls stay in the configured region. Apply an AI services opt-out policy in AWS Organizations to fully block any AWS AI service improvement usage.
 
 ## Database Configuration
 
@@ -509,7 +517,7 @@ The following configurations are required for basic operation:
 
 1. **API_KEY**: Protect REST endpoints in production
 2. **WEBHOOK_SECRET_***: Secure webhook endpoints
-3. **VOYAGE_API_KEY**: Enable semantic search
+3. **AWS Bedrock access**: Ensure the ECS task role (or local IAM credentials) has `bedrock:InvokeModel` and `bedrock:Rerank` permissions to enable semantic search
 4. **Guardrails**: Set appropriate limits for your environment
 
 ### Validation Checklist

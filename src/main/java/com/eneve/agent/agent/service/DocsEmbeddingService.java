@@ -29,7 +29,7 @@ public class DocsEmbeddingService {
     private static final String SYMBOL_TYPE = "DOCUMENTATION";
 
     @Inject
-    VoyageEmbeddingService voyageService;
+    BedrockEmbeddingService bedrockService;
 
     @Inject
     EmbeddingStore embeddingStore;
@@ -39,8 +39,8 @@ public class DocsEmbeddingService {
      * embeddings into the store. Stale doc embeddings are purged first.
      */
     public void indexDocs(WorkspaceContext workspace, String ws, String repoSlug) {
-        if (!voyageService.isConfigured()) {
-            LOG.info("Voyage not configured, skipping doc embedding");
+        if (!bedrockService.isConfigured()) {
+            LOG.info("Bedrock embedding not configured, skipping doc embedding");
             return;
         }
 
@@ -69,7 +69,7 @@ public class DocsEmbeddingService {
         LOG.infof("Embedding %d doc chunks for %s/%s", chunks.size(), ws, repoSlug);
 
         List<String> texts = chunks.stream().map(c -> c.content).toList();
-        List<float[]> embeddings = voyageService.embed(texts, "document");
+        List<float[]> embeddings = bedrockService.embed(texts, "document");
         if (embeddings == null || embeddings.size() != chunks.size()) {
             LOG.error("Embedding generation returned unexpected results, aborting doc indexing");
             return;

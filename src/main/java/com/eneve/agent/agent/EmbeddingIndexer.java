@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import com.eneve.agent.agent.service.VoyageEmbeddingService;
+import com.eneve.agent.agent.service.BedrockEmbeddingService;
 import com.eneve.agent.agent.store.EmbeddingStore;
 
 import java.util.List;
@@ -107,7 +107,7 @@ public class EmbeddingIndexer {
             "implements", "namespace", "use", "require", "require_once", "include", "include_once",
             "match", "fn", "yield", "this", "string", "int", "float", "bool", "void", "mixed");
 
-    @Inject VoyageEmbeddingService voyageService;
+    @Inject BedrockEmbeddingService bedrockService;
     @Inject EmbeddingStore embeddingStore;
     @Inject com.eneve.agent.settings.SettingsService settings;
 
@@ -115,8 +115,8 @@ public class EmbeddingIndexer {
                        Integer lineStart, Integer lineEnd, String sourceText) {}
 
     public void indexFull(WorkspaceContext workspace, String wsName, String repoSlug) {
-        if (!voyageService.isConfigured()) {
-            LOG.debug("Voyage API not configured — skipping embedding index");
+        if (!bedrockService.isConfigured()) {
+            LOG.debug("Bedrock embedding not configured — skipping embedding index");
             return;
         }
 
@@ -145,7 +145,7 @@ public class EmbeddingIndexer {
 
         LOG.infof("Extracted %d symbol chunks, generating embeddings...", allChunks.size());
         List<String> texts = allChunks.stream().map(SymbolChunk::sourceText).toList();
-        List<float[]> embeddings = voyageService.embed(texts, "document");
+        List<float[]> embeddings = bedrockService.embed(texts, "document");
 
         if (embeddings.size() != allChunks.size()) {
             LOG.warnf("Embedding count mismatch: %d chunks but %d embeddings", allChunks.size(), embeddings.size());
@@ -168,7 +168,7 @@ public class EmbeddingIndexer {
 
     public void indexIncremental(WorkspaceContext workspace, String wsName, String repoSlug,
                                  List<String> changedFiles) {
-        if (!voyageService.isConfigured()) {
+        if (!bedrockService.isConfigured()) {
             return;
         }
 
@@ -196,7 +196,7 @@ public class EmbeddingIndexer {
         }
 
         List<String> texts = allChunks.stream().map(SymbolChunk::sourceText).toList();
-        List<float[]> embeddings = voyageService.embed(texts, "document");
+        List<float[]> embeddings = bedrockService.embed(texts, "document");
 
         int stored = 0;
         for (int i = 0; i < Math.min(allChunks.size(), embeddings.size()); i++) {

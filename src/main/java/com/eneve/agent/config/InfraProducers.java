@@ -24,7 +24,7 @@ public class InfraProducers {
      * Inject with {@code @Inject HttpClient httpClient}.
      *
      * <p>Do <em>not</em> use this for services that need a different connect timeout
-     * (e.g. {@code VoyageEmbeddingService} uses 10 s) or configurable timeouts
+     * (e.g. {@code BedrockEmbeddingService} uses the AWS SDK's own timeout) or configurable timeouts
      * ({@code FetchUrlTool}, {@code WebDocsCrawlerService}).
      */
     @Produces

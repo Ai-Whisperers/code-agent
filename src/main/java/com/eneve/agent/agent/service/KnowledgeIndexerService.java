@@ -32,7 +32,7 @@ import java.util.Set;
 /**
  * Orchestrates knowledge indexing from Jira and Confluence.
  * For each source it produces {@link KnowledgeEmbeddingStore.KnowledgeChunk}s,
- * embeds them via {@link VoyageEmbeddingService}, and persists via
+ * embeds them via {@link BedrockEmbeddingService}, and persists via
  * {@link KnowledgeEmbeddingStore}.
  */
 @ApplicationScoped
@@ -56,7 +56,7 @@ public class KnowledgeIndexerService {
 
     @Inject JiraService jiraService;
     @Inject ConfluenceService confluenceService;
-    @Inject VoyageEmbeddingService voyageService;
+    @Inject BedrockEmbeddingService bedrockService;
     @Inject KnowledgeEmbeddingStore store;
     @Inject CustomerRegistryStore registryStore;
     @Inject SettingsService settingsService;
@@ -538,11 +538,11 @@ public class KnowledgeIndexerService {
     }
 
     private boolean embedAndStore(KnowledgeEmbeddingStore.KnowledgeChunk chunk) {
-        if (!voyageService.isConfigured()) {
-            LOG.warn("Voyage AI not configured — skipping embedding for " + chunk.sourceId());
+        if (!bedrockService.isConfigured()) {
+            LOG.warn("Bedrock embedding not configured — skipping embedding for " + chunk.sourceId());
             return false;
         }
-        float[] embedding = voyageService.embedSingle(chunk.contentChunk(), "document");
+        float[] embedding = bedrockService.embedSingleText(chunk.contentChunk(), "document");
         if (embedding == null) {
             LOG.warnf("Failed to generate embedding for %s/%s", chunk.sourceType(), chunk.sourceId());
             return false;

@@ -619,16 +619,21 @@ Per-repo Confluence space key and parent page ID are configured in repo settings
 | `RUN_FIX_MAX_LOOP_ITERATIONS` | Max agentic loop iterations | `150` |
 | `RUN_FIX_JOB_TIMEOUT_MINUTES` | Overall job timeout | `30` |
 
-### Voyage AI (Semantic Search)
+### AWS Bedrock (Semantic Search)
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `VOYAGE_API_KEY` | Voyage AI API key (sign up at [dash.voyageai.com](https://dash.voyageai.com)) | (optional) |
-| `VOYAGE_MODEL` | Voyage embedding model | `voyage-code-3` |
-| `VOYAGE_BATCH_SIZE` | Max texts per API call | `128` |
+| `BEDROCK_REGION` | AWS region for Bedrock API calls | `eu-central-1` |
+| `BEDROCK_CODE_EMBEDDING_MODEL` | Embedding model for code indexing and code search queries (→ `code_embeddings` table) | `cohere.embed-multilingual-v3` |
+| `BEDROCK_TEXT_EMBEDDING_MODEL` | Embedding model for knowledge/docs indexing and knowledge search queries (→ `knowledge_embeddings` table) | `amazon.titan-embed-text-v2:0` |
+| `BEDROCK_RERANK_MODEL` | Rerank model for the code semantic search pipeline | `amazon.rerank-v1:0` |
 | `EMBEDDING_MAX_SOURCE_CHARS` | Max source code characters per symbol embedding | `16000` |
 
-Vector indexing is controlled per-repo via `repo_settings.vector_enabled` (default: `false`). The Voyage API key must be set for semantic search to function. Without it, the feature is silently disabled.
+No API key is required. Credentials are resolved via the standard AWS credential chain (IAM role on ECS/EC2; `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` env vars or `~/.aws` in dev). Vector indexing is controlled per-repo via `repo_settings.vector_enabled` (default: `false`).
+
+Both models produce **1024-dimensional vectors**, matching the existing `vector(1024)` columns — no database migration is needed.
+
+**GDPR / data privacy:** AWS Bedrock does not use customer inputs to train models. All calls stay in the configured region. To fully opt out of any AWS AI service improvement usage, apply an AI services opt-out policy in AWS Organizations (Policies → AI services opt-out policies).
 
 ### Code Graph
 
@@ -686,7 +691,8 @@ export BITBUCKET_USER=your-bb-user
 export BITBUCKET_APP_PASSWORD=your-app-password
 export BITBUCKET_WORKSPACE=your-workspace
 export DATABASE_PASSWORD=your-db-password
-export VOYAGE_API_KEY=pa-...              # optional, for semantic search
+# Bedrock uses the AWS credential chain — no API key needed if an IAM role is attached.
+# For local dev, ensure ~/.aws/credentials is configured or set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY.
 
 mvn quarkus:dev
 ```
@@ -768,7 +774,7 @@ aws secretsmanager create-secret \
   --region eu-central-1 \
   --secret-string '{
     "ANTHROPIC_API_KEY": "sk-ant-...",
-    "VOYAGE_API_KEY": "pa-...",
+    # No VOYAGE_API_KEY needed — Bedrock uses the ECS task IAM role for auth.
     "JIRA_API_TOKEN": "ATATT3x...",
     "BITBUCKET_APP_PASSWORD": "ATCTT3x...",
     "DATABASE_PASSWORD": "...",
@@ -1034,11 +1040,11 @@ curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
 
 ### Semantic search (cross-repo vector search)
 
-The agent can search across all indexed repositories by meaning using vector embeddings, powered by Voyage AI and pgvector. This lets Claude find library implementations, shared utilities, base classes, or similar patterns in other repos during reviews — even when the exact terms don't appear in the code.
+The agent can search across all indexed repositories by meaning using vector embeddings, powered by AWS Bedrock and pgvector. This lets Claude find library implementations, shared utilities, base classes, or similar patterns in other repos during reviews — even when the exact terms don't appear in the code.
 
 **How it works:**
 
-1. When vector indexing is enabled for a repo, the agent extracts class and method source code and generates vector embeddings via Voyage AI (`voyage-code-3`)
+1. When vector indexing is enabled for a repo, the agent extracts class and method source code and generates vector embeddings via AWS Bedrock (`cohere.embed-multilingual-v3` by default)
 2. Embeddings are stored in PostgreSQL using pgvector (1024-dimensional vectors with IVFFlat indexing)
 3. During reviews, Claude can invoke `semantic_search` with a natural language query (e.g. "payment refund handling logic")
 4. The query is embedded and matched against all vector-indexed repos using cosine similarity

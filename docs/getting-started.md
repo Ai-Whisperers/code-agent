@@ -127,8 +127,8 @@ BITBUCKET_APP_PASSWORD=ATCTT3xFFGF0...
 # GITLAB_TOKEN=glpat-...
 # GITLAB_AGENT_USER=Code Agent
 
-# Optional: Semantic Search
-VOYAGE_API_KEY=pa-...
+# Optional: Semantic Search — Bedrock uses the AWS credential chain (no API key needed).
+# For local dev, configure ~/.aws/credentials or set AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY.
 
 # Optional: Security
 API_KEY=your-api-key
@@ -340,14 +340,17 @@ Set up automatic job triggering when issues are assigned to the agent:
 
 Enable vector-based code search across repositories:
 
-1. **Get Voyage AI API Key**: Sign up at [dash.voyageai.com](https://dash.voyageai.com)
-2. **Configure Environment**:
-   ```bash
-   VOYAGE_API_KEY=pa-...
-   VOYAGE_MODEL=voyage-code-3
+1. **Grant Bedrock permissions** to the ECS task role (or IAM user for local dev):
+   ```json
+   {
+     "Effect": "Allow",
+     "Action": ["bedrock:InvokeModel", "bedrock:Rerank"],
+     "Resource": "arn:aws:bedrock:eu-central-1::foundation-model/*"
+   }
    ```
+   No API key is required — the AWS credential chain handles authentication automatically.
 
-3. **Enable for Repository**:
+2. **Enable for Repository**:
    ```bash
    curl -X PATCH http://localhost:8080/settings/repos/workspace/repo/vector/enable
    ```

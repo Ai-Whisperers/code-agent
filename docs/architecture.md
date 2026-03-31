@@ -73,7 +73,7 @@ flowchart TB
 ### AI Integration
 - **Anthropic Claude**: Primary AI model for code analysis and generation via tool-use API
 - **Claude Sonnet 4**: Default model optimized for coding tasks
-- **Voyage AI**: Vector embeddings for semantic code search (voyage-code-3 model)
+- **AWS Bedrock**: Vector embeddings (`cohere.embed-multilingual-v3`) and reranking (`amazon.rerank-v1:0`) for semantic code search — GDPR-compliant, data stays in `eu-central-1`
 
 ### Data Storage
 - **PostgreSQL 14+**: Primary database for persistent storage

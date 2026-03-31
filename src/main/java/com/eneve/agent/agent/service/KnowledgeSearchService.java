@@ -8,7 +8,7 @@ import org.jboss.logging.Logger;
 import java.util.List;
 
 /**
- * Thin search facade: embeds the user query via Voyage AI and executes
+ * Thin search facade: embeds the user query via AWS Bedrock and executes
  * a pgvector cosine-similarity search over the {@code knowledge_embeddings} table.
  *
  * <p>Supported source types: {@code jira}, {@code confluence},
@@ -22,7 +22,7 @@ public class KnowledgeSearchService {
     private static final int MAX_TOP_K = 25;
 
     @Inject
-    VoyageEmbeddingService voyageService;
+    BedrockEmbeddingService bedrockService;
 
     @Inject
     KnowledgeEmbeddingStore store;
@@ -43,13 +43,13 @@ public class KnowledgeSearchService {
 
         LOG.infof("Searching for query: %s", query);
 
-        if (!voyageService.isConfigured()) {
-            LOG.warn("Voyage AI not configured — knowledge search unavailable");
+        if (!bedrockService.isConfigured()) {
+            LOG.warn("Bedrock embedding not configured — knowledge search unavailable");
             return List.of();
         }
 
         int k = Math.min(Math.max(1, topK), MAX_TOP_K);
-        float[] vector = voyageService.embedSingle(query, "query");
+        float[] vector = bedrockService.embedSingleText(query, "query");
         if (vector == null) {
             LOG.warnf("Failed to embed query: %s", query);
             return List.of();

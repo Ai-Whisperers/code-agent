@@ -375,7 +375,7 @@ sequenceDiagram
 sequenceDiagram
     participant Claude as Claude API
     participant Tool as SemanticSearchTool
-    participant Embedding as VoyageAI
+    participant Embedding as AWSBedrock
     participant Store as EmbeddingStore
 
     Claude->>Tool: semantic_search("payment refund logic")
