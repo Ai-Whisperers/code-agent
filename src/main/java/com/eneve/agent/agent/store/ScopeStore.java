@@ -28,7 +28,7 @@ public class ScopeStore {
         String primaryLabel = labels != null && !labels.isEmpty() ? labels.get(0) : "";
 
         String sqlScope = """
-                INSERT INTO roadmaps (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype)
+                INSERT INTO scopes (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype)
                 VALUES (?::uuid, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection()) {
@@ -59,7 +59,7 @@ public class ScopeStore {
     public Optional<ScopeRecord> findById(String id) {
         String sqlScope = """
                 SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at
-                FROM roadmaps WHERE id = ?::uuid
+                FROM scopes WHERE id = ?::uuid
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sqlScope)) {
@@ -79,7 +79,7 @@ public class ScopeStore {
     public List<ScopeRecord> findAll() {
         String sqlScope = """
                 SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at
-                FROM roadmaps ORDER BY created_at DESC
+                FROM scopes ORDER BY created_at DESC
                 """;
         List<ScopeRecord> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
@@ -102,7 +102,7 @@ public class ScopeStore {
         String primaryLabel = labels != null && !labels.isEmpty() ? labels.get(0) : "";
 
         String sqlScope = """
-                UPDATE roadmaps SET name = ?, label = ?,
+                UPDATE scopes SET name = ?, label = ?,
                     epic_issuetype = ?, feature_issuetype = ?, userstory_issuetype = ?
                 WHERE id = ?::uuid
                 """;
@@ -131,7 +131,7 @@ public class ScopeStore {
     }
 
     public void delete(String id) {
-        String sql = "DELETE FROM roadmaps WHERE id = ?::uuid";
+        String sql = "DELETE FROM scopes WHERE id = ?::uuid";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, id);
@@ -146,9 +146,9 @@ public class ScopeStore {
 
     public void linkProduct(String scopeId, String productId) {
         String sql = """
-                INSERT INTO roadmap_products (roadmap_id, product_id)
+                INSERT INTO scope_products (scope_id, product_id)
                 VALUES (?::uuid, ?)
-                ON CONFLICT (roadmap_id, product_id) DO NOTHING
+                ON CONFLICT (scope_id, product_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -163,7 +163,7 @@ public class ScopeStore {
     }
 
     public void unlinkProduct(String scopeId, String productId) {
-        String sql = "DELETE FROM roadmap_products WHERE roadmap_id = ?::uuid AND product_id = ?";
+        String sql = "DELETE FROM scope_products WHERE scope_id = ?::uuid AND product_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, scopeId);
@@ -177,7 +177,7 @@ public class ScopeStore {
     }
 
     public List<String> listLinkedProductIds(String scopeId) {
-        String sql = "SELECT product_id FROM roadmap_products WHERE roadmap_id = ?::uuid ORDER BY created_at";
+        String sql = "SELECT product_id FROM scope_products WHERE scope_id = ?::uuid ORDER BY created_at";
         List<String> ids = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -197,12 +197,12 @@ public class ScopeStore {
     /** Deletes all existing labels for the scope and inserts the new ordered list. */
     private void replaceLabels(Connection conn, String scopeId, List<String> labels) throws SQLException {
         try (PreparedStatement del = conn.prepareStatement(
-                "DELETE FROM roadmap_labels WHERE roadmap_id = ?::uuid")) {
+                "DELETE FROM scope_labels WHERE scope_id = ?::uuid")) {
             del.setString(1, scopeId);
             del.executeUpdate();
         }
         if (labels == null || labels.isEmpty()) return;
-        String insertSql = "INSERT INTO roadmap_labels (roadmap_id, label, position) VALUES (?::uuid, ?, ?)";
+        String insertSql = "INSERT INTO scope_labels (scope_id, label, position) VALUES (?::uuid, ?, ?)";
         try (PreparedStatement ins = conn.prepareStatement(insertSql)) {
             for (int i = 0; i < labels.size(); i++) {
                 String lbl = labels.get(i);
@@ -218,7 +218,7 @@ public class ScopeStore {
 
     /** Loads labels for the given scope id, ordered by position. */
     private List<String> loadLabels(Connection conn, String scopeId) {
-        String sql = "SELECT label FROM roadmap_labels WHERE roadmap_id = ?::uuid ORDER BY position, label";
+        String sql = "SELECT label FROM scope_labels WHERE scope_id = ?::uuid ORDER BY position, label";
         List<String> labels = new ArrayList<>();
         try (PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, scopeId);

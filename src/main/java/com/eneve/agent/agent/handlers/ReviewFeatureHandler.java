@@ -20,8 +20,8 @@ public class ReviewFeatureHandler extends AbstractScopeItemReviewHandler {
 
     @Override
     protected String buildContext(JiraReviewRequest req, ScopeItemStore scopeItems) {
-        int storyCount = req.roadmapId() != null
-                ? scopeItems.countChildrenByParent(req.roadmapId(), req.issueKey())
+        int storyCount = req.scopeId() != null
+                ? scopeItems.countChildrenByParent(req.scopeId(), req.issueKey())
                 : -1;
         return contextBuilder.buildFeatureContext(req.issueKey(), req.parentKey(), storyCount);
     }

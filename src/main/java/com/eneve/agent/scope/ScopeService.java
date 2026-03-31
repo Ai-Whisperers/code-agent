@@ -256,7 +256,7 @@ public class ScopeService {
         boolean weighted = Boolean.parseBoolean(settings.get("roadmap.delivery.complexity-weight-enabled", "true"));
 
         List<ScopeItem> allItems  = scopeItemStore.findByScope(scopeId);
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByScope(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
         Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
 
@@ -418,7 +418,7 @@ public class ScopeService {
                     .orElse(stored);
         }
 
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByScope(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
         Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
 
@@ -449,7 +449,7 @@ public class ScopeService {
         }
 
         Map<String, String> overrideMap = overrideStore.findByScope(scopeId);
-        Map<String, JiraIssueReview> reviewMap = reviewStore.findByRoadmap(scopeId).stream()
+        Map<String, JiraIssueReview> reviewMap = reviewStore.findByScope(scopeId).stream()
                 .collect(Collectors.toMap(JiraIssueReview::issueKey, r -> r));
 
         int enqueued = 0, skipped = 0, unchanged = 0;
@@ -890,14 +890,14 @@ public class ScopeService {
     private void cleanupOrphanedData(String scopeId) {
         String cleanReviews = """
                 DELETE FROM jira_issue_reviews
-                WHERE roadmap_id = ?::uuid
+                WHERE scope_id = ?::uuid
                   AND issue_key NOT IN (
                       SELECT issue_key FROM scope_items WHERE scope_id = ?::uuid
                   )
                 """;
         String cleanOverrides = """
-                DELETE FROM roadmap_item_overrides
-                WHERE roadmap_id = ?::uuid
+                DELETE FROM scope_item_overrides
+                WHERE scope_id = ?::uuid
                   AND issue_key NOT IN (
                       SELECT issue_key FROM scope_items WHERE scope_id = ?::uuid
                   )

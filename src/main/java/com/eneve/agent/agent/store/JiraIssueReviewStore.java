@@ -20,18 +20,18 @@ public class JiraIssueReviewStore {
     AgroalDataSource dataSource;
 
     /**
-     * Upserts a review result for a given (roadmapId, issueKey) pair.
-     * If roadmapId is null, upserts based on issueKey alone (standalone review).
+     * Upserts a review result for a given (scopeId, issueKey) pair.
+     * If scopeId is null, upserts based on issueKey alone (standalone review).
      */
-    public void upsert(String roadmapId, String issueKey, String issueType, String issueSummary,
+    public void upsert(String scopeId, String issueKey, String issueType, String issueSummary,
                        String parentKey, String jiraStatus,
                        int readinessScore, String readinessLabel,
                        int complexityScore, String improvementSummary,
                        String reviewJson, String jobId) {
-        // For roadmap-scoped reviews we first try UPDATE then INSERT to handle the partial unique index.
+        // For scope-scoped reviews we first try UPDATE then INSERT to handle the partial unique index.
         // PostgreSQL's ON CONFLICT does not support partial indexes via ON CONSTRAINT for WHERE indexes.
         String sql;
-        if (roadmapId != null) {
+        if (scopeId != null) {
             // Try update first; if no rows updated, insert
             sql = """
                     UPDATE jira_issue_reviews SET
@@ -46,7 +46,7 @@ public class JiraIssueReviewStore {
                         review_json         = ?::jsonb,
                         job_id              = ?,
                         reviewed_at         = now()
-                    WHERE roadmap_id = ?::uuid AND issue_key = ?
+                    WHERE scope_id = ?::uuid AND issue_key = ?
                     """;
         } else {
             sql = """
@@ -62,7 +62,7 @@ public class JiraIssueReviewStore {
                         review_json         = ?::jsonb,
                         job_id              = ?,
                         reviewed_at         = now()
-                    WHERE roadmap_id IS NULL AND issue_key = ?
+                    WHERE scope_id IS NULL AND issue_key = ?
                     """;
         }
         try (Connection conn = dataSource.getConnection()) {
@@ -80,8 +80,8 @@ public class JiraIssueReviewStore {
                 setNullable(ps, idx++, improvementSummary);
                 setNullable(ps, idx++, reviewJson);
                 setNullable(ps, idx++, jobId);
-                if (roadmapId != null) {
-                    ps.setString(idx++, roadmapId);
+                if (scopeId != null) {
+                    ps.setString(idx++, scopeId);
                 }
                 ps.setString(idx, issueKey);
                 updated = ps.executeUpdate();
@@ -89,10 +89,10 @@ public class JiraIssueReviewStore {
             // If no row was updated, insert a new one
             if (updated == 0) {
                 String insertSql;
-                if (roadmapId != null) {
+                if (scopeId != null) {
                     insertSql = """
                             INSERT INTO jira_issue_reviews
-                                (id, roadmap_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
+                                (id, scope_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
                                  readiness_score, readiness_label, complexity_score, improvement_summary,
                                  review_json, job_id, reviewed_at)
                             VALUES (gen_random_uuid(), ?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, now())
@@ -100,7 +100,7 @@ public class JiraIssueReviewStore {
                 } else {
                     insertSql = """
                             INSERT INTO jira_issue_reviews
-                                (id, roadmap_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
+                                (id, scope_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
                                  readiness_score, readiness_label, complexity_score, improvement_summary,
                                  review_json, job_id, reviewed_at)
                             VALUES (gen_random_uuid(), NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, now())
@@ -108,7 +108,7 @@ public class JiraIssueReviewStore {
                 }
                 try (PreparedStatement ps = conn.prepareStatement(insertSql)) {
                     int idx = 1;
-                    if (roadmapId != null) ps.setString(idx++, roadmapId);
+                    if (scopeId != null) ps.setString(idx++, scopeId);
                     ps.setString(idx++, issueKey);
                     ps.setString(idx++, issueType);
                     setNullable(ps, idx++, issueSummary);
@@ -129,45 +129,45 @@ public class JiraIssueReviewStore {
         }
     }
 
-    public List<JiraIssueReview> findByRoadmap(String roadmapId) {
+    public List<JiraIssueReview> findByScope(String scopeId) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
+                SELECT id, scope_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
                        readiness_score, readiness_label, complexity_score, improvement_summary,
                        review_json, job_id, reviewed_at, created_at
                 FROM jira_issue_reviews
-                WHERE roadmap_id = ?::uuid
+                WHERE scope_id = ?::uuid
                 ORDER BY issue_key
                 """;
         List<JiraIssueReview> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) results.add(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("JiraIssueReviewStore: findByRoadmap failed for %s: %s", roadmapId, e.getMessage());
+            LOG.errorf("JiraIssueReviewStore: findByScope failed for %s: %s", scopeId, e.getMessage());
         }
         return results;
     }
 
-    public Optional<JiraIssueReview> findByRoadmapAndIssueKey(String roadmapId, String issueKey) {
+    public Optional<JiraIssueReview> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
+                SELECT id, scope_id, issue_key, issue_type, issue_summary, parent_key, jira_status,
                        readiness_score, readiness_label, complexity_score, improvement_summary,
                        review_json, job_id, reviewed_at, created_at
                 FROM jira_issue_reviews
-                WHERE roadmap_id = ?::uuid AND issue_key = ?
+                WHERE scope_id = ?::uuid AND issue_key = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
+            ps.setString(1, scopeId);
             ps.setString(2, issueKey);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) return Optional.of(mapRow(rs));
             }
         } catch (SQLException e) {
-            LOG.errorf("JiraIssueReviewStore: find failed for %s/%s: %s", roadmapId, issueKey, e.getMessage());
+            LOG.errorf("JiraIssueReviewStore: findByScopeAndIssueKey failed for %s/%s: %s", scopeId, issueKey, e.getMessage());
         }
         return Optional.empty();
     }
@@ -181,7 +181,7 @@ public class JiraIssueReviewStore {
         Integer complexityScoreVal = rs.wasNull() ? null : complexityScore;
         return new JiraIssueReview(
                 rs.getString("id"),
-                rs.getString("roadmap_id"),
+                rs.getString("scope_id"),
                 rs.getString("issue_key"),
                 rs.getString("issue_type"),
                 rs.getString("issue_summary"),

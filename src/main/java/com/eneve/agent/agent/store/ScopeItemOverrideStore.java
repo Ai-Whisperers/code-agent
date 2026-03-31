@@ -23,9 +23,9 @@ public class ScopeItemOverrideStore {
      */
     public void setOverride(String scopeId, String issueKey, String status, String updatedBy) {
         String sql = """
-                INSERT INTO roadmap_item_overrides (id, roadmap_id, issue_key, override_status, updated_at, updated_by)
+                INSERT INTO scope_item_overrides (id, scope_id, issue_key, override_status, updated_at, updated_by)
                 VALUES (gen_random_uuid(), ?::uuid, ?, ?, now(), ?)
-                ON CONFLICT ON CONSTRAINT uidx_roadmap_item_overrides
+                ON CONFLICT ON CONSTRAINT uidx_scope_item_overrides
                 DO UPDATE SET
                     override_status = EXCLUDED.override_status,
                     updated_at      = now(),
@@ -49,7 +49,7 @@ public class ScopeItemOverrideStore {
      * Removes the override for a given (scopeId, issueKey).
      */
     public void clearOverride(String scopeId, String issueKey) {
-        String sql = "DELETE FROM roadmap_item_overrides WHERE roadmap_id = ?::uuid AND issue_key = ?";
+        String sql = "DELETE FROM scope_item_overrides WHERE scope_id = ?::uuid AND issue_key = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, scopeId);
@@ -65,7 +65,7 @@ public class ScopeItemOverrideStore {
      * Returns all overrides for a scope as a map from issueKey to override status.
      */
     public Map<String, String> findByScope(String scopeId) {
-        String sql = "SELECT issue_key, override_status FROM roadmap_item_overrides WHERE roadmap_id = ?::uuid";
+        String sql = "SELECT issue_key, override_status FROM scope_item_overrides WHERE scope_id = ?::uuid";
         Map<String, String> result = new HashMap<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -85,7 +85,7 @@ public class ScopeItemOverrideStore {
      * Returns the override status for a specific item, if any.
      */
     public Optional<String> getOverride(String scopeId, String issueKey) {
-        String sql = "SELECT override_status FROM roadmap_item_overrides WHERE roadmap_id = ?::uuid AND issue_key = ?";
+        String sql = "SELECT override_status FROM scope_item_overrides WHERE scope_id = ?::uuid AND issue_key = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, scopeId);

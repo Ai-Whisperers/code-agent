@@ -3,7 +3,7 @@ package com.eneve.agent.model;
 import java.time.Instant;
 
 /**
- * Mirrors a row from {@code roadmap_item_proposals}.
+ * Mirrors a row from {@code scope_item_proposals}.
  * A proposal is an AI-generated rewrite of a Jira issue that lives only in the
  * database until a user explicitly accepts it (which then pushes it to Jira).
  */

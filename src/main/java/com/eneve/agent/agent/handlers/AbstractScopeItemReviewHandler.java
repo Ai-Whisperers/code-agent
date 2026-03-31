@@ -72,7 +72,7 @@ public abstract class AbstractScopeItemReviewHandler implements JobHandler {
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 
-        if (req.roadmapId() != null && overrideStore.isOverridden(req.roadmapId(), req.issueKey())) {
+        if (req.scopeId() != null && overrideStore.isOverridden(req.scopeId(), req.issueKey())) {
             LOG.infof("%s %s: item is overridden, skipping Claude call",
                     getClass().getSimpleName(), req.issueKey());
             job.setStatus(JobStatus.SUCCESS);
@@ -109,7 +109,7 @@ public abstract class AbstractScopeItemReviewHandler implements JobHandler {
         String jiraStatus = JiraStatusMapper.map(rawStatus, settings);
 
         reviewStore.upsert(
-                req.roadmapId(), req.issueKey(), itemTypeLabel(), issueSummary,
+                req.scopeId(), req.issueKey(), itemTypeLabel(), issueSummary,
                 req.parentKey(), jiraStatus,
                 readinessScore, readinessLabel, complexityScore, improvSummary,
                 cleaned, job.getJobId()

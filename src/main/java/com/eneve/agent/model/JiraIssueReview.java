@@ -8,7 +8,7 @@ import java.time.Instant;
  */
 public record JiraIssueReview(
         String id,
-        String roadmapId,
+        String scopeId,
         String issueKey,
         String issueType,
         String issueSummary,

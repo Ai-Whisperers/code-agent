@@ -4,14 +4,14 @@ import java.time.Instant;
 import java.util.List;
 
 /**
- * Mirrors the {@code roadmaps} table combined with the {@code roadmap_labels} join table.
+ * Mirrors the {@code scopes} table combined with the {@code scope_labels} join table.
  *
  * <p>The three {@code *Issuetype} fields store the Jira issue-type names used
  * when syncing this scope. They default to the global settings values but can
  * be overridden per-scope to support projects with non-standard naming
  * conventions (e.g. "User Story" instead of "Story").
  *
- * <p>{@code labels} is the ordered list of Jira labels from the {@code roadmap_labels}
+ * <p>{@code labels} is the ordered list of Jira labels from the {@code scope_labels}
  * join table. It replaces the legacy single {@code label} column.
  */
 public record ScopeRecord(

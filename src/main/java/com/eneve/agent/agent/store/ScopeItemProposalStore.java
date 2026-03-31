@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * JDBC store for {@code roadmap_item_proposals}.
+ * JDBC store for {@code scope_item_proposals}.
  * Proposals are AI-generated rewrites of Jira issues that live only in the
  * database until a user explicitly accepts them.
  */
@@ -33,8 +33,8 @@ public class ScopeItemProposalStore {
                                  String proposedCriteria, String proposedTechnical,
                                  String aiExplanation) {
         String sql = """
-                INSERT INTO roadmap_item_proposals
-                    (roadmap_id, issue_key, issue_type, parent_key,
+                INSERT INTO scope_item_proposals
+                    (scope_id, issue_key, issue_type, parent_key,
                      proposed_summary, proposed_description, proposed_criteria, proposed_technical,
                      ai_explanation, status)
                 VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT')
@@ -73,11 +73,11 @@ public class ScopeItemProposalStore {
     /** Returns all proposals for a scope + issue key, newest first. */
     public List<ScopeProposal> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, parent_key,
+                SELECT id, scope_id, issue_key, issue_type, parent_key,
                        proposed_summary, proposed_description, proposed_criteria, proposed_technical,
                        ai_explanation, status, jira_result_key, created_at, updated_at
-                FROM roadmap_item_proposals
-                WHERE roadmap_id = ?::uuid AND issue_key = ?
+                FROM scope_item_proposals
+                WHERE scope_id = ?::uuid AND issue_key = ?
                 ORDER BY created_at DESC
                 """;
         List<ScopeProposal> results = new ArrayList<>();
@@ -98,10 +98,10 @@ public class ScopeItemProposalStore {
     /** Returns a single proposal by its UUID. */
     public Optional<ScopeProposal> findById(String proposalId) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, parent_key,
+                SELECT id, scope_id, issue_key, issue_type, parent_key,
                        proposed_summary, proposed_description, proposed_criteria, proposed_technical,
                        ai_explanation, status, jira_result_key, created_at, updated_at
-                FROM roadmap_item_proposals
+                FROM scope_item_proposals
                 WHERE id = ?::uuid
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -123,7 +123,7 @@ public class ScopeItemProposalStore {
                               String proposedSummary, String proposedDescription,
                               String proposedCriteria, String proposedTechnical) {
         String sql = """
-                UPDATE roadmap_item_proposals
+                UPDATE scope_item_proposals
                 SET proposed_summary     = ?,
                     proposed_description = ?,
                     proposed_criteria    = ?,
@@ -151,7 +151,7 @@ public class ScopeItemProposalStore {
      */
     public void updateStatus(String proposalId, String status, String jiraResultKey) {
         String sql = """
-                UPDATE roadmap_item_proposals
+                UPDATE scope_item_proposals
                 SET status          = ?,
                     jira_result_key = ?,
                     updated_at      = now()
@@ -173,7 +173,7 @@ public class ScopeItemProposalStore {
      * Hard-deletes a proposal row. Allowed at any status.
      */
     public void delete(String proposalId) {
-        String sql = "DELETE FROM roadmap_item_proposals WHERE id = ?::uuid";
+        String sql = "DELETE FROM scope_item_proposals WHERE id = ?::uuid";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, proposalId);
@@ -189,7 +189,7 @@ public class ScopeItemProposalStore {
         Timestamp updatedAt = rs.getTimestamp("updated_at");
         return new ScopeProposal(
                 rs.getString("id"),
-                rs.getString("roadmap_id"),
+                rs.getString("scope_id"),
                 rs.getString("issue_key"),
                 rs.getString("issue_type"),
                 rs.getString("parent_key"),

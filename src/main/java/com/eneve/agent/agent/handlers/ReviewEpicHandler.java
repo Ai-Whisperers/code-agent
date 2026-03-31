@@ -20,8 +20,8 @@ public class ReviewEpicHandler extends AbstractScopeItemReviewHandler {
 
     @Override
     protected String buildContext(JiraReviewRequest req, ScopeItemStore scopeItems) {
-        int featureCount = req.roadmapId() != null
-                ? scopeItems.countChildrenByParent(req.roadmapId(), req.issueKey())
+        int featureCount = req.scopeId() != null
+                ? scopeItems.countChildrenByParent(req.scopeId(), req.issueKey())
                 : -1;
         return contextBuilder.buildEpicContext(req.issueKey(), featureCount);
     }
