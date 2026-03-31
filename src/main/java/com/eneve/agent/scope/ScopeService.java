@@ -52,11 +52,11 @@ import java.util.stream.Collectors;
  * <h3>Two-phase design</h3>
  * <ol>
  *   <li><b>Sync</b> ({@link #syncScope}) — fetches the complete Jira issue hierarchy
- *       (epics → features → stories) and stores it in {@code roadmap_items}.
+ *       (epics → features → stories) and stores it in {@code scope_items}.
  *       Each item's {@code jira_modified_at} is recorded from the Jira {@code updated}
  *       field.</li>
  *   <li><b>Review</b> ({@link #enqueueReviewAll}) — enqueues AI review jobs for items
- *       in {@code roadmap_items} that have changed since their last review. Pass
+ *       in {@code scope_items} that have changed since their last review. Pass
  *       {@code force=true} to re-review everything regardless.</li>
  * </ol>
  */
@@ -105,7 +105,7 @@ public class ScopeService {
 
     public static final class JiraIssueNotFoundException extends RuntimeException {
         public JiraIssueNotFoundException(String issueKey) {
-            super("Jira issue not found in roadmap_items (sync first): " + issueKey);
+            super("Jira issue not found in scope_items (sync first): " + issueKey);
         }
     }
 
@@ -399,7 +399,7 @@ public class ScopeService {
      * then returns a tree-item map in the same shape as {@link #buildTree}.
      *
      * @throws ScopeNotFoundException     if the scope does not exist
-     * @throws JiraIssueNotFoundException if the item is not in roadmap_items
+     * @throws JiraIssueNotFoundException if the item is not in scope_items
      */
     public Map<String, Object> refreshItem(String scopeId, String issueKey) {
         if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
@@ -431,7 +431,7 @@ public class ScopeService {
     // ─── Reviews ──────────────────────────────────────────────────────────────
 
     /**
-     * Enqueues AI review jobs for items in {@code roadmap_items}.
+     * Enqueues AI review jobs for items in {@code scope_items}.
      *
      * <p>By default ({@code force=false}) items whose Jira {@code updated} timestamp
      * is not newer than their last review are skipped — they haven't changed and
@@ -489,7 +489,7 @@ public class ScopeService {
 
     /**
      * Enqueues a single AI review job for {@code issueKey}.
-     * The item must already be present in {@code roadmap_items} (sync first).
+     * The item must already be present in {@code scope_items} (sync first).
      *
      * @return the new job ID
      */
@@ -536,7 +536,7 @@ public class ScopeService {
      * Synchronous — call from a JAX-RS endpoint that can tolerate latency.
      *
      * @throws ScopeNotFoundException     if the scope does not exist
-     * @throws JiraIssueNotFoundException if the item is not in roadmap_items
+     * @throws JiraIssueNotFoundException if the item is not in scope_items
      * @throws ImprovementGenerationException if the AI call fails or returns unparseable JSON
      */
     public ScopeProposal improveItem(String scopeId, String issueKey) {
@@ -885,21 +885,21 @@ public class ScopeService {
 
     /**
      * Removes orphaned reviews and overrides for issue keys that are no longer
-     * present in roadmap_items for this scope, after a sync.
+     * present in scope_items for this scope, after a sync.
      */
     private void cleanupOrphanedData(String scopeId) {
         String cleanReviews = """
                 DELETE FROM jira_issue_reviews
                 WHERE roadmap_id = ?::uuid
                   AND issue_key NOT IN (
-                      SELECT issue_key FROM roadmap_items WHERE roadmap_id = ?::uuid
+                      SELECT issue_key FROM scope_items WHERE scope_id = ?::uuid
                   )
                 """;
         String cleanOverrides = """
                 DELETE FROM roadmap_item_overrides
                 WHERE roadmap_id = ?::uuid
                   AND issue_key NOT IN (
-                      SELECT issue_key FROM roadmap_items WHERE roadmap_id = ?::uuid
+                      SELECT issue_key FROM scope_items WHERE scope_id = ?::uuid
                   )
                 """;
         try (Connection conn = dataSource.getConnection()) {

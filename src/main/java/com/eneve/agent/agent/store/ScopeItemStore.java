@@ -12,7 +12,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * JDBC store for {@code roadmap_items}.
+ * JDBC store for {@code scope_items}.
  * The table is the source of truth for the Jira issue structure within a scope.
  * It is populated by the sync step and read by tree-view and review dispatch logic.
  */
@@ -30,10 +30,10 @@ public class ScopeItemStore {
      * batch-inserts the new ones.
      */
     public void replaceAll(String scopeId, List<ScopeItem> items) {
-        String deleteSql = "DELETE FROM roadmap_items WHERE roadmap_id = ?::uuid";
+        String deleteSql = "DELETE FROM scope_items WHERE scope_id = ?::uuid";
         String insertSql = """
-                INSERT INTO roadmap_items
-                    (roadmap_id, issue_key, issue_type, parent_key, grandparent_key, summary,
+                INSERT INTO scope_items
+                    (scope_id, issue_key, issue_type, parent_key, grandparent_key, summary,
                      jira_status, jira_modified_at, assignee, reporter, sprint_name, sprint_start, sprint_end)
                 VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
@@ -81,11 +81,11 @@ public class ScopeItemStore {
     /** Returns all items for a scope ordered by issue type then key. */
     public List<ScopeItem> findByScope(String scopeId) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
+                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
                        assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM roadmap_items
-                WHERE roadmap_id = ?::uuid
+                FROM scope_items
+                WHERE scope_id = ?::uuid
                 ORDER BY issue_type, issue_key
                 """;
         List<ScopeItem> results = new ArrayList<>();
@@ -107,11 +107,11 @@ public class ScopeItemStore {
      */
     public List<ScopeItem> findSprintItems(String scopeId) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
+                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
                        assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM roadmap_items
-                WHERE roadmap_id = ?::uuid AND sprint_name IS NOT NULL
+                FROM scope_items
+                WHERE scope_id = ?::uuid AND sprint_name IS NOT NULL
                 ORDER BY sprint_start NULLS LAST, issue_type, issue_key
                 """;
         List<ScopeItem> results = new ArrayList<>();
@@ -129,7 +129,7 @@ public class ScopeItemStore {
 
     /** Returns the number of scope items whose {@code parent_key} equals {@code parentKey}. */
     public int countChildrenByParent(String scopeId, String parentKey) {
-        String sql = "SELECT COUNT(*) FROM roadmap_items WHERE roadmap_id = ?::uuid AND parent_key = ?";
+        String sql = "SELECT COUNT(*) FROM scope_items WHERE scope_id = ?::uuid AND parent_key = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, scopeId);
@@ -147,11 +147,11 @@ public class ScopeItemStore {
     /** Returns a single item by scope and issue key. */
     public Optional<ScopeItem> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
-                SELECT id, roadmap_id, issue_key, issue_type, parent_key, grandparent_key,
+                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
                        summary, jira_status, synced_at, jira_modified_at,
                        assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM roadmap_items
-                WHERE roadmap_id = ?::uuid AND issue_key = ?
+                FROM scope_items
+                WHERE scope_id = ?::uuid AND issue_key = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -179,7 +179,7 @@ public class ScopeItemStore {
                                    java.time.Instant sprintStart,
                                    java.time.Instant sprintEnd) {
         String sql = """
-                UPDATE roadmap_items
+                UPDATE scope_items
                 SET summary          = ?,
                     jira_status      = ?,
                     jira_modified_at = ?,
@@ -189,7 +189,7 @@ public class ScopeItemStore {
                     sprint_start     = ?,
                     sprint_end       = ?,
                     synced_at        = now()
-                WHERE roadmap_id = ?::uuid AND issue_key = ?
+                WHERE scope_id = ?::uuid AND issue_key = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -227,7 +227,7 @@ public class ScopeItemStore {
         Timestamp sprintEnd      = rs.getTimestamp("sprint_end");
         return new ScopeItem(
                 rs.getString("id"),
-                rs.getString("roadmap_id"),
+                rs.getString("scope_id"),
                 rs.getString("issue_key"),
                 rs.getString("issue_type"),
                 rs.getString("parent_key"),

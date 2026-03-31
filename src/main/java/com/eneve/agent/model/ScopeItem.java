@@ -3,7 +3,7 @@ package com.eneve.agent.model;
 import java.time.Instant;
 
 /**
- * Mirrors the {@code roadmap_items} table row.
+ * Mirrors the {@code scope_items} table row.
  * Populated during the Jira sync step; AI review results are stored
  * separately in {@code jira_issue_reviews}.
  */
