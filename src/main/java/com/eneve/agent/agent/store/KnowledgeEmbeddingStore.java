@@ -130,6 +130,34 @@ public class KnowledgeEmbeddingStore {
     }
 
     /**
+     * Returns {@code true} if this exact chunk content (identified by its MD5) is already
+     * stored for the given source. Uses the same index as the upsert conflict key so the
+     * check is a fast index-only scan.
+     *
+     * <p>Call this before embedding to avoid redundant Bedrock API calls when content
+     * has not changed since the last index run.
+     */
+    public boolean isContentIndexed(String sourceType, String sourceId, String contentChunk) {
+        String sql = """
+                SELECT 1 FROM knowledge_embeddings
+                WHERE source_type = ? AND source_id = ? AND md5(content_chunk) = md5(?)
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, sourceType);
+            ps.setString(2, sourceId);
+            ps.setString(3, contentChunk);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to check content hash for %s/%s: %s", sourceType, sourceId, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Cosine similarity search.
      *
      * @param queryVector  the embedded query vector

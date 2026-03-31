@@ -542,6 +542,10 @@ public class KnowledgeIndexerService {
             LOG.warn("Bedrock embedding not configured — skipping embedding for " + chunk.sourceId());
             return false;
         }
+        if (store.isContentIndexed(chunk.sourceType(), chunk.sourceId(), chunk.contentChunk())) {
+            LOG.debugf("Skipping unchanged chunk %s/%s", chunk.sourceType(), chunk.sourceId());
+            return true;
+        }
         float[] embedding = bedrockService.embedSingleText(chunk.contentChunk(), "document");
         if (embedding == null) {
             LOG.warnf("Failed to generate embedding for %s/%s", chunk.sourceType(), chunk.sourceId());
