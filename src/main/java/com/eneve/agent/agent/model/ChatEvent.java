@@ -13,15 +13,16 @@ import java.util.Map;
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", include = JsonTypeInfo.As.EXISTING_PROPERTY)
 @JsonSubTypes({
-        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,     name = "text"),
-        @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class, name = "thinking"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,     name = "tool_start"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,       name = "tool_end"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanStart.class,     name = "plan_start"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanCreated.class,   name = "plan_created"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanUpdated.class,   name = "plan_updated"),
-        @JsonSubTypes.Type(value = ChatEvent.Done.class,          name = "done"),
-        @JsonSubTypes.Type(value = ChatEvent.Error.class,         name = "error")
+        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,       name = "text"),
+        @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class,   name = "thinking"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,       name = "tool_start"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,         name = "tool_end"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanStart.class,       name = "plan_start"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanCreated.class,     name = "plan_created"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanUpdated.class,     name = "plan_updated"),
+        @JsonSubTypes.Type(value = ChatEvent.ProposalUpdated.class, name = "proposal_updated"),
+        @JsonSubTypes.Type(value = ChatEvent.Done.class,            name = "done"),
+        @JsonSubTypes.Type(value = ChatEvent.Error.class,           name = "error")
 })
 public sealed interface ChatEvent {
 
@@ -58,6 +59,16 @@ public sealed interface ChatEvent {
     /** An existing ExecutionPlan was updated during the chat conversation. */
     record PlanUpdated(String type, String planId, String title, String status) implements ChatEvent {
         public PlanUpdated(String planId, String title, String status) { this("plan_updated", planId, title, status); }
+    }
+
+    /**
+     * Emitted after {@code update_proposal} tool execution succeeds.
+     * The UI should merge the returned proposal fields into the matching tab's state.
+     */
+    record ProposalUpdated(String type, String proposalId, Map<String, Object> proposal) implements ChatEvent {
+        public ProposalUpdated(String proposalId, Map<String, Object> proposal) {
+            this("proposal_updated", proposalId, proposal);
+        }
     }
 
     /** The full response has been streamed. Conversation ID is optional. */

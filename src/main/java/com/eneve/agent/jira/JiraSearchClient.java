@@ -129,7 +129,7 @@ class JiraSearchClient {
     List<JiraService.JiraIssueDetail> searchIssues(String jql, int maxResults) {
         int cap = Math.min(Math.max(1, maxResults), 100);
         var fieldsList = List.of("summary", "description", "status", "reporter", "assignee",
-                "labels", "comment", "attachment", "updated", "customfield_10020");
+                "labels", "comment", "attachment", "updated", "customfield_10020", "priority");
 
         var body = mapper.createObjectNode();
         body.put("jql", jql);
@@ -195,9 +195,13 @@ class JiraSearchClient {
                     sprintEnd   = JiraHttpClient.parseJiraTimestamp(lastSprint.path("endDate").asText(null));
                 }
 
-                results.add(new JiraService.JiraIssueDetail(key, summary, description, status,
+                String priority = fieldsNode.path("priority").path("name").asText(null);
+
+                // Use Markdown conversion so proposals display rich formatting
+                String descriptionMd = adf.adfToMarkdown(fieldsNode.path("description"));
+                results.add(new JiraService.JiraIssueDetail(key, summary, descriptionMd, status,
                         reporter, assignee, labels, comments, attachments, updatedAt,
-                        sprintName, sprintStart, sprintEnd));
+                        sprintName, sprintStart, sprintEnd, priority));
             }
             LOG.infof("JIRA searchIssues: found %d issues for JQL: %s", results.size(), jql);
             return results;
@@ -239,7 +243,7 @@ class JiraSearchClient {
                 var fieldsNode = issue.path("fields");
 
                 String summary = fieldsNode.path("summary").asText("");
-                String description = adf.extractAdfText(fieldsNode.path("description"));
+                String description = adf.adfToMarkdown(fieldsNode.path("description"));
                 String status = fieldsNode.path("status").path("name").asText("");
                 String reporter = fieldsNode.path("reporter").path("displayName").asText("");
                 String assignee = fieldsNode.path("assignee").path("displayName").asText("");

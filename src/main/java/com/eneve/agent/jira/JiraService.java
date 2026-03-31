@@ -52,15 +52,27 @@ public class JiraService {
             Instant updatedAt,
             String sprintName,
             Instant sprintStart,
-            Instant sprintEnd
+            Instant sprintEnd,
+            /** Priority name (e.g. "High", "Medium") from {@code fields.priority.name}. May be null. */
+            String priority
     ) {
-        /** Convenience constructor that leaves sprint fields null (backwards-compat). */
+        /** Convenience constructor that leaves sprint and priority null (backwards-compat). */
         public JiraIssueDetail(String key, String summary, String description, String status,
                                String reporter, String assignee,
                                List<String> labels, List<String> comments,
                                List<JiraAttachment> attachments, Instant updatedAt) {
             this(key, summary, description, status, reporter, assignee,
-                    labels, comments, attachments, updatedAt, null, null, null);
+                    labels, comments, attachments, updatedAt, null, null, null, null);
+        }
+
+        /** Convenience constructor without priority (backwards-compat). */
+        public JiraIssueDetail(String key, String summary, String description, String status,
+                               String reporter, String assignee,
+                               List<String> labels, List<String> comments,
+                               List<JiraAttachment> attachments, Instant updatedAt,
+                               String sprintName, Instant sprintStart, Instant sprintEnd) {
+            this(key, summary, description, status, reporter, assignee,
+                    labels, comments, attachments, updatedAt, sprintName, sprintStart, sprintEnd, null);
         }
     }
 
@@ -210,8 +222,29 @@ public class JiraService {
         return writer.createIssueSystem(projectKey, summary, description, issueType, parentKey, labels, dueDate);
     }
 
+    public String createIssueSystem(String projectKey, String summary,
+                                    String description, String issueType, String parentKey,
+                                    List<String> labels, LocalDate dueDate, String priority) {
+        return writer.createIssueSystem(projectKey, summary, description, issueType, parentKey, labels, dueDate, priority);
+    }
+
     public void updateIssueSystem(String issueKey, String summary, String description) {
         writer.updateIssueSystem(issueKey, summary, description);
+    }
+
+    public void updateIssueSystem(String issueKey, String summary, String description,
+                                   List<String> labels, String priority) {
+        writer.updateIssueSystem(issueKey, summary, description, labels, priority);
+    }
+
+    /**
+     * Fetches raw bytes of a Jira attachment from its absolute content URL.
+     * Used by the attachment proxy endpoint.
+     *
+     * @return raw bytes, or {@code null} if the fetch failed
+     */
+    public byte[] fetchAttachmentBytes(String contentUrl) {
+        return httpClient.getBytes(contentUrl, "fetch attachment");
     }
 
     public String createIssue(String projectKey, String summary, String description,

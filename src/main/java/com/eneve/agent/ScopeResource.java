@@ -1,5 +1,9 @@
 package com.eneve.agent;
 
+import com.eneve.agent.agent.model.ChatEvent;
+import com.eneve.agent.agent.service.ScopeImproveChatService;
+import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.model.ConversationContext;
 import com.eneve.agent.scope.ScopeService;
 import com.eneve.agent.scope.ScopeService.ActiveJobExistsException;
 import com.eneve.agent.scope.ScopeService.ImprovementGenerationException;
@@ -7,6 +11,8 @@ import com.eneve.agent.scope.ScopeService.ItemOverriddenException;
 import com.eneve.agent.scope.ScopeService.JiraIssueNotFoundException;
 import com.eneve.agent.scope.ScopeService.ProposalNotFoundException;
 import com.eneve.agent.scope.ScopeService.ScopeNotFoundException;
+import io.smallrye.common.annotation.Blocking;
+import io.smallrye.mutiny.Multi;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
@@ -14,6 +20,8 @@ import jakarta.ws.rs.core.Context;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
+import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.resteasy.reactive.RestStreamElementType;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -35,8 +43,9 @@ public class ScopeResource {
 
     private static final Pattern ISSUE_KEY_PATTERN = Pattern.compile("^[A-Z][A-Z0-9_]+-[0-9]+$");
 
-    @Inject
-    ScopeService scopeService;
+    @Inject ScopeService scopeService;
+    @Inject ScopeImproveChatService scopeImproveChatService;
+    @Inject jakarta.enterprise.inject.Instance<JsonWebToken> jwtInstance;
 
     // ─── CRUD ───────────────────────────────────────────────────────────────
 
@@ -311,6 +320,134 @@ public class ScopeResource {
         }
     }
 
+    @POST
+    @Path("/{id}/items/{issueKey}/proposal/init")
+    public Response initProposal(@PathParam("id") String scopeId,
+                                  @PathParam("issueKey") String issueKey) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+        try {
+            ScopeService.InitProposalResult result = scopeService.initProposal(scopeId, issueKey);
+            Map<String, Object> resp = new LinkedHashMap<>();
+            resp.put("proposal",       result.proposal());
+            resp.put("jiraUpdatedAt",  result.jiraUpdatedAt() != null ? result.jiraUpdatedAt().toString() : null);
+            resp.put("attachments", result.attachments().stream().map(a -> {
+                Map<String, Object> m = new LinkedHashMap<>();
+                m.put("id",         a.id());
+                m.put("filename",   a.filename());
+                m.put("mimeType",   a.mimeType());
+                m.put("size",       a.size());
+                // contentUrl is the Jira content URL; the browser should use the proxy endpoint
+                m.put("contentUrl", a.contentUrl());
+                return m;
+            }).collect(java.util.stream.Collectors.toList()));
+            return Response.ok(resp).build();
+        } catch (ScopeNotFoundException | JiraIssueNotFoundException e) {
+            return notFound(e.getMessage());
+        }
+    }
+
+    /**
+     * Analyses the given EPIC with Claude, identifies missing features, and returns a list
+     * of newly created DRAFT proposals (may be empty if nothing is missing).
+     */
+    @POST
+    @Path("/{id}/items/{issueKey}/propose-features")
+    public Response proposeFeaturesForEpic(@PathParam("id") String scopeId,
+                                            @PathParam("issueKey") String issueKey) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+        try {
+            List<com.eneve.agent.model.ScopeProposal> proposals =
+                    scopeService.proposeFeaturesForEpic(scopeId, issueKey);
+            return Response.ok(proposals).build();
+        } catch (ScopeNotFoundException e) {
+            return notFound(e.getMessage());
+        }
+    }
+
+    /**
+     * Creates a new blank DRAFT FEATURE proposal that is not yet backed by a Jira issue.
+     * A synthetic issue key ({@code NEW-XXXXXXXX}) is generated; the real Jira issue is
+     * created when the user accepts the proposal.
+     *
+     * <p>Request body: {@code { "parentKey": "PROJ-123", "proposedSummary": "optional title" }}</p>
+     */
+    @POST
+    @Path("/{id}/proposals/new-feature")
+    public Response createNewFeatureProposal(@PathParam("id") String scopeId,
+                                              Map<String, String> body) {
+        String parentKey = body != null ? body.getOrDefault("parentKey", null) : null;
+        String proposedSummary = body != null ? body.getOrDefault("proposedSummary", null) : null;
+        if (parentKey == null || parentKey.isBlank()) return badRequest("parentKey is required");
+        try {
+            return Response.ok(scopeService.createNewFeatureProposal(scopeId, parentKey, proposedSummary)).build();
+        } catch (ScopeNotFoundException e) {
+            return notFound(e.getMessage());
+        }
+    }
+
+    /**
+     * Proxy endpoint that streams a Jira attachment through the backend so the browser
+     * avoids Jira CORS/auth issues. The attachment is identified by its Jira content URL
+     * which is passed as a query parameter (URL-encoded).
+     */
+    @GET
+    @Path("/{id}/items/{issueKey}/attachments")
+    @Produces(MediaType.APPLICATION_OCTET_STREAM)
+    public Response proxyAttachment(@PathParam("id") String scopeId,
+                                     @PathParam("issueKey") String issueKey,
+                                     @QueryParam("url") String contentUrl) {
+        if (contentUrl == null || contentUrl.isBlank()) return badRequest("url query parameter is required");
+        try {
+            byte[] bytes = scopeService.fetchJiraAttachmentBytes(contentUrl);
+            if (bytes == null) return Response.status(502).entity("Failed to fetch attachment from Jira").build();
+            return Response.ok(bytes, MediaType.APPLICATION_OCTET_STREAM).build();
+        } catch (ScopeNotFoundException e) {
+            return notFound(e.getMessage());
+        }
+    }
+
+    @POST
+    @Blocking
+    @Path("/{id}/items/{issueKey}/improve-chat")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Produces(MediaType.SERVER_SENT_EVENTS)
+    @RestStreamElementType(MediaType.APPLICATION_JSON)
+    public Multi<ChatEvent> improveChat(@PathParam("id") String scopeId,
+                                         @PathParam("issueKey") String issueKey,
+                                         Map<String, Object> body) {
+        if (!isValidIssueKey(issueKey)) {
+            return Multi.createFrom().item(new ChatEvent.Error("Invalid issue key format"));
+        }
+        String message = strOf(body, "message");
+        if (message.isBlank()) {
+            return Multi.createFrom().item(new ChatEvent.Error("message is required"));
+        }
+
+        @SuppressWarnings("unchecked")
+        List<String> proposalIds = body.get("proposalIds") instanceof List<?> l
+                ? (List<String>) l : List.of();
+
+        ConversationContext ctx = null;
+        if (body.get("conversationContext") instanceof Map<?, ?>) {
+            try {
+                ctx = new com.fasterxml.jackson.databind.ObjectMapper()
+                        .convertValue(body.get("conversationContext"), ConversationContext.class);
+            } catch (Exception ignored) { }
+        }
+
+        ScopeImproveChatService.ScopeImproveChatRequest request =
+                new ScopeImproveChatService.ScopeImproveChatRequest(
+                        message,
+                        strOf(body, "conversationId"),
+                        scopeId,
+                        issueKey,
+                        proposalIds,
+                        ctx,
+                        strOf(body, "mode"));
+
+        return scopeImproveChatService.chatStream(request, resolveUserId());
+    }
+
     @PUT
     @Path("/{id}/proposals/{proposalId}")
     public Response updateProposal(@PathParam("id") String scopeId,
@@ -319,10 +456,13 @@ public class ScopeResource {
         try {
             return Response.ok(scopeService.updateProposal(
                     scopeId, proposalId,
-                    body.getOrDefault("proposedSummary",     ""),
-                    body.getOrDefault("proposedDescription", ""),
-                    body.getOrDefault("proposedCriteria",    ""),
-                    body.getOrDefault("proposedTechnical",   ""))).build();
+                    body.getOrDefault("proposedSummary",     null),
+                    body.getOrDefault("proposedDescription", null),
+                    body.getOrDefault("proposedCriteria",    null),
+                    body.getOrDefault("proposedTechnical",   null),
+                    body.getOrDefault("proposedLabel",       null),
+                    body.getOrDefault("proposedPriority",    null),
+                    resolveUserDisplay())).build();
         } catch (ProposalNotFoundException e) {
             return notFound(e.getMessage());
         }
@@ -333,7 +473,7 @@ public class ScopeResource {
     public Response acceptProposal(@PathParam("id") String scopeId,
                                    @PathParam("proposalId") String proposalId) {
         try {
-            return Response.ok(scopeService.acceptProposal(scopeId, proposalId)).build();
+            return Response.ok(scopeService.acceptProposal(scopeId, proposalId, resolveUserDisplay())).build();
         } catch (ProposalNotFoundException | ScopeNotFoundException e) {
             return notFound(e.getMessage());
         } catch (ImprovementGenerationException e) {
@@ -415,7 +555,9 @@ public class ScopeResource {
     }
 
     private static boolean isValidIssueKey(String key) {
-        return key != null && (ISSUE_KEY_PATTERN.matcher(key).matches() || key.startsWith("VIRTUAL-"));
+        return key != null && (ISSUE_KEY_PATTERN.matcher(key).matches()
+                || key.startsWith("VIRTUAL-")
+                || key.startsWith("NEW-"));
     }
 
     private static boolean hasInvalidChars(String s) {
@@ -447,6 +589,33 @@ public class ScopeResource {
         Object single = body.get("label");
         if (single instanceof String s && !s.isBlank()) return List.of(s.trim());
         return List.of();
+    }
+
+    private String resolveUserId() {
+        try {
+            if (!jwtInstance.isUnsatisfied() && !jwtInstance.isAmbiguous()) {
+                JsonWebToken jwt = jwtInstance.get();
+                String sub = jwt.getSubject();
+                if (sub != null && !sub.isBlank()) return sub;
+            }
+        } catch (Exception ignored) { }
+        return "anonymous";
+    }
+
+    /** Returns a human-readable display name: preferred_username > name > email > subject. */
+    private String resolveUserDisplay() {
+        try {
+            if (!jwtInstance.isUnsatisfied() && !jwtInstance.isAmbiguous()) {
+                JsonWebToken jwt = jwtInstance.get();
+                for (String claim : new String[]{"preferred_username", "name", "email"}) {
+                    Object val = jwt.getClaim(claim);
+                    if (val instanceof String s && !s.isBlank()) return s;
+                }
+                String sub = jwt.getSubject();
+                if (sub != null && !sub.isBlank()) return sub;
+            }
+        } catch (Exception ignored) { }
+        return "anonymous";
     }
 
     private static Map<String, Object> scopeResponse(com.eneve.agent.model.ScopeRecord scope, Integer itemsSynced) {

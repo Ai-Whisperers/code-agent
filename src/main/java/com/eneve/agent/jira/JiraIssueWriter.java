@@ -20,29 +20,30 @@ class JiraIssueWriter {
     private static final Logger LOG = Logger.getLogger(JiraIssueWriter.class);
 
     @Inject JiraHttpClient http;
+    @Inject AdfBuilder adfBuilder;
     @Inject ObjectMapper mapper;
 
     String createIssueSystem(String projectKey, String summary,
                              String description, String issueType, String parentKey) {
         return createIssueSystem(projectKey, summary, description, issueType, parentKey,
-                Collections.emptyList(), null);
+                Collections.emptyList(), null, null);
     }
 
     String createIssueSystem(String projectKey, String summary,
                              String description, String issueType, String parentKey,
                              List<String> labels, LocalDate dueDate) {
+        return createIssueSystem(projectKey, summary, description, issueType, parentKey,
+                labels, dueDate, null);
+    }
+
+    String createIssueSystem(String projectKey, String summary,
+                             String description, String issueType, String parentKey,
+                             List<String> labels, LocalDate dueDate, String priority) {
         var fields = mapper.createObjectNode();
         fields.put("summary", summary);
         fields.putObject("project").put("key", projectKey);
         fields.putObject("issuetype").put("name", issueType);
-
-        var descNode = mapper.createObjectNode();
-        descNode.put("type", "doc");
-        descNode.put("version", 1);
-        var para = descNode.putArray("content").addObject();
-        para.put("type", "paragraph");
-        para.putArray("content").addObject().put("type", "text").put("text", description != null ? description : "");
-        fields.set("description", descNode);
+        fields.set("description", adfBuilder.markdownToAdf(description));
 
         if (parentKey != null && !parentKey.isBlank()) {
             fields.putObject("parent").put("key", parentKey);
@@ -53,6 +54,9 @@ class JiraIssueWriter {
         }
         if (dueDate != null) {
             fields.put("duedate", dueDate.toString());
+        }
+        if (priority != null && !priority.isBlank()) {
+            fields.putObject("priority").put("name", priority);
         }
 
         var body = mapper.createObjectNode();
@@ -78,16 +82,20 @@ class JiraIssueWriter {
     }
 
     void updateIssueSystem(String issueKey, String summary, String description) {
+        updateIssueSystem(issueKey, summary, description, null, null);
+    }
+
+    void updateIssueSystem(String issueKey, String summary, String description,
+                            List<String> labels, String priority) {
         var fields = mapper.createObjectNode();
         if (summary != null) fields.put("summary", summary);
-        if (description != null) {
-            var descNode = mapper.createObjectNode();
-            descNode.put("type", "doc");
-            descNode.put("version", 1);
-            var para = descNode.putArray("content").addObject();
-            para.put("type", "paragraph");
-            para.putArray("content").addObject().put("type", "text").put("text", description);
-            fields.set("description", descNode);
+        if (description != null) fields.set("description", adfBuilder.markdownToAdf(description));
+        if (labels != null && !labels.isEmpty()) {
+            var arr = fields.putArray("labels");
+            labels.forEach(arr::add);
+        }
+        if (priority != null && !priority.isBlank()) {
+            fields.putObject("priority").put("name", priority);
         }
 
         var body = mapper.createObjectNode();
@@ -117,9 +125,7 @@ class JiraIssueWriter {
             fieldsNode.put("summary", summary);
             fieldsNode.set("issuetype", mapper.createObjectNode().put("name", issueType));
             if (description != null && !description.isBlank()) {
-                fieldsNode.set("description", mapper.readTree(
-                        "{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\""
-                                + JiraHttpClient.escapeJson(description) + "\"}]}]}"));
+                fieldsNode.set("description", adfBuilder.markdownToAdf(description));
             }
             if (parentKey != null && !parentKey.isBlank()) {
                 fieldsNode.set("parent", mapper.createObjectNode().put("key", parentKey));
@@ -157,9 +163,7 @@ class JiraIssueWriter {
             var fieldsNode = mapper.createObjectNode();
             if (summary != null && !summary.isBlank()) fieldsNode.put("summary", summary);
             if (description != null) {
-                fieldsNode.set("description", mapper.readTree(
-                        "{\"type\":\"doc\",\"version\":1,\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\""
-                                + JiraHttpClient.escapeJson(description) + "\"}]}]}"));
+                fieldsNode.set("description", adfBuilder.markdownToAdf(description));
             }
             if (assignee != null) {
                 if (assignee.isBlank()) {

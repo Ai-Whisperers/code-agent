@@ -18,10 +18,16 @@ public record ScopeProposal(
         String proposedCriteria,
         String proposedTechnical,
         String aiExplanation,
+        String proposedLabel,
+        String proposedPriority,
         /** DRAFT | ACCEPTED | REJECTED */
         String status,
         /** Jira key created/updated when accepted; null otherwise. */
         String jiraResultKey,
         Instant createdAt,
-        Instant updatedAt
+        Instant updatedAt,
+        /** Display name of the user who last saved the proposal. */
+        String updatedBy,
+        /** Display name of the user who synced the proposal to Jira. */
+        String syncedBy
 ) {}

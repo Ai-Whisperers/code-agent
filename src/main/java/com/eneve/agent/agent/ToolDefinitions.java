@@ -8,6 +8,7 @@ import com.eneve.agent.agent.tools.ConfluenceToolSchemas;
 import com.eneve.agent.agent.tools.JiraToolSchemas;
 import com.eneve.agent.agent.tools.KnowledgeToolSchemas;
 import com.eneve.agent.agent.tools.PlanToolSchemas;
+import com.eneve.agent.agent.tools.ScopeImproveToolSchemas;
 import com.eneve.agent.agent.tools.WorkspaceToolSchemas;
 import com.eneve.agent.agent.tools.XrayToolSchemas;
 
@@ -22,6 +23,31 @@ import java.util.List;
 public final class ToolDefinitions {
 
     private ToolDefinitions() { }
+
+    /**
+     * Tool set for the scope improve chat loop (Product Owner persona).
+     * Includes all research tools plus {@code update_proposal} so the AI can
+     * directly edit proposal fields that are reflected live in the UI.
+     */
+    public static List<ToolUnion> scopeImproveChat() {
+        return List.of(
+                ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.fetchUrl()),
+                ToolUnion.ofTool(ScopeImproveToolSchemas.updateProposal())
+        );
+    }
+
+    /** Read-only variant for Ask mode — research tools only, no proposal editing. */
+    public static List<ToolUnion> scopeImproveChatAsk() {
+        return List.of(
+                ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.fetchUrl())
+        );
+    }
 
     /**
      * Read-only tool set for the scope AI-improvement loop.

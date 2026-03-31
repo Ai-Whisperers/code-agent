@@ -130,6 +130,9 @@ public class ScopeService {
      */
     public record ReviewAllResult(int jobsEnqueued, int jobsSkipped, int jobsUnchanged) {}
 
+    /** Result of {@link #initProposal}: the existing/created DRAFT, Jira attachments, and the Jira issue's own last-modified timestamp. */
+    public record InitProposalResult(ScopeProposal proposal, List<JiraService.JiraAttachment> attachments, java.time.Instant jiraUpdatedAt) {}
+
     // ─── CRUD ─────────────────────────────────────────────────────────────────
 
     public List<ScopeRecord> listScopes() {
@@ -590,6 +593,195 @@ public class ScopeService {
     }
 
     /**
+     * Initialises a proposal for the given scope item.
+     * <ul>
+     *   <li>If a DRAFT already exists → returns it (no Jira call).</li>
+     *   <li>Otherwise → fetches Jira issue detail and seeds a new DRAFT with
+     *       {@code proposedSummary}, {@code proposedDescription}, {@code proposedLabel}
+     *       (first label if any), and {@code proposedPriority}.</li>
+     * </ul>
+     * Always returns the full list of Jira attachments from the issue (may be empty).
+     *
+     * @throws ScopeNotFoundException     if the scope does not exist
+     * @throws JiraIssueNotFoundException if Jira returns no data for the issue key
+     */
+    public InitProposalResult initProposal(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+
+        Optional<ScopeProposal> existing = proposalStore.findDraftByScopeAndIssueKey(scopeId, issueKey);
+        if (existing.isPresent()) {
+            JiraIssueDetail detail = jiraService.fetchIssueDetail(issueKey);
+            List<JiraService.JiraAttachment> attachments = detail != null
+                    ? detail.attachments() : List.of();
+            java.time.Instant jiraUpdatedAt = detail != null ? detail.updatedAt() : null;
+            return new InitProposalResult(existing.get(), attachments != null ? attachments : List.of(), jiraUpdatedAt);
+        }
+
+        JiraIssueDetail detail = jiraService.fetchIssueDetail(issueKey);
+        if (detail == null) throw new JiraIssueNotFoundException(issueKey);
+
+        ScopeItem item = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
+                .orElse(null);
+        String issueType = item != null ? item.issueType() : "FEATURE";
+        String parentKey  = item != null ? item.parentKey()  : null;
+
+        String proposedLabel = (detail.labels() != null && !detail.labels().isEmpty())
+                ? detail.labels().get(0) : null;
+
+        ScopeProposal proposal = proposalStore.create(
+                scopeId, issueKey, issueType, parentKey,
+                detail.summary(),
+                detail.description(),
+                null, null, null,
+                proposedLabel, detail.priority());
+
+        auditService.log("SCOPE", "PROPOSAL_CREATED", "scope_item", issueKey,
+                Map.of("scopeId", scopeId, "source", "initProposal"));
+
+        List<JiraService.JiraAttachment> attachments = detail.attachments();
+        return new InitProposalResult(proposal, attachments != null ? attachments : List.of(), detail.updatedAt());
+    }
+
+    /**
+     * Analyses an EPIC and its existing features with Claude, then creates DRAFT proposals
+     * for any features that appear to be missing.
+     *
+     * @param scopeId  scope the epic belongs to
+     * @param epicKey  Jira key of the EPIC to analyse
+     * @return list of newly created DRAFT proposals (may be empty)
+     * @throws ScopeNotFoundException if the scope does not exist
+     */
+    public List<ScopeProposal> proposeFeaturesForEpic(String scopeId, String epicKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+
+        // ── 1. Collect context ──────────────────────────────────────────────
+        JiraIssueDetail epic = jiraService.fetchIssueDetail(epicKey);
+        String epicSummary     = epic != null ? epic.summary()     : epicKey;
+        String epicDescription = epic != null ? epic.description() : "";
+
+        List<ScopeItem> allItems = scopeItemStore.findByScope(scopeId);
+        List<ScopeItem> existingFeatures = allItems.stream()
+                .filter(i -> "FEATURE".equals(i.issueType()) && epicKey.equals(i.parentKey()))
+                .toList();
+
+        StringBuilder featureList = new StringBuilder();
+        if (existingFeatures.isEmpty()) {
+            featureList.append("(none yet)");
+        } else {
+            for (ScopeItem f : existingFeatures) {
+                featureList.append("- ").append(f.issueKey()).append(": ").append(f.summary()).append("\n");
+            }
+        }
+
+        // ── 2. Build prompt ─────────────────────────────────────────────────
+        String prompt = """
+                You are a product owner reviewing the scope of an Epic.
+
+                Epic key: %s
+                Epic summary: %s
+                Epic description:
+                %s
+
+                Existing features already linked to this Epic:
+                %s
+
+                Identify any features that seem MISSING or INCOMPLETE given the Epic's goals.
+                Consider edge cases, error handling, admin/settings flows, and non-happy-path scenarios.
+
+                Respond ONLY with a valid JSON array — no prose, no markdown fences. Each element:
+                { "title": "<short feature title>", "description": "<1-2 sentence description>" }
+
+                Return at most 6 suggestions. If nothing is missing, return [].
+                """.formatted(epicKey, epicSummary,
+                epicDescription != null ? epicDescription : "",
+                featureList.toString().trim());
+
+        // ── 3. Call Claude ──────────────────────────────────────────────────
+        String modelName = settings.get("anthropic.fast-model", "claude-haiku-4-5");
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(modelName))
+                .maxTokens(2048)
+                .messages(List.of(MessageParam.builder()
+                        .role(MessageParam.Role.USER)
+                        .content(prompt)
+                        .build()))
+                .build();
+
+        String responseText = null;
+        try {
+            Message response = anthropicClient.messages().create(params);
+            for (ContentBlock block : response.content()) {
+                if (block.isText()) {
+                    responseText = block.asText().text().trim();
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            LOG.errorf("proposeFeaturesForEpic: Claude call failed for %s: %s", epicKey, e.getMessage());
+            return List.of();
+        }
+
+        if (responseText == null || responseText.isBlank()) return List.of();
+
+        // Strip optional markdown fences the model may still emit
+        if (responseText.startsWith("```")) {
+            responseText = responseText.replaceAll("(?s)^```[a-z]*\\n?", "").replaceAll("```$", "").trim();
+        }
+
+        // ── 4. Parse & create proposals ─────────────────────────────────────
+        List<ScopeProposal> created = new ArrayList<>();
+        try {
+            JsonNode arr = mapper.readTree(responseText);
+            if (!arr.isArray()) return List.of();
+            for (JsonNode node : arr) {
+                String title       = node.path("title").asText(null);
+                String description = node.path("description").asText(null);
+                if (title == null || title.isBlank()) continue;
+
+                String shortId = UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+                String syntheticKey = "NEW-" + shortId;
+                ScopeProposal proposal = proposalStore.create(scopeId, syntheticKey, "FEATURE", epicKey,
+                        title, description, null, null, null, null, null);
+                created.add(proposal);
+            }
+        } catch (Exception e) {
+            LOG.errorf("proposeFeaturesForEpic: JSON parse failed for %s: %s", epicKey, e.getMessage());
+        }
+
+        if (!created.isEmpty()) {
+            auditService.log("SCOPE", "FEATURES_PROPOSED", "scope_item", epicKey,
+                    Map.of("scopeId", scopeId, "count", String.valueOf(created.size())));
+        }
+        return created;
+    }
+
+    /**
+     * Creates a blank DRAFT FEATURE proposal that is not yet backed by a Jira issue.
+     * A synthetic issue key of the form {@code NEW-XXXXXXXX} is generated.
+     * The proposal can be populated by the user and accepted later, at which point a real
+     * Jira issue is created.
+     *
+     * @param scopeId        scope the proposal belongs to
+     * @param parentKey      Jira key of the parent EPIC (used to derive the project key on accept)
+     * @param proposedSummary optional initial title
+     * @throws ScopeNotFoundException if the scope does not exist
+     */
+    public ScopeProposal createNewFeatureProposal(String scopeId, String parentKey, String proposedSummary) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+
+        String shortId = java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+        String syntheticKey = "NEW-" + shortId;
+
+        ScopeProposal proposal = proposalStore.create(scopeId, syntheticKey, "FEATURE", parentKey,
+                proposedSummary, null, null, null, null, null, null);
+
+        auditService.log("SCOPE", "PROPOSAL_CREATED", "scope_item", syntheticKey,
+                Map.of("scopeId", scopeId, "source", "manual", "parentKey", parentKey != null ? parentKey : ""));
+
+        return proposal;
+    }
+
+    /**
      * Updates the text fields of an existing proposal (allowed at any status).
      *
      * @throws ProposalNotFoundException if the proposal does not exist
@@ -597,9 +789,34 @@ public class ScopeService {
     public ScopeProposal updateProposal(String scopeId, String proposalId,
                                          String summary, String description,
                                          String criteria, String technical) {
+        return updateProposal(scopeId, proposalId, summary, description, criteria, technical, null, null, null);
+    }
+
+    /**
+     * Updates all editable fields of an existing proposal, including label and priority.
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     */
+    public ScopeProposal updateProposal(String scopeId, String proposalId,
+                                         String summary, String description,
+                                         String criteria, String technical,
+                                         String label, String priority) {
+        return updateProposal(scopeId, proposalId, summary, description, criteria, technical, label, priority, null);
+    }
+
+    /**
+     * Updates all editable fields of an existing proposal, recording who made the change.
+     *
+     * @throws ProposalNotFoundException if the proposal does not exist
+     */
+    public ScopeProposal updateProposal(String scopeId, String proposalId,
+                                         String summary, String description,
+                                         String criteria, String technical,
+                                         String label, String priority,
+                                         String updatedBy) {
         ScopeProposal existing = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
-        proposalStore.updateFields(proposalId, summary, description, criteria, technical);
+        proposalStore.updateFields(proposalId, summary, description, criteria, technical, label, priority, updatedBy);
         ScopeProposal updated = proposalStore.findById(proposalId).orElse(existing);
         auditService.log("SCOPE", "PROPOSAL_UPDATED", "scope_proposal", proposalId,
                 Map.of("scopeId", scopeId));
@@ -618,18 +835,30 @@ public class ScopeService {
      * @throws ImprovementGenerationException if the Jira write fails
      */
     public ScopeProposal acceptProposal(String scopeId, String proposalId) {
+        return acceptProposal(scopeId, proposalId, null);
+    }
+
+    public ScopeProposal acceptProposal(String scopeId, String proposalId, String syncedBy) {
         ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
+
+        List<String> labels = (proposal.proposedLabel() != null && !proposal.proposedLabel().isBlank())
+                ? List.of(proposal.proposedLabel()) : null;
+        String priority = proposal.proposedPriority();
 
         String jiraResultKey;
         if ("EPIC".equals(proposal.issueType())) {
             jiraService.updateIssueSystem(
                     proposal.issueKey(),
                     proposal.proposedSummary(),
-                    proposal.proposedDescription());
+                    proposal.proposedDescription(),
+                    labels, priority);
             jiraResultKey = proposal.issueKey();
         } else {
-            String projectKey = proposal.issueKey().replaceAll("-\\d+$", "");
+            // Prefer parentKey for project key derivation so that synthetic NEW-* keys work correctly
+            String rawKey = (proposal.parentKey() != null && !proposal.parentKey().isBlank())
+                    ? proposal.parentKey() : proposal.issueKey();
+            String projectKey = rawKey.replaceAll("-\\d+$", "");
             ScopeRecord scope = scopeStore.findById(scopeId)
                     .orElseThrow(() -> new ScopeNotFoundException(scopeId));
             String issueType = "FEATURE".equals(proposal.issueType())
@@ -640,7 +869,10 @@ public class ScopeService {
                     proposal.proposedSummary(),
                     proposal.proposedDescription(),
                     issueType,
-                    proposal.parentKey());
+                    proposal.parentKey(),
+                    labels != null ? labels : List.of(),
+                    null,
+                    priority);
         }
 
         if (jiraResultKey == null) {
@@ -648,7 +880,7 @@ public class ScopeService {
                     "Jira write failed for proposal " + proposalId + " — check system Jira credentials");
         }
 
-        proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey);
+        proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey, syncedBy);
         ScopeProposal accepted = proposalStore.findById(proposalId).orElse(proposal);
         auditService.log("SCOPE", "PROPOSAL_ACCEPTED", "scope_proposal", proposalId,
                 Map.of("scopeId", scopeId));
@@ -663,7 +895,7 @@ public class ScopeService {
     public ScopeProposal rejectProposal(String scopeId, String proposalId) {
         ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
-        proposalStore.updateStatus(proposalId, "REJECTED", null);
+        proposalStore.updateStatus(proposalId, "REJECTED", null, null);
         ScopeProposal rejected = proposalStore.findById(proposalId).orElse(proposal);
         auditService.log("SCOPE", "PROPOSAL_REJECTED", "scope_proposal", proposalId,
                 Map.of("scopeId", scopeId));
@@ -708,6 +940,16 @@ public class ScopeService {
 
     public long countActiveReviewJobs(String scopeId) {
         return jobStore.countActiveReviewJobsForRoadmap(scopeId);
+    }
+
+    /**
+     * Fetches raw bytes of a Jira attachment given its content URL.
+     * Used by the attachment proxy endpoint to stream files to the browser.
+     *
+     * @return raw bytes, or {@code null} if the fetch failed
+     */
+    public byte[] fetchJiraAttachmentBytes(String contentUrl) {
+        return jiraService.fetchAttachmentBytes(contentUrl);
     }
 
     // ─── Token stats ─────────────────────────────────────────────────────────

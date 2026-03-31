@@ -238,6 +238,27 @@ class JiraHttpClient {
         }
     }
 
+    byte[] getBytes(String absoluteUrl, String operation) {
+        try {
+            HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(60))
+                    .uri(URI.create(absoluteUrl))
+                    .header("Authorization", "Basic " + basicAuth())
+                    .GET()
+                    .build();
+            HttpResponse<byte[]> response = httpClient.send(request, HttpResponse.BodyHandlers.ofByteArray());
+            if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                return response.body();
+            } else {
+                LOG.warnf("JIRA %s failed (HTTP %d)", operation, response.statusCode());
+                return null;
+            }
+        } catch (Exception e) {
+            LOG.errorf("JIRA %s error: %s", operation, e.getMessage());
+            return null;
+        }
+    }
+
     String basicAuth() {
         return Base64.getEncoder()
                 .encodeToString((settingsService.get("jira.user", "") + ":" + settingsService.getSecret("jira.api.token"))

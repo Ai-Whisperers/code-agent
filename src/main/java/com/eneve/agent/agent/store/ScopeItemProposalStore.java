@@ -24,20 +24,37 @@ public class ScopeItemProposalStore {
     @Inject
     AgroalDataSource dataSource;
 
-    /**
-     * Inserts a new proposal and returns its generated UUID.
-     */
+    private static final String SELECT_COLS = """
+            id, scope_id, issue_key, issue_type, parent_key,
+            proposed_summary, proposed_description, proposed_criteria, proposed_technical,
+            ai_explanation, proposed_label, proposed_priority, status, jira_result_key,
+            created_at, updated_at, updated_by, synced_by
+            """;
+
+    /** Inserts a new proposal (without label/priority) and returns it. */
     public ScopeProposal create(String scopeId, String issueKey, String issueType,
                                  String parentKey,
                                  String proposedSummary, String proposedDescription,
                                  String proposedCriteria, String proposedTechnical,
                                  String aiExplanation) {
+        return create(scopeId, issueKey, issueType, parentKey,
+                proposedSummary, proposedDescription, proposedCriteria, proposedTechnical,
+                aiExplanation, null, null);
+    }
+
+    /** Inserts a new proposal (with label and priority) and returns it. */
+    public ScopeProposal create(String scopeId, String issueKey, String issueType,
+                                 String parentKey,
+                                 String proposedSummary, String proposedDescription,
+                                 String proposedCriteria, String proposedTechnical,
+                                 String aiExplanation,
+                                 String proposedLabel, String proposedPriority) {
         String sql = """
                 INSERT INTO scope_item_proposals
                     (scope_id, issue_key, issue_type, parent_key,
                      proposed_summary, proposed_description, proposed_criteria, proposed_technical,
-                     ai_explanation, status)
-                VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT')
+                     ai_explanation, proposed_label, proposed_priority, status)
+                VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'DRAFT')
                 RETURNING id, created_at, updated_at
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -51,6 +68,8 @@ public class ScopeItemProposalStore {
             ps.setString(7, proposedCriteria);
             ps.setString(8, proposedTechnical);
             ps.setString(9, aiExplanation);
+            ps.setString(10, proposedLabel);
+            ps.setString(11, proposedPriority);
             try (ResultSet rs = ps.executeQuery()) {
                 if (rs.next()) {
                     String id = rs.getString("id");
@@ -58,9 +77,10 @@ public class ScopeItemProposalStore {
                     Timestamp updatedAt = rs.getTimestamp("updated_at");
                     return new ScopeProposal(id, scopeId, issueKey, issueType, parentKey,
                             proposedSummary, proposedDescription, proposedCriteria, proposedTechnical,
-                            aiExplanation, "DRAFT", null,
+                            aiExplanation, proposedLabel, proposedPriority, "DRAFT", null,
                             createdAt != null ? createdAt.toInstant() : null,
-                            updatedAt != null ? updatedAt.toInstant() : null);
+                            updatedAt != null ? updatedAt.toInstant() : null,
+                            null, null);
                 }
             }
         } catch (SQLException e) {
@@ -72,10 +92,7 @@ public class ScopeItemProposalStore {
 
     /** Returns all proposals for a scope + issue key, newest first. */
     public List<ScopeProposal> findByScopeAndIssueKey(String scopeId, String issueKey) {
-        String sql = """
-                SELECT id, scope_id, issue_key, issue_type, parent_key,
-                       proposed_summary, proposed_description, proposed_criteria, proposed_technical,
-                       ai_explanation, status, jira_result_key, created_at, updated_at
+        String sql = "SELECT " + SELECT_COLS + """
                 FROM scope_item_proposals
                 WHERE scope_id = ?::uuid AND issue_key = ?
                 ORDER BY created_at DESC
@@ -95,12 +112,34 @@ public class ScopeItemProposalStore {
         return results;
     }
 
+    /**
+     * Returns the most recent DRAFT proposal for a scope + issue key, if any.
+     * Used by {@code initProposal} to avoid creating duplicate drafts.
+     */
+    public Optional<ScopeProposal> findDraftByScopeAndIssueKey(String scopeId, String issueKey) {
+        String sql = "SELECT " + SELECT_COLS + """
+                FROM scope_item_proposals
+                WHERE scope_id = ?::uuid AND issue_key = ? AND status = 'DRAFT'
+                ORDER BY created_at DESC
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, scopeId);
+            ps.setString(2, issueKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return Optional.of(mapRow(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("ScopeItemProposalStore.findDraftByScopeAndIssueKey: %s / %s: %s",
+                    scopeId, issueKey, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
     /** Returns a single proposal by its UUID. */
     public Optional<ScopeProposal> findById(String proposalId) {
-        String sql = """
-                SELECT id, scope_id, issue_key, issue_type, parent_key,
-                       proposed_summary, proposed_description, proposed_criteria, proposed_technical,
-                       ai_explanation, status, jira_result_key, created_at, updated_at
+        String sql = "SELECT " + SELECT_COLS + """
                 FROM scope_item_proposals
                 WHERE id = ?::uuid
                 """;
@@ -118,16 +157,39 @@ public class ScopeItemProposalStore {
 
     /**
      * Updates the editable text fields of a proposal (allowed at any status).
+     * Null values leave the corresponding column unchanged.
      */
     public void updateFields(String proposalId,
                               String proposedSummary, String proposedDescription,
                               String proposedCriteria, String proposedTechnical) {
+        updateFields(proposalId, proposedSummary, proposedDescription,
+                proposedCriteria, proposedTechnical, null, null, null);
+    }
+
+    /** Updates editable fields including label and priority (updatedBy left unchanged). */
+    public void updateFields(String proposalId,
+                              String proposedSummary, String proposedDescription,
+                              String proposedCriteria, String proposedTechnical,
+                              String proposedLabel, String proposedPriority) {
+        updateFields(proposalId, proposedSummary, proposedDescription,
+                proposedCriteria, proposedTechnical, proposedLabel, proposedPriority, null);
+    }
+
+    /** Updates all editable fields including label, priority, and the saving user. */
+    public void updateFields(String proposalId,
+                              String proposedSummary, String proposedDescription,
+                              String proposedCriteria, String proposedTechnical,
+                              String proposedLabel, String proposedPriority,
+                              String updatedBy) {
         String sql = """
                 UPDATE scope_item_proposals
-                SET proposed_summary     = ?,
-                    proposed_description = ?,
-                    proposed_criteria    = ?,
-                    proposed_technical   = ?,
+                SET proposed_summary     = COALESCE(?, proposed_summary),
+                    proposed_description = COALESCE(?, proposed_description),
+                    proposed_criteria    = COALESCE(?, proposed_criteria),
+                    proposed_technical   = COALESCE(?, proposed_technical),
+                    proposed_label       = COALESCE(?, proposed_label),
+                    proposed_priority    = COALESCE(?, proposed_priority),
+                    updated_by           = COALESCE(?, updated_by),
                     updated_at           = now()
                 WHERE id = ?::uuid
                 """;
@@ -137,7 +199,10 @@ public class ScopeItemProposalStore {
             ps.setString(2, proposedDescription);
             ps.setString(3, proposedCriteria);
             ps.setString(4, proposedTechnical);
-            ps.setString(5, proposalId);
+            ps.setString(5, proposedLabel);
+            ps.setString(6, proposedPriority);
+            ps.setString(7, updatedBy);
+            ps.setString(8, proposalId);
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("ScopeItemProposalStore.updateFields: %s: %s", proposalId, e.getMessage());
@@ -147,13 +212,14 @@ public class ScopeItemProposalStore {
 
     /**
      * Updates the status of a proposal (ACCEPTED or REJECTED) and optionally records
-     * the resulting Jira key when accepted.
+     * the resulting Jira key and the user who triggered the sync.
      */
-    public void updateStatus(String proposalId, String status, String jiraResultKey) {
+    public void updateStatus(String proposalId, String status, String jiraResultKey, String syncedBy) {
         String sql = """
                 UPDATE scope_item_proposals
                 SET status          = ?,
                     jira_result_key = ?,
+                    synced_by       = CASE WHEN ? = 'ACCEPTED' THEN ? ELSE synced_by END,
                     updated_at      = now()
                 WHERE id = ?::uuid
                 """;
@@ -161,7 +227,9 @@ public class ScopeItemProposalStore {
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, status);
             ps.setString(2, jiraResultKey);
-            ps.setString(3, proposalId);
+            ps.setString(3, status);
+            ps.setString(4, syncedBy);
+            ps.setString(5, proposalId);
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("ScopeItemProposalStore.updateStatus: %s → %s: %s", proposalId, status, e.getMessage());
@@ -169,9 +237,7 @@ public class ScopeItemProposalStore {
         }
     }
 
-    /**
-     * Hard-deletes a proposal row. Allowed at any status.
-     */
+    /** Hard-deletes a proposal row. Allowed at any status. */
     public void delete(String proposalId) {
         String sql = "DELETE FROM scope_item_proposals WHERE id = ?::uuid";
         try (Connection conn = dataSource.getConnection();
@@ -198,10 +264,14 @@ public class ScopeItemProposalStore {
                 rs.getString("proposed_criteria"),
                 rs.getString("proposed_technical"),
                 rs.getString("ai_explanation"),
+                rs.getString("proposed_label"),
+                rs.getString("proposed_priority"),
                 rs.getString("status"),
                 rs.getString("jira_result_key"),
                 createdAt != null ? createdAt.toInstant() : null,
-                updatedAt != null ? updatedAt.toInstant() : null
+                updatedAt != null ? updatedAt.toInstant() : null,
+                rs.getString("updated_by"),
+                rs.getString("synced_by")
         );
     }
 }
