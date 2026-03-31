@@ -365,6 +365,24 @@ public class ScopeResource {
     }
 
     /**
+     * Analyses the given FEATURE with Claude, identifies missing user stories, and returns a list
+     * of newly created DRAFT proposals (may be empty if nothing is missing).
+     */
+    @POST
+    @Path("/{id}/items/{issueKey}/propose-stories")
+    public Response proposeUserStoriesForFeature(@PathParam("id") String scopeId,
+                                                  @PathParam("issueKey") String issueKey) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+        try {
+            List<com.eneve.agent.model.ScopeProposal> proposals =
+                    scopeService.proposeUserStoriesForFeature(scopeId, issueKey);
+            return Response.ok(proposals).build();
+        } catch (ScopeNotFoundException e) {
+            return notFound(e.getMessage());
+        }
+    }
+
+    /**
      * Creates a new blank DRAFT FEATURE proposal that is not yet backed by a Jira issue.
      * A synthetic issue key ({@code NEW-XXXXXXXX}) is generated; the real Jira issue is
      * created when the user accepts the proposal.

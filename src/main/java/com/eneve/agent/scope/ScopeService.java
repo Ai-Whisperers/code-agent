@@ -756,6 +756,132 @@ public class ScopeService {
     }
 
     /**
+     * Analyses a FEATURE and its existing user stories with Claude, then creates DRAFT proposals
+     * for any user stories that appear to be missing.
+     *
+     * @param scopeId    scope the feature belongs to
+     * @param featureKey Jira key of the FEATURE to analyse
+     * @return list of newly created DRAFT proposals (may be empty)
+     * @throws ScopeNotFoundException if the scope does not exist
+     */
+    public List<ScopeProposal> proposeUserStoriesForFeature(String scopeId, String featureKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+
+        // ── 1. Collect context ──────────────────────────────────────────────
+        JiraIssueDetail feature = jiraService.fetchIssueDetail(featureKey);
+        String featureSummary     = feature != null ? feature.summary()     : featureKey;
+        String featureDescription = feature != null ? feature.description() : "";
+
+        // Fetch parent Epic for extra context if available
+        ScopeItem featureItem = scopeItemStore.findByScopeAndIssueKey(scopeId, featureKey).orElse(null);
+        String epicContext = "";
+        if (featureItem != null && featureItem.parentKey() != null) {
+            JiraIssueDetail epic = jiraService.fetchIssueDetail(featureItem.parentKey());
+            if (epic != null) {
+                epicContext = "Parent Epic: " + featureItem.parentKey()
+                        + " — " + epic.summary() + "\n\n";
+            }
+        }
+
+        List<ScopeItem> allItems = scopeItemStore.findByScope(scopeId);
+        List<ScopeItem> existingStories = allItems.stream()
+                .filter(i -> "USERSTORY".equals(i.issueType()) && featureKey.equals(i.parentKey()))
+                .toList();
+
+        StringBuilder storyList = new StringBuilder();
+        if (existingStories.isEmpty()) {
+            storyList.append("(none yet)");
+        } else {
+            for (ScopeItem s : existingStories) {
+                storyList.append("- ").append(s.issueKey()).append(": ").append(s.summary()).append("\n");
+            }
+        }
+
+        // ── 2. Build prompt ─────────────────────────────────────────────────
+        String prompt = """
+                You are a product owner reviewing the scope of a Feature.
+
+                %sFeature key: %s
+                Feature summary: %s
+                Feature description:
+                %s
+
+                Existing user stories already linked to this Feature:
+                %s
+
+                Identify any user stories that seem MISSING or INCOMPLETE given the Feature's goals.
+                Consider edge cases, error handling, admin/settings flows, and non-happy-path scenarios.
+                Each story must be small enough to complete in a single sprint.
+
+                Respond ONLY with a valid JSON array — no prose, no markdown fences. Each element:
+                { "title": "<short story title preferably in 'As a ... I want ...' format>", "description": "<1-2 sentence description including key acceptance notes>" }
+
+                Return at most 8 suggestions. If nothing is missing, return [].
+                """.formatted(epicContext, featureKey, featureSummary,
+                featureDescription != null ? featureDescription : "",
+                storyList.toString().trim());
+
+        // ── 3. Call Claude ──────────────────────────────────────────────────
+        String modelName = settings.get("anthropic.fast-model", "claude-haiku-4-5");
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(modelName))
+                .maxTokens(2048)
+                .messages(List.of(MessageParam.builder()
+                        .role(MessageParam.Role.USER)
+                        .content(prompt)
+                        .build()))
+                .build();
+
+        String responseText = null;
+        try {
+            Message response = anthropicClient.messages().create(params);
+            for (ContentBlock block : response.content()) {
+                if (block.isText()) {
+                    responseText = block.asText().text().trim();
+                    break;
+                }
+            }
+        } catch (Exception e) {
+            LOG.errorf("proposeUserStoriesForFeature: Claude call failed for %s: %s", featureKey, e.getMessage());
+            return List.of();
+        }
+
+        if (responseText == null || responseText.isBlank()) return List.of();
+
+        // Strip optional markdown fences the model may still emit
+        if (responseText.startsWith("```")) {
+            responseText = responseText.replaceAll("(?s)^```[a-z]*\\n?", "").replaceAll("```$", "").trim();
+        }
+
+        // ── 4. Parse & create proposals ─────────────────────────────────────
+        List<ScopeProposal> created = new ArrayList<>();
+        try {
+            JsonNode arr = mapper.readTree(responseText);
+            if (!arr.isArray()) return List.of();
+            for (JsonNode node : arr) {
+                String title       = node.path("title").asText(null);
+                String description = node.path("description").asText(null);
+                if (title == null || title.isBlank()) continue;
+
+                String shortId = UUID.randomUUID().toString().replace("-", "").substring(0, 8).toUpperCase();
+                String syntheticKey = "NEW-" + shortId;
+                ScopeProposal proposal = proposalStore.create(
+                        scopeId, syntheticKey, "USERSTORY", featureKey,
+                        title, description, null, null, null, null, null);
+                created.add(proposal);
+            }
+        } catch (Exception e) {
+            LOG.errorf("proposeUserStoriesForFeature: JSON parse failed for %s: %s", featureKey, e.getMessage());
+        }
+
+        if (!created.isEmpty()) {
+            auditService.log("SCOPE", "STORIES_PROPOSED", "scope_item", featureKey,
+                    Map.of("scopeId", scopeId, "count", String.valueOf(created.size())));
+        }
+        return created;
+    }
+
+    /**
      * Creates a blank DRAFT FEATURE proposal that is not yet backed by a Jira issue.
      * A synthetic issue key of the form {@code NEW-XXXXXXXX} is generated.
      * The proposal can be populated by the user and accepted later, at which point a real
