@@ -23,6 +23,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 
@@ -81,14 +82,39 @@ public abstract class AbstractScopeItemReviewHandler implements JobHandler {
             return;
         }
 
+        try {
+            com.eneve.agent.model.JiraIssueReview review = runReview(req, job.getJobId());
+            job.setStatus(JobStatus.SUCCESS);
+            job.setSummary(itemTypeLabel().charAt(0) + itemTypeLabel().substring(1).toLowerCase()
+                    + " " + req.issueKey() + " reviewed: readiness=" + review.readinessScore()
+                    + " complexity=" + review.complexityScore());
+            jobStore.archive(job);
+            LOG.infof("%s %s: readiness=%d label=%s complexity=%d",
+                    getClass().getSimpleName(), req.issueKey(),
+                    review.readinessScore(), review.readinessLabel(), review.complexityScore());
+        } catch (Exception e) {
+            fail(job, e.getMessage());
+        }
+    }
+
+    /**
+     * Executes the review synchronously without any job-queue management.
+     * Used both by {@link #handle} (via job queue) and the direct review endpoint
+     * so that the logic lives in exactly one place.
+     *
+     * @param req   the review request (scopeId, issueKey, parentKey, …)
+     * @param jobId an identifier for Claude logging; pass {@code null} for direct calls
+     * @return the persisted {@link com.eneve.agent.model.JiraIssueReview}
+     * @throws RuntimeException if the Claude call fails or returns invalid JSON
+     */
+    public com.eneve.agent.model.JiraIssueReview runReview(JiraReviewRequest req, String jobId) {
         String issueSummary = fetchSummary(req.issueKey());
         String context = buildContext(req, scopeItemStore);
         String prompt  = promptTemplates.resolve(promptTemplateKey(), Map.of("jira_context", context));
 
-        String responseText = callClaude(prompt, job.getJobId());
+        String responseText = callClaude(prompt, jobId != null ? jobId : "direct-" + req.issueKey());
         if (responseText == null) {
-            fail(job, "Claude call returned no content for " + req.issueKey());
-            return;
+            throw new RuntimeException("Claude call returned no content for " + req.issueKey());
         }
 
         String cleaned = extractJson(responseText);
@@ -96,14 +122,13 @@ public abstract class AbstractScopeItemReviewHandler implements JobHandler {
         try {
             root = mapper.readTree(cleaned);
         } catch (Exception e) {
-            fail(job, "Malformed JSON from Claude for " + req.issueKey() + ": " + e.getMessage());
-            return;
+            throw new RuntimeException("Malformed JSON from Claude for " + req.issueKey() + ": " + e.getMessage());
         }
 
-        int readinessScore     = clamp(root.path("readiness_score").asInt(0));
-        String readinessLabel  = root.path("readiness_label").asText("poor");
-        int complexityScore    = clamp(root.path("complexity_score").asInt(0));
-        String improvSummary   = root.path("improvement_summary").asText("");
+        int readinessScore    = clamp(root.path("readiness_score").asInt(0));
+        String readinessLabel = root.path("readiness_label").asText("poor");
+        int complexityScore   = clamp(root.path("complexity_score").asInt(0));
+        String improvSummary  = root.path("improvement_summary").asText("");
 
         String rawStatus  = jiraService.fetchIssueStatus(req.issueKey());
         String jiraStatus = JiraStatusMapper.map(rawStatus, settings);
@@ -112,16 +137,15 @@ public abstract class AbstractScopeItemReviewHandler implements JobHandler {
                 req.scopeId(), req.issueKey(), itemTypeLabel(), issueSummary,
                 req.parentKey(), jiraStatus,
                 readinessScore, readinessLabel, complexityScore, improvSummary,
-                cleaned, job.getJobId()
+                cleaned, jobId
         );
 
-        job.setStatus(JobStatus.SUCCESS);
-        job.setSummary(itemTypeLabel().charAt(0) + itemTypeLabel().substring(1).toLowerCase()
-                + " " + req.issueKey() + " reviewed: readiness=" + readinessScore
-                + " complexity=" + complexityScore);
-        jobStore.archive(job);
-        LOG.infof("%s %s: readiness=%d label=%s complexity=%d",
-                getClass().getSimpleName(), req.issueKey(), readinessScore, readinessLabel, complexityScore);
+        return reviewStore.findByScopeAndIssueKey(req.scopeId(), req.issueKey())
+                .orElseGet(() -> new com.eneve.agent.model.JiraIssueReview(
+                        null, req.scopeId(), req.issueKey(), itemTypeLabel(),
+                        issueSummary, req.parentKey(), jiraStatus,
+                        readinessScore, readinessLabel, complexityScore, improvSummary,
+                        cleaned, jobId, Instant.now(), Instant.now()));
     }
 
     // ─── Shared helpers ───────────────────────────────────────────────────

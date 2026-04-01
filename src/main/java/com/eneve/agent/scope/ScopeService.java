@@ -9,6 +9,9 @@ import com.anthropic.models.messages.Model;
 import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.ToolDefinitions;
+import com.eneve.agent.agent.handlers.ReviewEpicHandler;
+import com.eneve.agent.agent.handlers.ReviewFeatureHandler;
+import com.eneve.agent.agent.handlers.ReviewUserStoryHandler;
 import com.eneve.agent.agent.service.JiraReviewContextBuilder;
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
@@ -84,6 +87,10 @@ public class ScopeService {
     @Inject CustomerRegistryStore customerRegistryStore;
     @Inject AgroalDataSource dataSource;
     @Inject AuditService auditService;
+
+    @Inject ReviewEpicHandler      reviewEpicHandler;
+    @Inject ReviewFeatureHandler   reviewFeatureHandler;
+    @Inject ReviewUserStoryHandler reviewUserStoryHandler;
 
     // ─── Exception types ─────────────────────────────────────────────────────
 
@@ -514,6 +521,36 @@ public class ScopeService {
         auditService.log("SCOPE", "REVIEW_ENQUEUED", "scope_item", issueKey,
                 Map.of("scopeId", scopeId, "jobId", jobId));
         return jobId;
+    }
+
+    /**
+     * Runs a review synchronously, bypassing the job queue.
+     * Returns the persisted {@link JiraIssueReview} immediately — suitable for
+     * fire-and-wait background calls from the UI (e.g. after saving a proposal).
+     *
+     * @throws ScopeNotFoundException     if the scope does not exist
+     * @throws JiraIssueNotFoundException if the issue is not found in scope_items
+     * @throws RuntimeException           if the Claude call or JSON parsing fails
+     */
+    public JiraIssueReview reviewItemDirect(String scopeId, String issueKey) {
+        if (scopeStore.findById(scopeId).isEmpty()) throw new ScopeNotFoundException(scopeId);
+
+        ScopeItem item = scopeItemStore.findByScopeAndIssueKey(scopeId, issueKey)
+                .orElseThrow(() -> new JiraIssueNotFoundException(issueKey));
+
+        JiraReviewRequest req = new JiraReviewRequest(
+                scopeId, issueKey, item.issueType(), item.parentKey(), item.grandparentKey());
+
+        var handler = switch (item.issueType()) {
+            case "EPIC"    -> reviewEpicHandler;
+            case "FEATURE" -> reviewFeatureHandler;
+            default        -> reviewUserStoryHandler;
+        };
+
+        JiraIssueReview review = handler.runReview(req, null);
+        auditService.log("SCOPE", "REVIEW_DIRECT", "scope_item", issueKey,
+                Map.of("scopeId", scopeId, "readiness", String.valueOf(review.readinessScore())));
+        return review;
     }
 
     // ─── Overrides ────────────────────────────────────────────────────────────

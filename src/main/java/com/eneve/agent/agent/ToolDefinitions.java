@@ -9,6 +9,7 @@ import com.eneve.agent.agent.tools.JiraToolSchemas;
 import com.eneve.agent.agent.tools.KnowledgeToolSchemas;
 import com.eneve.agent.agent.tools.PlanToolSchemas;
 import com.eneve.agent.agent.tools.ScopeImproveToolSchemas;
+import com.eneve.agent.agent.tools.WebSearchToolSchemas;
 import com.eneve.agent.agent.tools.WorkspaceToolSchemas;
 import com.eneve.agent.agent.tools.XrayToolSchemas;
 
@@ -31,6 +32,7 @@ public final class ToolDefinitions {
      */
     public static List<ToolUnion> scopeImproveChat() {
         return List.of(
+                ToolUnion.ofTool(WebSearchToolSchemas.webSearch()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
@@ -42,6 +44,7 @@ public final class ToolDefinitions {
     /** Read-only variant for Ask mode — research tools only, no proposal editing. */
     public static List<ToolUnion> scopeImproveChatAsk() {
         return List.of(
+                ToolUnion.ofTool(WebSearchToolSchemas.webSearch()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
@@ -173,6 +176,7 @@ public final class ToolDefinitions {
     public static List<ToolUnion> chat(boolean canExecuteJobs, boolean includeAwsTools) {
         List<ToolUnion> tools = new ArrayList<>(List.of(
                 // ── Read-only / analysis tools (all roles) ────────────────
+                ToolUnion.ofTool(WebSearchToolSchemas.webSearch()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.lookupCustomerContext()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.setProductContext()),

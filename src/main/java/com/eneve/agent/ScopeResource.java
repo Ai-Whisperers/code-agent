@@ -21,6 +21,7 @@ import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import jakarta.ws.rs.core.SecurityContext;
 import org.eclipse.microprofile.jwt.JsonWebToken;
+import org.jboss.logging.Logger;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
 import java.util.ArrayList;
@@ -41,6 +42,7 @@ import java.util.regex.Pattern;
 @RolesAllowed({"app_staff", "app_developer", "app_admin"})
 public class ScopeResource {
 
+    private static final Logger LOG = Logger.getLogger(ScopeResource.class);
     private static final Pattern ISSUE_KEY_PATTERN = Pattern.compile("^[A-Z][A-Z0-9_]+-[0-9]+$");
 
     @Inject ScopeService scopeService;
@@ -379,6 +381,30 @@ public class ScopeResource {
             return Response.ok(proposals).build();
         } catch (ScopeNotFoundException e) {
             return notFound(e.getMessage());
+        }
+    }
+
+    /**
+     * Runs an AI readiness review synchronously, bypassing the job queue.
+     * Returns the persisted {@link com.eneve.agent.model.JiraIssueReview} immediately — used
+     * by the Scope Improve page to refresh the score automatically after saving a proposal.
+     */
+    @POST
+    @Path("/{id}/items/{issueKey}/review-direct")
+    public Response reviewItemDirect(@PathParam("id") String scopeId,
+                                     @PathParam("issueKey") String issueKey) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+        try {
+            com.eneve.agent.model.JiraIssueReview review =
+                    scopeService.reviewItemDirect(scopeId, issueKey);
+            return Response.ok(review).build();
+        } catch (ScopeNotFoundException | JiraIssueNotFoundException e) {
+            return notFound(e.getMessage());
+        } catch (Exception e) {
+            LOG.errorf("Direct review failed for %s/%s: %s", scopeId, issueKey, e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Review failed: " + e.getMessage()))
+                    .build();
         }
     }
 

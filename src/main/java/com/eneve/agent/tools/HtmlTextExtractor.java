@@ -17,11 +17,26 @@ import java.util.stream.Collectors;
  * used by both {@link FetchUrlTool} and the web docs crawler.
  *
  * Security controls (enforced by {@link #validateUrl}):
- * - Only HTTPS URLs are accepted.
- * - Private/loopback IP ranges are blocked to prevent SSRF.
- * - Optional domain allowlist ({@code tools.fetch-url.allowed-domains}) restricts fetches.
+ * 1. HTTPS-only — only HTTPS scheme is accepted.
+ * 2. Reserved-TLD block — hostnames ending in IANA/RFC reserved suffixes (.local, .internal, etc.)
+ *    are rejected without DNS resolution. These are permanently non-delegated and can never be
+ *    legitimate public internet hostnames, so no configuration is required.
+ * 3. Private-IP SSRF block — the resolved IP address must not be a loopback, site-local,
+ *    link-local, or any-local address. DNS resolution failure is also rejected to prevent
+ *    DNS-rebinding attacks.
+ * 4. Optional domain allowlist ({@code tools.fetch-url.allowed-domains}) — when set, restricts
+ *    fetches to the listed domains. Leave empty (the default) to allow all public URLs.
  */
 public final class HtmlTextExtractor {
+
+    /**
+     * IANA/RFC permanently reserved TLD suffixes that can never belong to a public internet
+     * hostname. Hardcoded — these are defined by standards and never change.
+     */
+    private static final List<String> RESERVED_TLDS = List.of(
+            ".local", ".internal", ".intranet", ".corp", ".lan",
+            ".home", ".private", ".localdomain", ".localhost"
+    );
 
     private HtmlTextExtractor() {}
 
@@ -82,14 +97,23 @@ public final class HtmlTextExtractor {
             return "URL has no host";
         }
 
+        // Check 2 — reserved TLD block (zero-maintenance, no config needed)
+        String lowerHost = host.toLowerCase();
+        for (String tld : RESERVED_TLDS) {
+            if (lowerHost.equals(tld.substring(1)) || lowerHost.endsWith(tld)) {
+                return "Requests to private/internal hostnames are not allowed (reserved TLD)";
+            }
+        }
+
+        // Check 3 — private-IP SSRF block; reject on DNS failure to prevent DNS-rebinding
         try {
             InetAddress addr = InetAddress.getByName(host);
             if (addr.isLoopbackAddress() || addr.isSiteLocalAddress()
                     || addr.isLinkLocalAddress() || addr.isAnyLocalAddress()) {
                 return "Requests to private/internal addresses are not allowed";
             }
-        } catch (java.net.UnknownHostException ignored) {
-            // Unknown hosts are allowed — DNS resolution will fail at fetch time
+        } catch (java.net.UnknownHostException e) {
+            return "Cannot resolve host '" + host + "' — fetch blocked for security";
         }
 
         if (settings != null) {
