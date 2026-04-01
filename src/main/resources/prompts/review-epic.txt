@@ -2,15 +2,7 @@
 
 You are an expert product manager and agile coach performing a structured readiness review of the Jira Epic above.
 
-Your task is to evaluate whether this Epic is well-defined enough to be executed by delivery teams, and to estimate its complexity.
-
-## Critical structural rule
-
-If the Jira context above contains a "Structural Constraint" section reporting **0 child features**, this Epic has not been decomposed into Features. You MUST apply the following overrides regardless of the written description:
-- `decomposition_readiness` score MUST be ≤ 10
-- `readiness_score` MUST be ≤ 30
-- `readiness_label` MUST be `poor`
-- `improvement_summary` MUST mention that no child features exist
+Your task is to evaluate **how well this Epic is written**. The readiness_score reflects writing quality only — it is NOT penalised for having no child features. Whether the Epic has been decomposed is a structural concern captured separately in the aggregate score.
 
 ## Readiness criteria for Epics
 
@@ -18,8 +10,9 @@ If the Jira context above contains a "Structural Constraint" section reporting *
 2. **Scope definition** — What is in scope and what is explicitly out of scope is described or inferable.
 3. **Acceptance criteria** — High-level conditions that indicate when the Epic is "done" are present.
 4. **Dependencies** — Known blockers or upstream/downstream dependencies are identified.
-5. **Business value** — The value or impact of delivering this Epic is articulated.
-6. **Decomposition readiness** — The Epic is granular enough to be broken into child Features. An Epic with 0 child features in the roadmap scores at most 10 on this criterion.
+5. **Business value** — The value or impact of delivering this Epic is articulated for stakeholders.
+
+readiness_score = round( (goal_clarity + scope_definition + acceptance_criteria + dependencies + business_value) / 5 )
 
 ## Complexity scoring rubric for Epics (complexity_score 0–100)
 
@@ -39,14 +32,13 @@ Return ONLY valid JSON — no prose, no code fences, no extra text.
   "readiness_score": <integer 0-100>,
   "readiness_label": "<one of: poor | needs_refinement | ready_with_minor_improvements | fully_ready>",
   "complexity_score": <integer 0-100>,
-  "improvement_summary": "<1-3 sentence plain-language explanation of the top improvements needed. Leave empty string if fully ready.>",
+  "improvement_summary": "<1-3 sentence plain-language explanation of the top improvements needed to the Epic's own description. Leave empty string if fully ready.>",
   "criteria": {
-    "goal_clarity":              { "score": <0-100>, "comment": "<brief explanation>" },
-    "scope_definition":          { "score": <0-100>, "comment": "<brief explanation>" },
-    "acceptance_criteria":       { "score": <0-100>, "comment": "<brief explanation>" },
-    "dependencies":              { "score": <0-100>, "comment": "<brief explanation>" },
-    "business_value":            { "score": <0-100>, "comment": "<brief explanation>" },
-    "decomposition_readiness":   { "score": <0-100>, "comment": "<brief explanation>" }
+    "goal_clarity":        { "score": <0-100>, "comment": "<brief explanation>" },
+    "scope_definition":    { "score": <0-100>, "comment": "<brief explanation>" },
+    "acceptance_criteria": { "score": <0-100>, "comment": "<brief explanation>" },
+    "dependencies":        { "score": <0-100>, "comment": "<brief explanation>" },
+    "business_value":      { "score": <0-100>, "comment": "<brief explanation>" }
   }
 }
 

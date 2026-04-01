@@ -1388,17 +1388,35 @@ public class ScopeService {
         return false;
     }
 
+    /**
+     * Computes an aggregate score that blends the parent item's own writing-quality score
+     * with the (optionally complexity-weighted) average of its children's aggregate scores.
+     *
+     * <p>Formula when children are present:
+     * <pre>  aggregate = 0.40 * ownScore + 0.60 * childAvg</pre>
+     *
+     * <p>When {@code ownScore} is {@code null} (parent not yet reviewed), the aggregate is
+     * purely the child average. When {@code childScores} is empty, the parent's own score
+     * is returned as-is (leaf node or no reviewed children).
+     */
     Integer computeAggregate(Integer ownScore, List<int[]> childScores, boolean weightEnabled) {
         if (childScores.isEmpty()) return ownScore;
+
+        double childAvg;
         if (weightEnabled) {
             long totalWeight = childScores.stream().mapToLong(a -> a[1]).sum();
-            if (totalWeight == 0) {
-                return (int) Math.round(childScores.stream().mapToInt(a -> a[0]).average().orElse(0));
-            }
-            double weightedSum = childScores.stream().mapToDouble(a -> (double) a[0] * a[1]).sum();
-            return (int) Math.round(weightedSum / totalWeight);
+            childAvg = totalWeight == 0
+                    ? childScores.stream().mapToInt(a -> a[0]).average().orElse(0)
+                    : childScores.stream().mapToDouble(a -> (double) a[0] * a[1]).sum() / totalWeight;
+        } else {
+            childAvg = childScores.stream().mapToInt(a -> a[0]).average().orElse(0);
         }
-        return (int) Math.round(childScores.stream().mapToInt(a -> a[0]).average().orElse(0));
+
+        if (ownScore == null) {
+            return (int) Math.round(childAvg);
+        }
+        // Blend: own quality 40 %, children 60 %
+        return (int) Math.round(0.40 * ownScore + 0.60 * childAvg);
     }
 
     private static JobType resolveJobType(String issueType) {

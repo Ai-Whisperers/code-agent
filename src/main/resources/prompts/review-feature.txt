@@ -4,15 +4,7 @@ You are an expert product manager and agile coach performing a structured readin
 
 The parent Epic context (if provided) describes the strategic goal this Feature contributes to.
 
-Your task is to evaluate whether this Feature is well-defined enough to be implemented by a development team, and to estimate its complexity.
-
-## Critical structural rule
-
-If the Jira context above contains a "Structural Constraint" section reporting **0 child user stories**, this Feature has not been decomposed into User Stories. You MUST apply the following overrides regardless of the written description:
-- `decomposition_readiness` score MUST be ≤ 10
-- `readiness_score` MUST be ≤ 30
-- `readiness_label` MUST be `poor`
-- `improvement_summary` MUST mention that no child user stories exist
+Your task is to evaluate **how well this Feature is written**. The readiness_score reflects writing quality only — it is NOT penalised for having no child User Stories. Whether the Feature has been decomposed is a structural concern captured separately in the aggregate score.
 
 ## Readiness criteria for Features
 
@@ -21,7 +13,8 @@ If the Jira context above contains a "Structural Constraint" section reporting *
 3. **Acceptance criteria** — Specific, testable conditions for "done" are present.
 4. **Technical scope** — Key technical decisions, integrations, or constraints are noted or inferable.
 5. **Dependencies** — Upstream blockers or downstream requirements are identified.
-6. **Decomposition readiness** — The Feature can be broken into concrete User Stories. A Feature with 0 child user stories in the roadmap scores at most 10 on this criterion.
+
+readiness_score = round( (goal_clarity + user_perspective + acceptance_criteria + technical_scope + dependencies) / 5 )
 
 ## Complexity scoring rubric for Features (complexity_score 0–100)
 
@@ -41,14 +34,13 @@ Return ONLY valid JSON — no prose, no code fences, no extra text.
   "readiness_score": <integer 0-100>,
   "readiness_label": "<one of: poor | needs_refinement | ready_with_minor_improvements | fully_ready>",
   "complexity_score": <integer 0-100>,
-  "improvement_summary": "<1-3 sentence plain-language explanation of the top improvements needed. Leave empty string if fully ready.>",
+  "improvement_summary": "<1-3 sentence plain-language explanation of the top improvements needed to the Feature's own description. Leave empty string if fully ready.>",
   "criteria": {
-    "goal_clarity":              { "score": <0-100>, "comment": "<brief explanation>" },
-    "user_perspective":          { "score": <0-100>, "comment": "<brief explanation>" },
-    "acceptance_criteria":       { "score": <0-100>, "comment": "<brief explanation>" },
-    "technical_scope":           { "score": <0-100>, "comment": "<brief explanation>" },
-    "dependencies":              { "score": <0-100>, "comment": "<brief explanation>" },
-    "decomposition_readiness":   { "score": <0-100>, "comment": "<brief explanation>" }
+    "goal_clarity":        { "score": <0-100>, "comment": "<brief explanation>" },
+    "user_perspective":    { "score": <0-100>, "comment": "<brief explanation>" },
+    "acceptance_criteria": { "score": <0-100>, "comment": "<brief explanation>" },
+    "technical_scope":     { "score": <0-100>, "comment": "<brief explanation>" },
+    "dependencies":        { "score": <0-100>, "comment": "<brief explanation>" }
   }
 }
 
