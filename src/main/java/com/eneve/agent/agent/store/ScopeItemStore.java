@@ -168,6 +168,29 @@ public class ScopeItemStore {
     }
 
     /**
+     * Updates only the summary of a scope item in-place.
+     * Used when accepting a proposal without writing back to Jira.
+     */
+    public void updateSummary(String scopeId, String issueKey, String summary) {
+        String sql = """
+                UPDATE scope_items
+                SET summary   = ?,
+                    synced_at = now()
+                WHERE scope_id = ?::uuid AND issue_key = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, summary);
+            ps.setString(2, scopeId);
+            ps.setString(3, issueKey);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("ScopeItemStore.updateSummary: %s / %s: %s", scopeId, issueKey, e.getMessage());
+            throw new RuntimeException("Failed to update scope item summary", e);
+        }
+    }
+
+    /**
      * Updates the live fields of a single item from a fresh Jira fetch.
      * Called by the refresh-on-detail-open flow.
      */

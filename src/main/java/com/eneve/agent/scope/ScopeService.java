@@ -992,10 +992,10 @@ public class ScopeService {
      *   <li>EPIC — updates the existing Jira Epic in place</li>
      *   <li>FEATURE / USERSTORY — creates a new Jira issue as a child of the parent</li>
      * </ul>
-     * Marks the proposal ACCEPTED and stores the resulting Jira key.
+     * Marks the proposal ACCEPTED and applies the proposed summary to the scope item in the DB.
+     * No Jira write is performed.
      *
      * @throws ProposalNotFoundException if the proposal does not exist
-     * @throws ImprovementGenerationException if the Jira write fails
      */
     public ScopeProposal acceptProposal(String scopeId, String proposalId) {
         return acceptProposal(scopeId, proposalId, null);
@@ -1005,43 +1005,12 @@ public class ScopeService {
         ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
 
-        List<String> labels = (proposal.proposedLabel() != null && !proposal.proposedLabel().isBlank())
-                ? List.of(proposal.proposedLabel()) : null;
-        String priority = proposal.proposedPriority();
-
-        String jiraResultKey;
-        if ("EPIC".equals(proposal.issueType())) {
-            jiraService.updateIssueSystem(
-                    proposal.issueKey(),
-                    proposal.proposedSummary(),
-                    proposal.proposedDescription(),
-                    labels, priority);
-            jiraResultKey = proposal.issueKey();
-        } else {
-            // Prefer parentKey for project key derivation so that synthetic NEW-* keys work correctly
-            String rawKey = (proposal.parentKey() != null && !proposal.parentKey().isBlank())
-                    ? proposal.parentKey() : proposal.issueKey();
-            String projectKey = rawKey.replaceAll("-\\d+$", "");
-            ScopeRecord scope = scopeStore.findById(scopeId)
-                    .orElseThrow(() -> new ScopeNotFoundException(scopeId));
-            String issueType = "FEATURE".equals(proposal.issueType())
-                    ? scope.featureIssuetype()
-                    : scope.userstoryIssuetype();
-            jiraResultKey = jiraService.createIssueSystem(
-                    projectKey,
-                    proposal.proposedSummary(),
-                    proposal.proposedDescription(),
-                    issueType,
-                    proposal.parentKey(),
-                    labels != null ? labels : List.of(),
-                    null,
-                    priority);
+        // Apply the proposed summary to the existing scope item in the DB.
+        // No Jira write is performed — the DB is the source of truth here.
+        if (proposal.proposedSummary() != null && !proposal.proposedSummary().isBlank()) {
+            scopeItemStore.updateSummary(scopeId, proposal.issueKey(), proposal.proposedSummary());
         }
-
-        if (jiraResultKey == null) {
-            throw new ImprovementGenerationException(
-                    "Jira write failed for proposal " + proposalId + " — check system Jira credentials");
-        }
+        String jiraResultKey = proposal.issueKey();
 
         proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey, syncedBy);
         ScopeProposal accepted = proposalStore.findById(proposalId).orElse(proposal);

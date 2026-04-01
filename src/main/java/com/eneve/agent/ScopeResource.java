@@ -549,10 +549,8 @@ public class ScopeResource {
                                    @PathParam("proposalId") String proposalId) {
         try {
             return Response.ok(scopeService.acceptProposal(scopeId, proposalId, resolveUserDisplay())).build();
-        } catch (ProposalNotFoundException | ScopeNotFoundException e) {
+        } catch (ProposalNotFoundException e) {
             return notFound(e.getMessage());
-        } catch (ImprovementGenerationException e) {
-            return Response.status(502).entity(Map.of("error", e.getMessage())).build();
         }
     }
 
