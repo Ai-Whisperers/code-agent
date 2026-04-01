@@ -465,6 +465,30 @@ public class ClaudeToolUseLoop {
                 for (ToolUseBlock toolUse : toolUseBlocks) {
                     toolNamesList.add(toolUse.name());
                     LOG.infof("Streaming tool call: %s (id=%s)", toolUse.name(), toolUse.id());
+
+                    // Intercept ask_clarification — emit a ClarificationRequest event and provide
+                    // a synthetic tool result so Claude can finish its turn naturally.
+                    if ("ask_clarification".equals(toolUse.name())) {
+                        Map<String, Object> inputMap = convertJsonValueToMap(toolUse._input());
+                        @SuppressWarnings("unchecked")
+                        List<Map<String, Object>> questions =
+                                (List<Map<String, Object>>) inputMap.getOrDefault("questions", List.of());
+                        eventSink.accept(new ChatEvent.ClarificationRequest(questions));
+                        LOG.infof("Clarification request emitted with %d question(s)", questions.size());
+
+                        String syntheticResult = "Questions have been presented to the user. "
+                                + "Await their response in the next message before proceeding.";
+                        eventSink.accept(new ChatEvent.ToolEnd(toolUse.name(), syntheticResult));
+                        toolResults.add(ContentBlockParam.ofToolResult(
+                                ToolResultBlockParam.builder()
+                                        .toolUseId(toolUse.id())
+                                        .content(syntheticResult)
+                                        .isError(false)
+                                        .build()
+                        ));
+                        continue;
+                    }
+
                     String result = dispatchTool(toolUse, workspace);
 
                     eventSink.accept(new ChatEvent.ToolEnd(toolUse.name(), result));

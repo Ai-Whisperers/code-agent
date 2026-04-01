@@ -3,6 +3,7 @@ package com.eneve.agent.agent.model;
 import com.fasterxml.jackson.annotation.JsonSubTypes;
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -13,16 +14,17 @@ import java.util.Map;
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type", include = JsonTypeInfo.As.EXISTING_PROPERTY)
 @JsonSubTypes({
-        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,       name = "text"),
-        @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class,   name = "thinking"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,       name = "tool_start"),
-        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,         name = "tool_end"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanStart.class,       name = "plan_start"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanCreated.class,     name = "plan_created"),
-        @JsonSubTypes.Type(value = ChatEvent.PlanUpdated.class,     name = "plan_updated"),
-        @JsonSubTypes.Type(value = ChatEvent.ProposalUpdated.class, name = "proposal_updated"),
-        @JsonSubTypes.Type(value = ChatEvent.Done.class,            name = "done"),
-        @JsonSubTypes.Type(value = ChatEvent.Error.class,           name = "error")
+        @JsonSubTypes.Type(value = ChatEvent.TextDelta.class,            name = "text"),
+        @JsonSubTypes.Type(value = ChatEvent.ThinkingDelta.class,        name = "thinking"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolStart.class,            name = "tool_start"),
+        @JsonSubTypes.Type(value = ChatEvent.ToolEnd.class,              name = "tool_end"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanStart.class,            name = "plan_start"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanCreated.class,          name = "plan_created"),
+        @JsonSubTypes.Type(value = ChatEvent.PlanUpdated.class,          name = "plan_updated"),
+        @JsonSubTypes.Type(value = ChatEvent.ProposalUpdated.class,      name = "proposal_updated"),
+        @JsonSubTypes.Type(value = ChatEvent.ClarificationRequest.class, name = "clarification_request"),
+        @JsonSubTypes.Type(value = ChatEvent.Done.class,                 name = "done"),
+        @JsonSubTypes.Type(value = ChatEvent.Error.class,                name = "error")
 })
 public sealed interface ChatEvent {
 
@@ -68,6 +70,18 @@ public sealed interface ChatEvent {
     record ProposalUpdated(String type, String proposalId, Map<String, Object> proposal) implements ChatEvent {
         public ProposalUpdated(String proposalId, Map<String, Object> proposal) {
             this("proposal_updated", proposalId, proposal);
+        }
+    }
+
+    /**
+     * Emitted when Claude calls the {@code ask_clarification} tool.
+     * Each question has: {@code id}, {@code question}, {@code type}
+     * ({@code text} | {@code single_choice} | {@code multiple_choice} | {@code boolean}),
+     * and an optional {@code options} list for choice questions.
+     */
+    record ClarificationRequest(String type, List<Map<String, Object>> questions) implements ChatEvent {
+        public ClarificationRequest(List<Map<String, Object>> questions) {
+            this("clarification_request", questions);
         }
     }
 

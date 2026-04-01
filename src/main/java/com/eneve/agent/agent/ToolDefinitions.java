@@ -2,6 +2,7 @@ package com.eneve.agent.agent;
 
 import com.anthropic.models.messages.ToolUnion;
 import com.eneve.agent.agent.tools.AgentJobToolSchemas;
+import com.eneve.agent.agent.tools.AskClarificationToolSchemas;
 import com.eneve.agent.agent.tools.AwsToolSchemas;
 import com.eneve.agent.agent.tools.CommentChatToolSchemas;
 import com.eneve.agent.agent.tools.ConfluenceToolSchemas;
@@ -175,6 +176,8 @@ public final class ToolDefinitions {
      */
     public static List<ToolUnion> chat(boolean canExecuteJobs, boolean includeAwsTools) {
         List<ToolUnion> tools = new ArrayList<>(List.of(
+                // ── Clarification tool (all roles, all modes) ─────────────
+                ToolUnion.ofTool(AskClarificationToolSchemas.askClarification()),
                 // ── Read-only / analysis tools (all roles) ────────────────
                 ToolUnion.ofTool(WebSearchToolSchemas.webSearch()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
