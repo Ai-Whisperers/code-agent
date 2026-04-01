@@ -987,13 +987,15 @@ public class ScopeService {
     }
 
     /**
-     * Accepts a proposal:
+     * Accepts a proposal and synchronises the changes to Jira:
      * <ul>
-     *   <li>EPIC — updates the existing Jira Epic in place</li>
-     *   <li>FEATURE / USERSTORY — creates a new Jira issue as a child of the parent</li>
+     *   <li><b>Existing issue</b> (real Jira key) — calls the Jira REST API to update the
+     *       issue's summary, description, label, and priority in place.</li>
+     *   <li><b>New proposal</b> ({@code NEW-*} synthetic key) — creates a new Jira issue
+     *       under the proposal's parent, registers it in {@code scope_items}, and stores
+     *       the real Jira key as {@code jiraResultKey}.</li>
      * </ul>
-     * Marks the proposal ACCEPTED and applies the proposed summary to the scope item in the DB.
-     * No Jira write is performed.
+     * In all other operations (Save, Review, etc.) no Jira writes are performed.
      *
      * @throws ProposalNotFoundException if the proposal does not exist
      */
@@ -1005,18 +1007,98 @@ public class ScopeService {
         ScopeProposal proposal = proposalStore.findById(proposalId)
                 .orElseThrow(() -> new ProposalNotFoundException(proposalId));
 
-        // Apply the proposed summary to the existing scope item in the DB.
-        // No Jira write is performed — the DB is the source of truth here.
-        if (proposal.proposedSummary() != null && !proposal.proposedSummary().isBlank()) {
-            scopeItemStore.updateSummary(scopeId, proposal.issueKey(), proposal.proposedSummary());
-        }
         String jiraResultKey = proposal.issueKey();
+        boolean isNew = proposal.issueKey().startsWith("NEW-");
+        String combinedDescription = buildJiraDescription(proposal);
+        List<String> labels = (proposal.proposedLabel() != null && !proposal.proposedLabel().isBlank())
+                ? List.of(proposal.proposedLabel()) : null;
+
+        if (isNew) {
+            // Create a brand-new Jira issue for this NEW-* proposal
+            String projectKey = deriveProjectKey(proposal.parentKey());
+            if (projectKey != null) {
+                ScopeRecord scope = scopeStore.findById(scopeId).orElse(null);
+                String jiraIssueType = resolveJiraIssueType(scope, proposal.issueType());
+                String newKey = jiraService.createIssueSystem(
+                        projectKey,
+                        proposal.proposedSummary() != null ? proposal.proposedSummary() : "",
+                        combinedDescription,
+                        jiraIssueType,
+                        proposal.parentKey(),
+                        labels != null ? labels : List.of(),
+                        null,
+                        proposal.proposedPriority());
+                if (newKey != null) {
+                    jiraResultKey = newKey;
+                    // Register the new issue in scope_items so it appears in the next tree build
+                    scopeItemStore.insertItem(scopeId, newKey, proposal.issueType(),
+                            proposal.parentKey(), null, proposal.proposedSummary());
+                    LOG.infof("ScopeService.acceptProposal: created Jira issue %s from proposal %s", newKey, proposalId);
+                } else {
+                    LOG.warnf("ScopeService.acceptProposal: Jira issue creation returned null for proposal %s", proposalId);
+                }
+            } else {
+                LOG.warnf("ScopeService.acceptProposal: cannot derive project key from parentKey '%s' for proposal %s",
+                        proposal.parentKey(), proposalId);
+            }
+        } else {
+            // Update the existing Jira issue in place
+            jiraService.updateIssueSystem(
+                    proposal.issueKey(),
+                    proposal.proposedSummary(),
+                    combinedDescription,
+                    labels,
+                    proposal.proposedPriority());
+            // Keep the local DB in sync
+            if (proposal.proposedSummary() != null && !proposal.proposedSummary().isBlank()) {
+                scopeItemStore.updateSummary(scopeId, proposal.issueKey(), proposal.proposedSummary());
+            }
+            LOG.infof("ScopeService.acceptProposal: updated Jira issue %s from proposal %s", proposal.issueKey(), proposalId);
+        }
 
         proposalStore.updateStatus(proposalId, "ACCEPTED", jiraResultKey, syncedBy);
         ScopeProposal accepted = proposalStore.findById(proposalId).orElse(proposal);
         auditService.log("SCOPE", "PROPOSAL_ACCEPTED", "scope_proposal", proposalId,
-                Map.of("scopeId", scopeId));
+                Map.of("scopeId", scopeId, "jiraKey", jiraResultKey));
         return accepted;
+    }
+
+    /**
+     * Combines description, acceptance criteria, and technical notes into a single
+     * Markdown string suitable for writing to the Jira description field.
+     * Sections that are blank are omitted.
+     */
+    private static String buildJiraDescription(ScopeProposal proposal) {
+        StringBuilder sb = new StringBuilder();
+        if (proposal.proposedDescription() != null && !proposal.proposedDescription().isBlank()) {
+            sb.append(proposal.proposedDescription().strip());
+        }
+        if (proposal.proposedCriteria() != null && !proposal.proposedCriteria().isBlank()) {
+            if (sb.length() > 0) sb.append("\n\n");
+            sb.append("## Acceptance Criteria\n\n").append(proposal.proposedCriteria().strip());
+        }
+        if (proposal.proposedTechnical() != null && !proposal.proposedTechnical().isBlank()) {
+            if (sb.length() > 0) sb.append("\n\n");
+            sb.append("## Technical Notes\n\n").append(proposal.proposedTechnical().strip());
+        }
+        return sb.length() > 0 ? sb.toString() : null;
+    }
+
+    /** Extracts the Jira project key from an issue key, e.g. {@code "PROJ-123"} → {@code "PROJ"}. */
+    private static String deriveProjectKey(String issueKey) {
+        if (issueKey == null || issueKey.isBlank()) return null;
+        int dash = issueKey.indexOf('-');
+        return dash > 0 ? issueKey.substring(0, dash) : null;
+    }
+
+    /** Resolves the configured Jira issue type name for a given scope-model issue type. */
+    private static String resolveJiraIssueType(ScopeRecord scope, String issueType) {
+        if (scope == null) return "Story";
+        return switch (issueType) {
+            case "EPIC"    -> scope.epicIssuetype()        != null ? scope.epicIssuetype()        : "Epic";
+            case "FEATURE" -> scope.featureIssuetype()     != null ? scope.featureIssuetype()     : "Story";
+            default        -> scope.userstoryIssuetype()   != null ? scope.userstoryIssuetype()   : "Sub-task";
+        };
     }
 
     /**

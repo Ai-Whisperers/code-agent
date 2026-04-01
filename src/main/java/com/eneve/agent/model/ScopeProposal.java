@@ -4,8 +4,11 @@ import java.time.Instant;
 
 /**
  * Mirrors a row from {@code scope_item_proposals}.
- * A proposal is an AI-generated rewrite of a Jira issue that lives only in the
- * database until a user explicitly accepts it (which then pushes it to Jira).
+ * A proposal holds user-edited (or AI-generated) field values for a Jira issue.
+ * It stays in the database as a DRAFT until the user explicitly clicks
+ * "Accept &amp; Sync to Jira", which is the <em>only</em> operation that writes
+ * back to Jira. All other operations (Save, Review, etc.) are read-only with
+ * respect to Jira.
  */
 public record ScopeProposal(
         String id,

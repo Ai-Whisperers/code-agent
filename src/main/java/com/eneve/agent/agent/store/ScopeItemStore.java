@@ -168,8 +168,36 @@ public class ScopeItemStore {
     }
 
     /**
+     * Inserts a single scope item. If the (scope_id, issue_key) pair already exists
+     * the row is left unchanged (ON CONFLICT DO NOTHING), so this is safe to call
+     * even if a sync has already registered the issue.
+     */
+    public void insertItem(String scopeId, String issueKey, String issueType,
+                           String parentKey, String grandparentKey, String summary) {
+        String sql = """
+                INSERT INTO scope_items
+                    (scope_id, issue_key, issue_type, parent_key, grandparent_key, summary)
+                VALUES (?::uuid, ?, ?, ?, ?, ?)
+                ON CONFLICT (scope_id, issue_key) DO NOTHING
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, scopeId);
+            ps.setString(2, issueKey);
+            ps.setString(3, issueType);
+            ps.setString(4, parentKey);
+            ps.setString(5, grandparentKey);
+            ps.setString(6, summary);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("ScopeItemStore.insertItem: %s / %s: %s", scopeId, issueKey, e.getMessage());
+            throw new RuntimeException("Failed to insert scope item", e);
+        }
+    }
+
+    /**
      * Updates only the summary of a scope item in-place.
-     * Used when accepting a proposal without writing back to Jira.
+     * Called after a Jira issue has already been updated so the local DB stays in sync.
      */
     public void updateSummary(String scopeId, String issueKey, String summary) {
         String sql = """
