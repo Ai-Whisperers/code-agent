@@ -122,6 +122,12 @@
             <artifactId>quarkus-oidc</artifactId>
         </dependency>
 
+        <!-- Keycloak Admin REST Client (proxies Admin API for user management) -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-keycloak-admin-rest-client</artifactId>
+        </dependency>
+
         <!-- Structured JSON logging for CloudWatch / log aggregators -->
         <dependency>
             <groupId>io.quarkus</groupId>

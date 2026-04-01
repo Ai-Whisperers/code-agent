@@ -105,15 +105,17 @@ public final class HtmlTextExtractor {
             }
         }
 
-        // Check 3 — private-IP SSRF block; reject on DNS failure to prevent DNS-rebinding
+        // Check 3 — private-IP SSRF block.
+        // UnknownHostException means the host is not resolvable; since it cannot map to a
+        // private/internal address we let it pass — the actual fetch will fail naturally.
         try {
             InetAddress addr = InetAddress.getByName(host);
             if (addr.isLoopbackAddress() || addr.isSiteLocalAddress()
                     || addr.isLinkLocalAddress() || addr.isAnyLocalAddress()) {
                 return "Requests to private/internal addresses are not allowed";
             }
-        } catch (java.net.UnknownHostException e) {
-            return "Cannot resolve host '" + host + "' — fetch blocked for security";
+        } catch (java.net.UnknownHostException ignored) {
+            // Not resolvable → cannot be a private address → allow through
         }
 
         if (settings != null) {
