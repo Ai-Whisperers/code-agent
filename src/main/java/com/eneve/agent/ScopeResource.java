@@ -450,6 +450,37 @@ public class ScopeResource {
         }
     }
 
+    /**
+     * Returns the list of Jira attachments for a scope item, fetched live from Jira.
+     * Used by the Attachments tab in the Improve UI so attachment metadata is always fresh.
+     * Synthetic keys (NEW-*, VIRTUAL-*) return an empty list immediately.
+     */
+    @GET
+    @Blocking
+    @Path("/{id}/items/{issueKey}/attachments-list")
+    public Response listAttachments(@PathParam("id") String scopeId,
+                                    @PathParam("issueKey") String issueKey) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+        if (issueKey.startsWith("NEW-") || issueKey.startsWith("VIRTUAL-"))
+            return Response.ok(List.of()).build();
+        try {
+            List<JiraService.JiraAttachment> atts = scopeService.fetchAttachmentsForIssue(issueKey);
+            List<Map<String, Object>> payload = atts.stream()
+                    .map(a -> Map.<String, Object>of(
+                            "id",         a.id(),
+                            "filename",   a.filename(),
+                            "mimeType",   a.mimeType(),
+                            "size",       a.size(),
+                            "contentUrl", a.contentUrl()
+                    ))
+                    .toList();
+            return Response.ok(payload).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to list attachments for %s: %s", issueKey, e.getMessage());
+            return Response.serverError().entity(Map.of("error", e.getMessage())).build();
+        }
+    }
+
     @POST
     @Blocking
     @Path("/{id}/items/{issueKey}/improve-chat")

@@ -1115,6 +1115,18 @@ public class ScopeService {
         return jiraService.fetchAttachmentBytes(contentUrl);
     }
 
+    /**
+     * Returns the list of attachments for a real Jira issue.
+     * Used by the Attachments tab in the Improve UI (lazy-loaded on demand).
+     *
+     * @return attachment metadata list, never {@code null}
+     */
+    public List<JiraService.JiraAttachment> fetchAttachmentsForIssue(String issueKey) {
+        JiraService.JiraIssueDetail detail = jiraService.fetchIssueDetail(issueKey);
+        if (detail == null || detail.attachments() == null) return List.of();
+        return detail.attachments();
+    }
+
     // ─── Token stats ─────────────────────────────────────────────────────────
 
     /**
