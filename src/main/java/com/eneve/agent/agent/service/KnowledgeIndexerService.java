@@ -1,10 +1,17 @@
 package com.eneve.agent.agent.service;
 
+import com.anthropic.client.AnthropicClient;
+import com.anthropic.models.messages.ContentBlock;
+import com.anthropic.models.messages.Message;
+import com.anthropic.models.messages.MessageCreateParams;
+import com.anthropic.models.messages.MessageParam;
+import com.anthropic.models.messages.Model;
 import com.eneve.agent.agent.SecretRedactor;
 import com.eneve.agent.agent.model.StaticFileSource;
 import com.eneve.agent.agent.model.WebDocSource;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
+import com.eneve.agent.agent.store.KnowledgeQualityBlacklistStore;
 import com.eneve.agent.agent.store.StaticFileSourceStore;
 import com.eneve.agent.agent.store.WebDocSourceStore;
 import com.eneve.agent.confluence.ConfluenceService;
@@ -58,12 +65,14 @@ public class KnowledgeIndexerService {
     @Inject ConfluenceService confluenceService;
     @Inject BedrockEmbeddingService bedrockService;
     @Inject KnowledgeEmbeddingStore store;
+    @Inject KnowledgeQualityBlacklistStore qualityBlacklist;
     @Inject CustomerRegistryStore registryStore;
     @Inject SettingsService settingsService;
     @Inject WebDocsCrawlerService crawlerService;
     @Inject WebDocSourceStore webDocSourceStore;
     @Inject StaticFileSourceStore staticFileStore;
     @Inject S3Client s3Client;
+    @Inject AnthropicClient anthropicClient;
 
     @ConfigProperty(name = "attachment.s3.bucket", defaultValue = "code-agent-attachments")
     String s3Bucket;
@@ -84,6 +93,19 @@ public class KnowledgeIndexerService {
      * Index all Jira issues in a project, including attachments and linked
      * Confluence pages.
      *
+     * <p>Three optional quality filters are applied before embedding:
+     * <ol>
+     *   <li><b>JQL extra conditions</b> ({@code knowledge.indexer.jira-jql-extra}) – appended to
+     *       the base JQL so Jira discards empty/stub issues before they are even fetched.
+     *       Default: {@code description is not EMPTY}.</li>
+     *   <li><b>Minimum character count</b> ({@code knowledge.indexer.jira-min-chars}) – issues
+     *       whose combined text (summary + description + comments) is shorter than this threshold
+     *       are skipped locally. Default: {@code 100}.</li>
+     *   <li><b>Claude quality score</b> ({@code knowledge.indexer.jira-quality-filter=true}) –
+     *       a fast Claude Haiku call classifies the ticket as useful/not-useful. Disabled by
+     *       default because it adds latency and incurs extra API cost.</li>
+     * </ol>
+     *
      * @param projectKey Jira project key (e.g. "ENG")
      */
     public IndexResult indexJiraProject(String projectKey) {
@@ -93,7 +115,17 @@ public class KnowledgeIndexerService {
         List<String> errors = new ArrayList<>();
 
         int jiraMaxResults = Integer.parseInt(settingsService.get("knowledge.indexer.jira-max-results", "200"));
-        String jql = "project = \"" + projectKey + "\" ORDER BY created DESC";
+        String jqlExtra = settingsService.get("knowledge.indexer.jira-jql-extra", "description is not EMPTY");
+        int minChars = Integer.parseInt(settingsService.get("knowledge.indexer.jira-min-chars", "100"));
+        boolean qualityFilter = Boolean.parseBoolean(settingsService.get("knowledge.indexer.jira-quality-filter", "false"));
+
+        String jql = "project = \"" + projectKey + "\"";
+        if (jqlExtra != null && !jqlExtra.isBlank()) {
+            jql += " AND (" + jqlExtra.trim() + ")";
+        }
+        jql += " ORDER BY created DESC";
+
+        LOG.debugf("Jira JQL: %s (maxResults=%d, minChars=%d, qualityFilter=%b)", jql, jiraMaxResults, minChars, qualityFilter);
         List<JiraService.JiraIssueDetail> issues = jiraService.searchIssues(jql, jiraMaxResults);
 
         // Track Confluence pages already scheduled to avoid re-indexing from multiple issues
@@ -103,23 +135,48 @@ public class KnowledgeIndexerService {
             try {
                 // 1. Main issue chunk: summary + description + comments
                 String issueText = SecretRedactor.redact(buildIssueText(issue));
-                if (!issueText.isBlank()) {
-                    var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
-                            "jira",
-                            issue.key(),
-                            issue.summary(),
-                            issueText,
-                            Map.of(
-                                    "status", issue.status() != null ? issue.status() : "",
-                                    "reporter", issue.reporter() != null ? issue.reporter() : "",
-                                    "assignee", issue.assignee() != null ? issue.assignee() : "",
-                                    "labels", issue.labels() != null ? String.join(",", issue.labels()) : "",
-                                    "url", jiraService instanceof Object
-                                            ? "" : ""
-                            )
-                    );
-                    if (embedAndStore(chunk)) indexed++; else skipped++;
+                if (issueText.isBlank()) {
+                    skipped++;
+                    continue;
                 }
+
+                // 2. Minimum character guard — skip tickets that are too short to be useful
+                if (issueText.length() < minChars) {
+                    LOG.debugf("Skipping %s: text length %d below threshold %d", issue.key(), issueText.length(), minChars);
+                    skipped++;
+                    continue;
+                }
+
+                // 3. Claude quality filter — check blacklist first, then call Claude if needed
+                if (qualityFilter) {
+                    String contentHash = KnowledgeQualityBlacklistStore.md5(issueText);
+                    if (qualityBlacklist.isBlacklisted("jira", issue.key(), contentHash)) {
+                        LOG.debugf("Skipping %s: present in quality blacklist", issue.key());
+                        skipped++;
+                        continue;
+                    }
+                    if (!isHighQualityTicket(issue.key(), issueText)) {
+                        LOG.debugf("Skipping %s: classified as low quality by Claude — adding to blacklist", issue.key());
+                        qualityBlacklist.add("jira", issue.key(), contentHash, "claude-quality-filter");
+                        skipped++;
+                        continue;
+                    }
+                }
+
+                var chunk = new KnowledgeEmbeddingStore.KnowledgeChunk(
+                        "jira",
+                        issue.key(),
+                        issue.summary(),
+                        issueText,
+                        Map.of(
+                                "status", issue.status() != null ? issue.status() : "",
+                                "reporter", issue.reporter() != null ? issue.reporter() : "",
+                                "assignee", issue.assignee() != null ? issue.assignee() : "",
+                                "labels", issue.labels() != null ? String.join(",", issue.labels()) : "",
+                                "url", ""
+                        )
+                );
+                if (embedAndStore(chunk)) indexed++; else skipped++;
 
                 // 2. Attachments
                 if (issue.attachments() != null) {
@@ -535,6 +592,71 @@ public class KnowledgeIndexerService {
             }
         }
         return new String(data, StandardCharsets.UTF_8);
+    }
+
+    /**
+     * Calls Claude Haiku to decide whether a Jira ticket contains enough context
+     * to be worth indexing. A ticket is considered useful when it has a clear
+     * problem statement or acceptance criteria that a developer could act on.
+     *
+     * <p>The method returns {@code true} when Claude answers "YES" (or the call
+     * fails, so that network errors never silently drop legitimate tickets).
+     *
+     * <p>Only invoked when {@code knowledge.indexer.jira-quality-filter=true}.
+     *
+     * @param issueKey  Jira issue key, used only for log messages
+     * @param issueText full issue text produced by {@link #buildIssueText}
+     * @return {@code true} if the ticket should be indexed, {@code false} if it
+     *         should be silently skipped
+     */
+    private boolean isHighQualityTicket(String issueKey, String issueText) {
+        String model = settingsService.get("knowledge.indexer.jira-quality-model", "claude-haiku-4-5");
+        // Truncate to ~2 000 chars to keep the Haiku call cheap
+        String excerpt = issueText.length() > 2000 ? issueText.substring(0, 2000) + "\n…" : issueText;
+        String prompt = """
+                You are a triage assistant evaluating whether a Jira ticket contains \
+                enough information to be useful context for a code reviewer or developer.
+
+                A ticket is USEFUL if it has at least ONE of:
+                - A concrete description of what needs to be done or what went wrong
+                - Reproduction steps, acceptance criteria, or expected vs. actual behaviour
+                - Enough domain context for a developer to understand the purpose
+
+                A ticket is NOT USEFUL if it is:
+                - Just a title with no description (e.g. "Fix bug", "Update screen")
+                - A placeholder, template stub, or test ticket
+                - Fewer than 2 meaningful sentences of context
+
+                Reply with exactly one word: YES or NO.
+
+                Ticket:
+                """ + excerpt;
+
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(model))
+                .maxTokens(5)
+                .messages(List.of(
+                        MessageParam.builder()
+                                .role(MessageParam.Role.USER)
+                                .content(prompt)
+                                .build()
+                ))
+                .build();
+
+        try {
+            Message response = anthropicClient.messages().create(params);
+            String answer = response.content().stream()
+                    .filter(ContentBlock::isText)
+                    .map(b -> b.asText().text().trim().toUpperCase())
+                    .findFirst()
+                    .orElse("YES");
+            boolean useful = answer.startsWith("YES");
+            LOG.debugf("Quality filter for %s: %s → %s", issueKey, answer, useful ? "KEEP" : "DROP");
+            return useful;
+        } catch (Exception e) {
+            LOG.warnf("Quality filter call failed for %s (%s) — keeping ticket to avoid data loss", issueKey, e.getMessage());
+            return true;
+        }
     }
 
     private boolean embedAndStore(KnowledgeEmbeddingStore.KnowledgeChunk chunk) {
