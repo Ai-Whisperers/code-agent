@@ -421,6 +421,16 @@ public class PlanOrchestratorService {
             LOG.infof("Orchestrator: submitted job %s for step %s (%s) in plan %s (branch: %s)",
                     job.getJobId(), step.stepId(), step.jobType(), plan.planId(), sharedBranch);
         }
+
+        // If every step in the phase was skipped (unknown job types, null mappings) no jobs
+        // were submitted and onJobCompleted will never fire to advance the plan.
+        // Drive the plan forward immediately so it does not stall.
+        if (submittedJobIds.isEmpty()) {
+            LOG.warnf("Orchestrator: all steps in phase %d of plan %s were skipped — advancing to next phase",
+                    phase.order(), plan.planId());
+            ExecutionPlan reloaded = planStore.find(plan.planId()).orElse(plan);
+            submitNextPhase(reloaded, phase.order());
+        }
     }
 
     // ─── Quality loop ────────────────────────────────────────────────────────────

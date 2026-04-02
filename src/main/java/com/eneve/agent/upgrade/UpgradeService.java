@@ -17,8 +17,11 @@ import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.planner.ExecutionPlan;
 import com.eneve.agent.planner.PlanCompletedEvent;
+import com.eneve.agent.planner.PlanData;
 import com.eneve.agent.planner.PlanOrchestratorService;
+import com.eneve.agent.planner.PlanPhase;
 import com.eneve.agent.planner.PlanStatus;
+import com.eneve.agent.planner.PlanStep;
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.PlannerService;
 import com.eneve.agent.scm.GitPlatformRegistry;
@@ -282,6 +285,22 @@ public class UpgradeService {
                     0, 0));
             return null;
         }
+
+        // Convert the AI-generated markdown checklist into structured PlanData.
+        // The planner prompt produces "- [ ] task" items; parse each into a FIX step
+        // so the orchestrator has concrete jobs to submit.
+        PlanData planData = markdownToPlanData(plan.markdownContent(), specText, branchName);
+        plan = new ExecutionPlan(
+                plan.planId(), plan.status(), plan.sourceType(), plan.sourceRef(),
+                plan.repoUrl(), plan.targetBranch(), plan.title(),
+                planData,
+                plan.createdAt(), plan.updatedAt(),
+                null, null, null, null, null,
+                plan.markdownContent(), null, false, null);
+
+        LOG.infof("UpgradeService: plan %s has %d step(s) for %s/%s",
+                plan.planId(), planData.phases().stream().mapToLong(p -> p.steps().size()).sum(),
+                repo.workspace(), repo.repoSlug());
 
         planStore.create(plan);
         planStore.approve(plan.planId());
@@ -770,5 +789,92 @@ public class UpgradeService {
         String normalized = normalizeVersion(version);
         String[] parts = normalized.split("\\.");
         return parts.length >= 2 ? parts[0] + "." + parts[1] : normalized;
+    }
+
+    /**
+     * Parses the AI-generated markdown plan into a structured {@link PlanData}.
+     *
+     * <p>The planner prompt produces a checklist of {@code - [ ] task} items.
+     * Each item becomes its own sequential phase (one FIX step per phase, all sharing
+     * {@code branchName}) so that changes accumulate on the branch in order rather than
+     * running in parallel. Each phase is gated on success so a failure stops the upgrade.
+     *
+     * <p>The planner prompt now produces {@code ### Phase N: <name>} headings, each followed
+     * by a {@code - [ ] task} checklist. Each phase heading becomes a {@link PlanPhase} whose
+     * single FIX step prompt contains all the tasks for that phase, so the agent executes the
+     * whole phase in one job session. Falls back to one-phase-per-item if no headings are found,
+     * and to a single catch-all phase if no checklist items exist.
+     */
+    static PlanData markdownToPlanData(String markdown, String fallbackSpec, String branchName) {
+        if (markdown == null || markdown.isBlank()) {
+            PlanStep step = new PlanStep("upgrade-fix", "FIX", "Apply upgrade", fallbackSpec,
+                    "PENDING", null, Map.of("branchName", branchName), null);
+            return new PlanData(List.of(new PlanPhase(1, "Upgrade", true, List.of(step))));
+        }
+
+        List<PlanPhase> phases = new ArrayList<>();
+        List<String> lines = markdown.lines().toList();
+
+        // Try phase-grouped format: ### Phase N: <name>
+        String currentPhaseName = null;
+        List<String> currentTasks = new ArrayList<>();
+        int phaseOrder = 0;
+
+        for (String line : lines) {
+            String trimmed = line.trim();
+            if (trimmed.matches("###\\s+Phase\\s+\\d+.*")) {
+                if (currentPhaseName != null && !currentTasks.isEmpty()) {
+                    phases.add(buildPhase(++phaseOrder, currentPhaseName, currentTasks, branchName));
+                }
+                currentPhaseName = trimmed.replaceFirst("###\\s+Phase\\s+\\d+[:\\s]*", "").trim();
+                if (currentPhaseName.isBlank()) currentPhaseName = "Phase " + (phaseOrder + 1);
+                currentTasks = new ArrayList<>();
+            } else if (currentPhaseName != null
+                    && (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] "))) {
+                currentTasks.add(trimmed.substring(6).trim());
+            }
+        }
+        if (currentPhaseName != null && !currentTasks.isEmpty()) {
+            phases.add(buildPhase(++phaseOrder, currentPhaseName, currentTasks, branchName));
+        }
+
+        // Fall back to flat checklist: one phase per checklist item
+        if (phases.isEmpty()) {
+            int order = 1;
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ")) {
+                    String title = trimmed.substring(6).trim();
+                    PlanStep step = new PlanStep("upgrade-step-" + order, "FIX", title, title,
+                            "PENDING", null, Map.of("branchName", branchName), null);
+                    phases.add(new PlanPhase(order, title, true, List.of(step)));
+                    order++;
+                }
+            }
+        }
+
+        // Last resort: single phase with the full markdown as the prompt
+        if (phases.isEmpty()) {
+            PlanStep step = new PlanStep("upgrade-fix", "FIX", "Apply upgrade", markdown,
+                    "PENDING", null, Map.of("branchName", branchName), null);
+            phases.add(new PlanPhase(1, "Upgrade", true, List.of(step)));
+        }
+
+        return new PlanData(phases);
+    }
+
+    /**
+     * Builds a single {@link PlanPhase} from a list of task strings.
+     * The phase has one FIX step whose prompt is all tasks joined as a numbered list,
+     * giving the agent the full context for the phase in one job.
+     */
+    private static PlanPhase buildPhase(int order, String name, List<String> tasks, String branchName) {
+        StringBuilder prompt = new StringBuilder();
+        for (int i = 0; i < tasks.size(); i++) {
+            prompt.append(i + 1).append(". ").append(tasks.get(i)).append("\n");
+        }
+        PlanStep step = new PlanStep("upgrade-phase-" + order, "FIX", name, prompt.toString().trim(),
+                "PENDING", null, Map.of("branchName", branchName), null);
+        return new PlanPhase(order, name, true, List.of(step));
     }
 }

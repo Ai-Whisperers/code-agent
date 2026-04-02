@@ -24,14 +24,15 @@ public class BuildValidator {
     public void validate(WorkspaceContext workspace) throws Exception {
         long timeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         String effectiveJavaHome = settings.get("build.java-home", "").isBlank() ? null : settings.get("build.java-home", "");
-        String command = detectTestCommand(workspace.getRoot());
+        String effectiveMavenHome = settings.get("build.maven-home", "").isBlank() ? null : settings.get("build.maven-home", "");
+        String command = detectTestCommand(workspace.getRoot(), effectiveMavenHome);
         if (command == null) {
             LOG.info("No recognized test command found, skipping build validation");
             return;
         }
 
         LOG.infof("Build validation using: %s", command);
-        ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
+        ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(effectiveJavaHome, effectiveMavenHome, "sh", "-c", command)
                 .directory(workspace.getRoot().toFile())
                 .redirectErrorStream(true);
         Process proc = pb.start();
@@ -77,9 +78,9 @@ public class BuildValidator {
         return tail.isBlank() ? head : head + "\n...\n" + tail;
     }
 
-    private String detectTestCommand(Path root) {
+    private String detectTestCommand(Path root, String mavenHome) {
         if (Files.exists(root.resolve("pom.xml"))) {
-            return ProcessHelper.mvn(root) + " test";
+            return ProcessHelper.mvn(root, mavenHome) + " test";
         }
         if (Files.exists(root.resolve("build.gradle")) || Files.exists(root.resolve("build.gradle.kts"))) {
             return "gradle test";

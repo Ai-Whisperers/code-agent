@@ -51,7 +51,9 @@ public class SpotBugsLinter implements LinterRunner {
     @Override
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running SpotBugs analysis (compile + analyze)...");
-        String mvn = ProcessHelper.mvn(workspaceRoot);
+        String mavenHomeVal = settings.get("build.maven-home", "");
+        String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
+        String mvn = ProcessHelper.mvn(workspaceRoot, effectiveMavenHome);
         String javaHomeVal = settings.get("build.java-home", "");
         String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
 
@@ -69,7 +71,7 @@ public class SpotBugsLinter implements LinterRunner {
         }
 
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", mvn + SPOTBUGS_ARGS)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(effectiveJavaHome, effectiveMavenHome, "sh", "-c", mvn + SPOTBUGS_ARGS)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
@@ -105,8 +107,10 @@ public class SpotBugsLinter implements LinterRunner {
             throws CompilationFailedException {
         String javaHomeVal = settings.get("build.java-home", "");
         String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
+        String mavenHomeVal = settings.get("build.maven-home", "");
+        String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(effectiveJavaHome, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 

@@ -342,12 +342,15 @@ public class JobStore {
 
     /**
      * Looks up the workspace_path recorded on the most recent FAILED job for the given
-     * branch name. Returns {@code null} if no such job exists or it has no preserved path.
+     * branch name. Searches both {@code job_history} (archived jobs) and the active
+     * {@code jobs} table (jobs that failed but haven't been archived yet when the retry starts).
+     * Returns {@code null} if no such job exists or it has no preserved path.
      * Used by RunFixHandler to reuse an already-cloned workspace instead of cloning again.
      */
     public String findPreservedWorkspacePath(String branchName) {
         if (branchName == null || branchName.isBlank()) return null;
-        String sql = """
+        // Search job_history first (most common case — job is archived before retry)
+        String historySql = """
                 SELECT workspace_path FROM job_history
                 WHERE fix_branch_name = ?
                   AND status = 'FAILED'
@@ -355,11 +358,33 @@ public class JobStore {
                 ORDER BY archived_at DESC
                 LIMIT 1
                 """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, branchName);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) return rs.getString("workspace_path");
+        // Also check the active jobs table in case the job failed but hasn't been archived yet
+        String activeSql = """
+                SELECT workspace_path FROM jobs
+                WHERE fix_branch_name = ?
+                  AND status = 'FAILED'
+                  AND workspace_path IS NOT NULL
+                ORDER BY updated_at DESC
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection()) {
+            try (PreparedStatement ps = conn.prepareStatement(historySql)) {
+                ps.setString(1, branchName);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        String path = rs.getString("workspace_path");
+                        if (path != null && !path.isBlank()) return path;
+                    }
+                }
+            }
+            try (PreparedStatement ps = conn.prepareStatement(activeSql)) {
+                ps.setString(1, branchName);
+                try (ResultSet rs = ps.executeQuery()) {
+                    if (rs.next()) {
+                        String path = rs.getString("workspace_path");
+                        if (path != null && !path.isBlank()) return path;
+                    }
+                }
             }
         } catch (SQLException e) {
             LOG.warnf("findPreservedWorkspacePath(%s) failed: %s", branchName, e.getMessage());

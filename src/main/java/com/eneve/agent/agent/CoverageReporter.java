@@ -242,16 +242,23 @@ public class CoverageReporter {
             }
         }
 
+        // Use fully-qualified goal form (groupId:artifactId:goal) so Maven does not need
+        // to resolve the "jacoco" prefix from plugin groups — this works even when the
+        // plugin is not yet cached in the local Nexus/Maven repository.
         // -Dmaven.test.failure.ignore=true lets Maven continue to jacoco:report even
-        // when environment-sensitive integration tests fail in the sandbox (e.g. @QuarkusTest
-        // that cannot start the full application). Coverage from the passing tests is still valid.
-        String command = ProcessHelper.mvn(workspace.getRoot())
-                + " jacoco:prepare-agent test jacoco:report -q -Dmaven.test.failure.ignore=true";
+        // when environment-sensitive integration tests fail in the sandbox.
+        String mavenHomeVal = settings.get("build.maven-home", "");
+        String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
+        String jacocoVersion = settings.get("quality-report.jacoco.version", "0.8.12");
+        String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+        String command = ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome)
+                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
+                + " -q -Dmaven.test.failure.ignore=true";
 
         LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
                 jacocoPresent ? "configured" : "injected into pom.xml", command);
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();
@@ -265,8 +272,17 @@ public class CoverageReporter {
             }
             if (proc.exitValue() != 0) {
                 // Non-zero even with test.failure.ignore means a build/compile error — no report possible.
-                String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
-                LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s", proc.exitValue(), tail);
+                // Detect known permanent incompatibilities and log them concisely at DEBUG to avoid
+                // flooding the logs on every quality report run for projects that will never compile.
+                if (isJdkIncompatibilityError(output)) {
+                    LOG.debugf("CoverageReporter: skipping coverage for %s — JDK/compiler incompatibility " +
+                            "(project requires a different Java version than the one running the agent)",
+                            workspace.getRoot().getFileName());
+                } else {
+                    String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
+                    LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s",
+                            proc.exitValue(), tail);
+                }
                 return null;
             }
             // Warn if any tests failed so callers can see it in the logs, but proceed.
@@ -321,10 +337,15 @@ public class CoverageReporter {
         }
 
         LOG.info("Running JaCoCo coverage measurement...");
-        String command = ProcessHelper.mvn(workspace.getRoot())
-                + " jacoco:prepare-agent test jacoco:report -q -Dmaven.test.failure.ignore=true";
+        String mavenHomeVal2 = settings.get("build.maven-home", "");
+        String effectiveMavenHome2 = mavenHomeVal2.isBlank() ? null : mavenHomeVal2;
+        String jacocoVersion = settings.get("quality-report.jacoco.version", "0.8.12");
+        String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+        String command = ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome2)
+                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
+                + " -q -Dmaven.test.failure.ignore=true";
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome2, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();
@@ -337,6 +358,10 @@ public class CoverageReporter {
             }
             if (proc.exitValue() != 0) {
                 // Non-zero even with test.failure.ignore means a build/compile error.
+                if (isJdkIncompatibilityError(output)) {
+                    LOG.debugf("CoverageReporter: skipping coverage — JDK/compiler incompatibility");
+                    return null;
+                }
                 String tail = output.length() > 3000 ? output.substring(output.length() - 3000) : output;
                 throw new RuntimeException("Build error during coverage measurement (exit "
                         + proc.exitValue() + "):\n" + tail);
@@ -363,6 +388,24 @@ public class CoverageReporter {
             LOG.warnf("Failed to parse JaCoCo report: %s", e.getMessage());
             return null;
         }
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────
+
+    /**
+     * Returns true when the Maven output indicates a permanent JDK/compiler version
+     * incompatibility — i.e. the project cannot be compiled by the JDK running the agent.
+     * These failures are not transient and should not produce a WARN on every run.
+     */
+    private static boolean isJdkIncompatibilityError(String output) {
+        if (output == null) return false;
+        return output.contains("NoSuchFieldError")
+                || output.contains("NoSuchMethodError")
+                || output.contains("UnsupportedClassVersionError")
+                || output.contains("Fatal error compiling")
+                || output.contains("release version")
+                || output.contains("source release")
+                || output.contains("--release");
     }
 
     // ─── POM manipulation ────────────────────────────────────────────────

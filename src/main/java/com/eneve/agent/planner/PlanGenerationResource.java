@@ -260,29 +260,79 @@ public class PlanGenerationResource {
             return Response.status(400).entity(Map.of("error", "Plan has no markdown content to parse")).build();
         }
 
-        List<PlanStep> steps = new ArrayList<>();
-        int order = 1;
-        for (String line : markdown.lines().toList()) {
+        // Parse phase-grouped format (### Phase N: <name>) or fall back to flat checklist.
+        // Reuses the same logic as UpgradeService so both paths stay consistent.
+        List<String> lines = markdown.lines().toList();
+        List<PlanPhase> phases = new ArrayList<>();
+
+        String currentPhaseName = null;
+        List<String> currentTasks = new ArrayList<>();
+        int phaseOrder = 0;
+
+        for (String line : lines) {
             String trimmed = line.trim();
-            if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ")) {
-                String title = trimmed.substring(6).trim();
-                steps.add(new PlanStep("step-" + order, "FIX", title, title, "PENDING", null, Map.of(), null));
-                order++;
+            if (trimmed.matches("###\\s+Phase\\s+\\d+.*")) {
+                if (currentPhaseName != null && !currentTasks.isEmpty()) {
+                    phases.add(buildReplanPhase(++phaseOrder, currentPhaseName, currentTasks));
+                }
+                currentPhaseName = trimmed.replaceFirst("###\\s+Phase\\s+\\d+[:\\s]*", "").trim();
+                if (currentPhaseName.isBlank()) currentPhaseName = "Phase " + (phaseOrder + 1);
+                currentTasks = new ArrayList<>();
+            } else if (currentPhaseName != null
+                    && (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] "))) {
+                currentTasks.add(trimmed.substring(6).trim());
             }
         }
-        if (steps.isEmpty()) {
+        if (currentPhaseName != null && !currentTasks.isEmpty()) {
+            phases.add(buildReplanPhase(++phaseOrder, currentPhaseName, currentTasks));
+        }
+
+        // Fall back to flat checklist: one step per item in a single phase
+        if (phases.isEmpty()) {
+            List<PlanStep> steps = new ArrayList<>();
+            int order = 1;
+            for (String line : lines) {
+                String trimmed = line.trim();
+                if (trimmed.startsWith("- [ ] ") || trimmed.startsWith("- [x] ") || trimmed.startsWith("- [X] ")) {
+                    String title = trimmed.substring(6).trim();
+                    steps.add(new PlanStep("step-" + order, "FIX", title, title, "PENDING", null, Map.of(), null));
+                    order++;
+                }
+            }
+            if (!steps.isEmpty()) {
+                phases.add(new PlanPhase(1, "Replanned Steps", true, steps));
+            }
+        }
+
+        if (phases.isEmpty()) {
             return Response.status(400).entity(Map.of("error", "No checklist items found in markdown content")).build();
         }
 
-        PlanData newPlanData = new PlanData(List.of(new PlanPhase(1, "Replanned Steps", true, steps)));
+        PlanData newPlanData = new PlanData(phases);
         trackedJobStore.deleteByPlanId(planId);
         planStore.updatePlanData(planId, newPlanData);
         planStore.approve(planId);
 
-        LOG.infof("Plan %s replanned from markdown with %d step(s); transitioned to APPROVED", planId, steps.size());
+        LOG.infof("Plan %s replanned from markdown with %d phase(s); transitioned to APPROVED", planId, phases.size());
         return planStore.find(planId)
                 .map(p -> Response.ok(p).build())
                 .orElse(Response.status(404).entity(Map.of("error", "Plan not found after replan")).build());
+    }
+
+    // ─── Helpers ─────────────────────────────────────────────────────────────
+
+    /**
+     * Builds a single {@link PlanPhase} from a list of task strings for the replan flow.
+     * The phase has one FIX step whose prompt is all tasks joined as a numbered list.
+     */
+    private static PlanPhase buildReplanPhase(int order, String name, List<String> tasks) {
+        StringBuilder prompt = new StringBuilder();
+        for (int i = 0; i < tasks.size(); i++) {
+            prompt.append(i + 1).append(". ").append(tasks.get(i)).append("\n");
+        }
+        PlanStep step = new PlanStep("step-" + order, "FIX", name, prompt.toString().trim(),
+                "PENDING", null, Map.of(), null);
+        return new PlanPhase(order, name, true, List.of(step));
     }
 
     // ─── Request/Response records ─────────────────────────────────────────────

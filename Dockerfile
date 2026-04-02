@@ -110,6 +110,7 @@ ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1
+ENV BUILD_MAVEN_HOME=/opt/maven
 
 # Store settings.xml outside of .m2 so it is always available even when a
 # named volume is mounted over /home/appuser/.m2.  The entrypoint script

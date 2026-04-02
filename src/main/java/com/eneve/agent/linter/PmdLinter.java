@@ -50,11 +50,13 @@ public class PmdLinter implements LinterRunner {
     @Override
     public LinterResult run(Path workspaceRoot, long timeoutMinutes) {
         LOG.info("Running PMD analysis...");
-        String command = ProcessHelper.mvn(workspaceRoot) + PMD_ARGS;
+        String mavenHomeVal = settings.get("build.maven-home", "");
+        String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
+        String command = ProcessHelper.mvn(workspaceRoot, effectiveMavenHome) + PMD_ARGS;
         String javaHomeVal = settings.get("build.java-home", "");
         String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(effectiveJavaHome, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(effectiveJavaHome, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
                     .redirectErrorStream(true);
 
