@@ -38,7 +38,6 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -107,12 +106,10 @@ public class SpeechResource {
             int    sampleRate = Integer.parseInt(
                 settings.get(TRANSCRIBE_SAMPLE_RATE_KEY, TRANSCRIBE_SAMPLE_RATE_DEFAULT));
             String language   = resolveLanguageCode(form.language);
-            String mimeType   = (form.mimeType != null && !form.mimeType.isBlank())
-                ? form.mimeType : "audio/webm";
 
-            MediaEncoding encoding = resolveEncoding(mimeType);
-
-            String transcript = streamToTranscribe(audioBytes, region, sampleRate, language, encoding);
+            // The frontend always sends signed 16-bit LE PCM wrapped in a WAV container.
+            // We strip the 44-byte WAV header before streaming raw PCM to Transcribe.
+            String transcript = streamToTranscribe(audioBytes, region, sampleRate, language);
 
             LOG.debugf("Transcribed %d bytes → \"%s\"", audioBytes.length, transcript);
             return Response.ok(Map.of("transcript", transcript)).build();
@@ -133,8 +130,18 @@ public class SpeechResource {
             byte[] audioBytes,
             String region,
             int sampleRate,
-            String language,
-            MediaEncoding encoding) throws Exception {
+            String language) throws Exception {
+
+        // Strip the RIFF/WAV header — Transcribe PCM expects raw samples only.
+        // Parse the actual data-chunk offset from the header instead of hardcoding 44,
+        // in case the browser ever writes an extended fmt chunk.
+        int dataOffset = findWavDataOffset(audioBytes);
+        LOG.debugf("WAV: total=%d bytes, dataOffset=%d, PCM payload=%d bytes (~%.1f ms at %d Hz)",
+            audioBytes.length, dataOffset, audioBytes.length - dataOffset,
+            (audioBytes.length - dataOffset) / 2.0 / sampleRate * 1000, sampleRate);
+        if (dataOffset > 0 && audioBytes.length > dataOffset) {
+            audioBytes = java.util.Arrays.copyOfRange(audioBytes, dataOffset, audioBytes.length);
+        }
 
         AtomicReference<StringBuilder> transcriptRef = new AtomicReference<>(new StringBuilder());
 
@@ -161,7 +168,7 @@ public class SpeechResource {
 
             StartStreamTranscriptionRequest request = StartStreamTranscriptionRequest.builder()
                 .languageCode(LanguageCode.fromValue(language))
-                .mediaEncoding(encoding)
+                .mediaEncoding(MediaEncoding.PCM)
                 .mediaSampleRateHertz(sampleRate)
                 .build();
 
@@ -177,16 +184,55 @@ public class SpeechResource {
     }
 
     // -------------------------------------------------------------------------
+    // WAV header parser
+    // -------------------------------------------------------------------------
+
+    /**
+     * Walks the RIFF chunk list to find the byte offset of the {@code data} chunk payload.
+     * Returns 44 as a safe fallback if the header cannot be parsed.
+     */
+    private static int findWavDataOffset(byte[] wav) {
+        // Minimum RIFF header: "RIFF"(4) + size(4) + "WAVE"(4) + at least one chunk(8)
+        if (wav == null || wav.length < 20) return 44;
+        // Verify RIFF + WAVE magic
+        if (wav[0] != 'R' || wav[1] != 'I' || wav[2] != 'F' || wav[3] != 'F') return 44;
+        if (wav[8] != 'W' || wav[9] != 'A' || wav[10] != 'V' || wav[11] != 'E') return 44;
+
+        int pos = 12; // start of first chunk after "WAVE"
+        while (pos + 8 <= wav.length) {
+            // chunk id (4 bytes) + chunk size (4 bytes, little-endian)
+            int chunkSize = ((wav[pos + 4] & 0xFF))
+                          | ((wav[pos + 5] & 0xFF) << 8)
+                          | ((wav[pos + 6] & 0xFF) << 16)
+                          | ((wav[pos + 7] & 0xFF) << 24);
+            if (wav[pos] == 'd' && wav[pos + 1] == 'a' && wav[pos + 2] == 't' && wav[pos + 3] == 'a') {
+                return pos + 8; // data payload starts right after the 8-byte chunk header
+            }
+            // Advance to next chunk (chunk size must be even-padded per RIFF spec)
+            pos += 8 + chunkSize + (chunkSize % 2);
+        }
+        return 44; // fallback
+    }
+
+    // -------------------------------------------------------------------------
     // Reactive Streams Publisher that emits AudioEvent chunks from a byte array
     // -------------------------------------------------------------------------
 
     /**
      * Wraps a byte array in a Reactive Streams {@link Publisher} of {@link AudioStream}
      * events. Each {@link AudioEvent} carries at most {@value #CHUNK_BYTES} bytes.
+     *
+     * <p>The subscription uses an unbounded-demand model: on the first {@code request(n)}
+     * call it submits all chunks to a single-thread executor and signals {@code onComplete()}
+     * immediately after the last chunk. This avoids the race where a demand-gated loop
+     * exits before all audio is sent and never calls {@code onComplete()}, which would
+     * cause Amazon Transcribe to time out waiting for more data.
      */
     private static final class ByteArrayAudioPublisher implements Publisher<AudioStream> {
 
-        private static final int CHUNK_BYTES = 32 * 1024;
+        // Transcribe Streaming's EventStream framing adds ~100 bytes of header overhead
+        // per frame. The documented maximum audio payload per event is 8 KB.
+        private static final int CHUNK_BYTES = 8 * 1024;
 
         private final byte[] audio;
 
@@ -204,9 +250,8 @@ public class SpeechResource {
             private final Subscriber<? super AudioStream> subscriber;
             private final byte[] audio;
             private final ExecutorService executor = Executors.newSingleThreadExecutor();
-            private final AtomicLong demand = new AtomicLong(0);
+            private volatile boolean started   = false;
             private volatile boolean cancelled = false;
-            private int offset = 0;
 
             AudioSubscription(Subscriber<? super AudioStream> subscriber, byte[] audio) {
                 this.subscriber = subscriber;
@@ -215,12 +260,10 @@ public class SpeechResource {
 
             @Override
             public void request(long n) {
-                if (n <= 0) {
-                    subscriber.onError(new IllegalArgumentException("Demand must be positive"));
-                    return;
-                }
-                demand.addAndGet(n);
-                executor.submit(this::drain);
+                // Guard against re-entrant calls; emit all chunks exactly once.
+                if (started) return;
+                started = true;
+                executor.submit(this::emitAll);
             }
 
             @Override
@@ -229,26 +272,25 @@ public class SpeechResource {
                 executor.shutdown();
             }
 
-            private void drain() {
+            private void emitAll() {
                 try {
-                    while (!cancelled && demand.get() > 0 && offset < audio.length) {
-                        int end   = Math.min(offset + CHUNK_BYTES, audio.length);
-                        int len   = end - offset;
-                        ByteBuffer buf = ByteBuffer.wrap(audio, offset, len);
+                    int offset = 0;
+                    while (!cancelled && offset < audio.length) {
+                        int end = Math.min(offset + CHUNK_BYTES, audio.length);
+                        ByteBuffer buf = ByteBuffer.wrap(audio, offset, end - offset);
                         offset = end;
 
-                        AudioEvent event = AudioEvent.builder()
+                        subscriber.onNext(AudioEvent.builder()
                             .audioChunk(SdkBytes.fromByteBuffer(buf))
-                            .build();
-
-                        subscriber.onNext(event);
-                        demand.decrementAndGet();
+                            .build());
                     }
-                    if (!cancelled && offset >= audio.length) {
+                    if (!cancelled) {
                         subscriber.onComplete();
                     }
                 } catch (Exception e) {
                     subscriber.onError(e);
+                } finally {
+                    executor.shutdown();
                 }
             }
         }
@@ -257,22 +299,6 @@ public class SpeechResource {
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
-
-    /**
-     * Maps the browser-reported MIME type to the Transcribe {@link MediaEncoding}.
-     * <ul>
-     *   <li>OGG/Opus → {@code OGG_OPUS} (native, no re-encoding needed)</li>
-     *   <li>WAV/PCM  → {@code PCM}</li>
-     *   <li>WebM/Opus → {@code OGG_OPUS} (Transcribe accepts WebM/Opus as ogg_opus)</li>
-     * </ul>
-     */
-    private static MediaEncoding resolveEncoding(String mimeType) {
-        String base = mimeType.toLowerCase().split(";")[0].trim();
-        return switch (base) {
-            case "audio/wav", "audio/wave", "audio/pcm" -> MediaEncoding.PCM;
-            default -> MediaEncoding.OGG_OPUS;
-        };
-    }
 
     /**
      * Maps a BCP-47 / ISO-639-1 language tag (e.g. {@code "en"}, {@code "nl-NL"})
@@ -316,15 +342,10 @@ public class SpeechResource {
 
     public static class AudioUploadForm {
 
-        /** Raw audio bytes (webm/opus, ogg/opus, wav). */
+        /** Raw audio as a RIFF/WAV file (signed 16-bit LE PCM, mono, 16 kHz). */
         @RestForm("audio")
         @PartType(MediaType.APPLICATION_OCTET_STREAM)
         public InputStream audio;
-
-        /** MIME type reported by MediaRecorder, e.g. "audio/webm;codecs=opus". */
-        @RestForm("mimeType")
-        @PartType(MediaType.TEXT_PLAIN)
-        public String mimeType;
 
         /** Optional BCP-47 language hint, e.g. "en" or "nl-NL". Defaults to "en-US". */
         @RestForm("language")

@@ -44,6 +44,16 @@ public abstract class AbstractPrWebhookHandler {
     protected Response submitReviewJob(String repoUrl, String prId, String targetBranch,
                                        String jiraKey, String headCommitSha,
                                        String workspace, String repoSlug, String prAuthor) {
+        if (jobStore.hasActiveReviewJobForPr(prId)) {
+            LOG.infof("%s webhook skipped duplicate review for PR/MR %s — active review job already exists",
+                    getClass().getSimpleName(), prId);
+            return Response.ok(Map.of(
+                    "action", "skipped",
+                    "reason", "Active review job already exists for this PR",
+                    "prId", prId
+            )).build();
+        }
+
         String rulesRepoUrl = settingsService.get("rules.repo.url", "");
         ReviewPrRequest request = new ReviewPrRequest(
                 repoUrl, prId, targetBranch, jiraKey,

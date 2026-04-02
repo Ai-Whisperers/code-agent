@@ -294,7 +294,7 @@ public class ReviewHandler implements JobHandler {
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 lifecycle.safeJira(() -> jiraService.commentStarted(request.jiraKey(),
-                        "PR review for #" + request.prId()));
+                        "Code review", "PR review for #" + request.prId()));
             }
 
             ReviewPromptResult promptResult = promptBuilder.buildReviewPrompt(
@@ -327,7 +327,7 @@ public class ReviewHandler implements JobHandler {
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 lifecycle.safeJira(() -> jiraService.commentSuccess(request.jiraKey(),
-                        "PR #" + request.prId(), "Code review completed."));
+                        "Code review", "PR #" + request.prId(), "Code review completed."));
             }
 
             RunResult result = lifecycle.buildReviewResult(job, true);

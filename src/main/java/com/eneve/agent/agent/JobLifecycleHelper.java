@@ -75,7 +75,7 @@ public class JobLifecycleHelper {
         auditLog("JOBS", "JOB_FAILED", "job", job.getJobId(), java.util.Map.of("errorMessage", message));
 
         RunFixRequest request = job.getRequest();
-        safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+        safeJira(() -> jiraService.commentFailure(request.jiraKey(), "Automated fix", message));
 
         RunResult result = buildResult(job, false);
         teamsNotifier.sendNotification(result);
@@ -91,7 +91,7 @@ public class JobLifecycleHelper {
 
         ReviewPrRequest request = job.getReviewRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), "Code review", message));
         }
 
         RunResult result = buildReviewResult(job, false);
@@ -107,7 +107,7 @@ public class JobLifecycleHelper {
 
         FixPrRequest request = job.getFixPrRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), "Fix PR", message));
         }
 
         RunResult result = buildFixPrResult(job, false);
@@ -123,7 +123,7 @@ public class JobLifecycleHelper {
 
         GenerateTestsRequest request = job.getGenerateTestsRequest();
         if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-            safeJira(() -> jiraService.commentFailure(request.jiraKey(), message));
+            safeJira(() -> jiraService.commentFailure(request.jiraKey(), "Generate tests", message));
         }
 
         RunResult result = buildGenerateTestsResult(job, false);

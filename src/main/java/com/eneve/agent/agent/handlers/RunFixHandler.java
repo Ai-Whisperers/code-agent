@@ -156,7 +156,7 @@ public class RunFixHandler implements JobHandler {
             }
 
             lifecycle.safeJira(() -> jiraService.commentStarted(
-                    request.jiraKey(), request.branchName()));
+                    request.jiraKey(), "Automated fix", request.branchName()));
 
             String systemPrompt = promptBuilder.buildRunFixPrompt(
                     request, effectivePrompt, workspace, baselineSummary);

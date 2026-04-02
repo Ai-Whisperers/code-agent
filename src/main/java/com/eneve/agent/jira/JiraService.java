@@ -289,16 +289,16 @@ public class JiraService {
         transitions.transitionToRejected(issueKey);
     }
 
-    public void commentStarted(String issueKey, String branchName) {
-        transitions.commentStarted(issueKey, branchName);
+    public void commentStarted(String issueKey, String label, String branchName) {
+        transitions.commentStarted(issueKey, label, branchName);
     }
 
-    public void commentSuccess(String issueKey, String prUrl, String summary) {
-        transitions.commentSuccess(issueKey, prUrl, summary);
+    public void commentSuccess(String issueKey, String label, String prUrl, String summary) {
+        transitions.commentSuccess(issueKey, label, prUrl, summary);
     }
 
-    public void commentFailure(String issueKey, String errorMessage) {
-        transitions.commentFailure(issueKey, errorMessage);
+    public void commentFailure(String issueKey, String label, String errorMessage) {
+        transitions.commentFailure(issueKey, label, errorMessage);
     }
 
     public void commentMerged(String issueKey) {

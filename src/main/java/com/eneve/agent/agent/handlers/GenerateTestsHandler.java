@@ -151,7 +151,7 @@ public class GenerateTestsHandler implements JobHandler {
             }
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-                lifecycle.safeJira(() -> jiraService.commentStarted(request.jiraKey(), testBranch));
+                lifecycle.safeJira(() -> jiraService.commentStarted(request.jiraKey(), "Generate tests", testBranch));
             }
 
             String systemPrompt = promptBuilder.buildGenerateTestsPrompt(request, workspace, baselineCoverage);
@@ -298,7 +298,7 @@ public class GenerateTestsHandler implements JobHandler {
                 final String capturedPrUrl = prUrl;
                 final String capturedSummary = summary;
                 lifecycle.safeJira(() -> jiraService.commentSuccess(
-                        request.jiraKey(), capturedPrUrl, capturedSummary));
+                        request.jiraKey(), "Generate tests", capturedPrUrl, capturedSummary));
             }
 
             RunResult result = lifecycle.buildGenerateTestsResult(job, true);

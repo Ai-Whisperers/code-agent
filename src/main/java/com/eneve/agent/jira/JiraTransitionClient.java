@@ -79,16 +79,16 @@ class JiraTransitionClient {
         http.post("/rest/api/3/issue/" + issueKey + "/transitions", body, "transition");
     }
 
-    void commentStarted(String issueKey, String branchName) {
-        addComment(issueKey, "Automated fix started. Branch: " + branchName);
+    void commentStarted(String issueKey, String label, String branchName) {
+        addComment(issueKey, label + " started. Branch: " + branchName);
     }
 
-    void commentSuccess(String issueKey, String prUrl, String summary) {
-        addComment(issueKey, "Automated fix completed.\n\nPR: " + prUrl + "\n\nSummary: " + summary);
+    void commentSuccess(String issueKey, String label, String prUrl, String summary) {
+        addComment(issueKey, label + " completed.\n\nPR: " + prUrl + "\n\nSummary: " + summary);
     }
 
-    void commentFailure(String issueKey, String errorMessage) {
-        addComment(issueKey, "Automated fix failed: " + errorMessage);
+    void commentFailure(String issueKey, String label, String errorMessage) {
+        addComment(issueKey, label + " failed: " + errorMessage);
     }
 
     void commentMerged(String issueKey) {

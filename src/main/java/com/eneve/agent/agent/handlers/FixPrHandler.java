@@ -141,7 +141,7 @@ public class FixPrHandler implements JobHandler {
 
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 lifecycle.safeJira(() -> jiraService.commentStarted(request.jiraKey(),
-                        "Auto-fixing review comments on PR #" + request.prId()));
+                        "Fix PR", "Auto-fixing review comments on PR #" + request.prId()));
             }
 
             String systemPrompt = promptBuilder.buildFixPrPrompt(
@@ -237,7 +237,7 @@ public class FixPrHandler implements JobHandler {
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
                 CompletableFuture.runAsync(() -> {
                     lifecycle.safeJira(() -> jiraService.commentSuccess(
-                            request.jiraKey(), capturedPrUrl, capturedSummary));
+                            request.jiraKey(), "Fix PR", capturedPrUrl, capturedSummary));
                     lifecycle.safeJira(() -> jiraService.addWorklog(request.jiraKey(), null));
                 }, AgentPools.PARALLEL);
             }

@@ -413,6 +413,22 @@ public class JobStore {
 
     /**
      * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
+     * for the given PR ID. Used by webhook handlers to prevent duplicate review jobs
+     * triggered by rapid successive webhook deliveries for the same PR.
+     */
+    public boolean hasActiveReviewJobForPr(String prId) {
+        String sql = """
+                SELECT 1 FROM jobs
+                WHERE job_type = 'REVIEW'
+                  AND status IN ('PENDING','QUEUED','RUNNING')
+                  AND pr_id = ?
+                LIMIT 1
+                """;
+        return existsQuery(sql, prId);
+    }
+
+    /**
+     * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
      * for the given Jira issue key. Used to prevent duplicate review jobs.
      */
     public boolean hasActiveReviewJob(String issueKey) {
