@@ -5,6 +5,8 @@ import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.model.HookEvalResult;
+import com.eneve.agent.agent.store.PrCacheStore;
+import com.eneve.agent.model.OpenPrEntry;
 import com.fasterxml.jackson.databind.JsonNode;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
@@ -13,6 +15,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
+import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
@@ -32,6 +35,9 @@ import jakarta.ws.rs.core.Response;
 public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
 
     private static final Logger LOG = Logger.getLogger(BitbucketWebhookResource.class);
+
+    @Inject
+    PrCacheStore prCacheStore;
 
 
 
@@ -59,8 +65,9 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
 
             boolean isCreateOrUpdate = event.equals("pullrequest:created") || event.equals("pullrequest:updated");
             boolean isFulfilled = event.equals("pullrequest:fulfilled");
+            boolean isRejected   = event.equals("pullrequest:rejected");
 
-            if (!isCreateOrUpdate && !isFulfilled) {
+            if (!isCreateOrUpdate && !isFulfilled && !isRejected) {
                 audit("bitbucket", event, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + event);
             }
@@ -74,6 +81,9 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
             String sourceBranch = pr.path("source").path("branch").path("name").asText("");
             String destBranch = pr.path("destination").path("branch").path("name").asText("");
             String repoFullName = repo.path("full_name").asText("");
+            String prUrl = pr.path("links").path("html").path("href").asText("");
+            String createdOn = pr.path("created_on").asText("");
+            String updatedOn = pr.path("updated_on").asText("");
 
             if (prId.isBlank() || repoFullName.isBlank()) {
                 audit("bitbucket", event, null, null, null, null, "ignored", List.of(), rawPayload);
@@ -85,7 +95,19 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
             String repoSlug = repoParts.length == 2 ? repoParts[1] : "";
             String repoUrl = "https://bitbucket.org/" + repoFullName + ".git";
 
-            if (isFulfilled) {
+            if (isFulfilled || isRejected) {
+                String cacheStatus = isFulfilled ? "MERGED" : "DECLINED";
+                if (repoParts.length == 2) {
+                    upsertPrCache(workspace, repoSlug, prId, prUrl, prTitle,
+                            sourceBranch, destBranch, prAuthor, createdOn, updatedOn, cacheStatus);
+                }
+
+                if (isRejected) {
+                    LOG.infof("Bitbucket webhook: PR #%s declined on %s — cache updated", prId, repoFullName);
+                    audit("bitbucket", event, workspace, repoSlug, prId, prAuthor, "declined", List.of(), rawPayload);
+                    return ok("declined", "PR #" + prId + " marked as DECLINED in cache");
+                }
+
                 LOG.infof("Bitbucket webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
                         prId, sourceBranch, destBranch, repoFullName);
                 if (repoParts.length == 2) {
@@ -164,6 +186,11 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
                 }
             }
 
+            if (repoParts.length == 2) {
+                upsertPrCache(workspace, repoSlug, prId, prUrl, prTitle,
+                        sourceBranch, destBranch, prAuthor, createdOn, updatedOn, "OPEN");
+            }
+
             audit("bitbucket", event, workspace, repoSlug, prId, prAuthor,
                     "review_triggered", hookResult.hookNames(), rawPayload);
             return submitReviewJob(repoUrl, prId, destBranch, jiraKey, headCommitSha, workspace, repoSlug, prAuthor);
@@ -179,4 +206,19 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
 
 
 
+
+    private void upsertPrCache(String workspace, String repoSlug, String prId,
+                               String prUrl, String title, String sourceBranch,
+                               String targetBranch, String author,
+                               String createdOn, String updatedOn, String status) {
+        try {
+            prCacheStore.upsert(new OpenPrEntry(
+                    workspace, repoSlug, prId, prUrl, title,
+                    sourceBranch, targetBranch, author,
+                    createdOn, updatedOn, null, status, false));
+        } catch (Exception e) {
+            LOG.warnf("Failed to upsert PR cache for %s/%s#%s: %s",
+                    workspace, repoSlug, prId, e.getMessage());
+        }
+    }
 }

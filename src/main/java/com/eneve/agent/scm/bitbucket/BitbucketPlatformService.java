@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.bitbucket;
 
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
@@ -946,6 +947,43 @@ public class BitbucketPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<OpenPrEntry> listOpenPullRequests(String org, String project, String repo) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        String path = "/repositories/" + org + "/" + repo + "/pullrequests?state=OPEN&pagelen=50";
+
+        while (path != null) {
+            try {
+                String responseBody = getAndReturn(path, "list open PRs for " + org + "/" + repo);
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (values.isArray()) {
+                    for (JsonNode pr : values) {
+                        String prId = String.valueOf(pr.path("id").asInt());
+                        String prUrl = pr.path("links").path("html").path("href").asText("");
+                        String title = pr.path("title").asText("");
+                        String sourceBranch = pr.path("source").path("branch").path("name").asText("");
+                        String targetBranch = pr.path("destination").path("branch").path("name").asText("");
+                        String author = pr.path("author").path("display_name").asText(
+                                pr.path("author").path("nickname").asText(""));
+                        String createdOn = pr.path("created_on").asText("");
+                        String updatedOn = pr.path("updated_on").asText("");
+                        prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                                sourceBranch, targetBranch, author, createdOn, updatedOn, null, "OPEN", false));
+                    }
+                }
+                String next = root.path("next").asText(null);
+                path = next != null && !next.isBlank() ? next.replace(baseUrl(), "") : null;
+            } catch (Exception e) {
+                LOG.warnf("Failed to list open PRs for Bitbucket repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d open PRs for Bitbucket repo %s/%s", prs.size(), org, repo);
+        return prs;
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.azuredevops;
 
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
@@ -673,6 +674,50 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<OpenPrEntry> listOpenPullRequests(String org, String project, String repo) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        int top = 100;
+        int skip = 0;
+
+        while (true) {
+            String url = repoApiUrl(org, project, repo)
+                    + "/pullrequests?searchCriteria.status=active&$top=" + top + "&$skip=" + skip
+                    + "&" + API_VERSION;
+            try {
+                String responseBody = getAndReturn(url, "list open PRs for " + org + "/" + project + "/" + repo);
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode value = root.path("value");
+                if (!value.isArray() || value.isEmpty()) break;
+
+                for (JsonNode pr : value) {
+                    String prId = String.valueOf(pr.path("pullRequestId").asInt());
+                    String prUrl = baseUrl() + "/" + org + "/" + project + "/_git/" + repo
+                            + "/pullrequest/" + prId;
+                    String title = pr.path("title").asText("");
+                    String sourceBranch = stripRefsHeads(pr.path("sourceRefName").asText(""));
+                    String targetBranch = stripRefsHeads(pr.path("targetRefName").asText(""));
+                    String author = pr.path("createdBy").path("displayName").asText(
+                            pr.path("createdBy").path("uniqueName").asText(""));
+                    String createdOn = pr.path("creationDate").asText("");
+                    String updatedOn = pr.path("closedDate").asText(createdOn);
+                    prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                            sourceBranch, targetBranch, author, createdOn, updatedOn, null, "OPEN", false));
+                }
+
+                if (value.size() < top) break;
+                skip += top;
+            } catch (Exception e) {
+                LOG.warnf("Failed to list open PRs for Azure DevOps repo %s/%s/%s: %s",
+                        org, project, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d open PRs for Azure DevOps repo %s/%s/%s", prs.size(), org, project, repo);
+        return prs;
     }
 
     @Override

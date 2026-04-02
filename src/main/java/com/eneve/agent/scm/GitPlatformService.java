@@ -1,5 +1,6 @@
 package com.eneve.agent.scm;
 
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.PrCommitEntry;
 
 import java.util.List;
@@ -143,6 +144,17 @@ public interface GitPlatformService {
      */
     default String getCurrentUserUsername() {
         return "";
+    }
+
+    /**
+     * List all open pull requests / merge requests for the given repository.
+     * Returns an empty list if the platform does not support this API or on error.
+     * <p>
+     * The {@code workspace} and {@code repoSlug} fields of each returned entry are
+     * populated with the {@code org} and {@code repo} arguments respectively.
+     */
+    default List<OpenPrEntry> listOpenPullRequests(String org, String project, String repo) {
+        return List.of();
     }
 
     /**

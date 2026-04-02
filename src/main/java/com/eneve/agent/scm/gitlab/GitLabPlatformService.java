@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.gitlab;
 
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
@@ -703,6 +704,48 @@ public class GitLabPlatformService implements GitPlatformService {
     private static String sanitizeId(String id) {
         if (id == null) return "";
         return id.replaceAll("[^\\w.-]", "");
+    }
+
+    @Override
+    public List<OpenPrEntry> listOpenPullRequests(String org, String project, String repo) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        String projectPath = encodedProjectPath(org, repo);
+        String url = baseUrl() + "/projects/" + projectPath + "/merge_requests?state=opened&per_page=100";
+
+        while (url != null) {
+            HttpResponse<String> response;
+            try {
+                response = getWithResponse(url, "list open MRs for " + org + "/" + repo);
+            } catch (Exception e) {
+                LOG.warnf("Failed to list open MRs for GitLab repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+            try {
+                JsonNode nodes = objectMapper.readTree(response.body());
+                if (nodes.isArray()) {
+                    for (JsonNode mr : nodes) {
+                        String prId = String.valueOf(mr.path("iid").asInt());
+                        String prUrl = mr.path("web_url").asText("");
+                        String title = mr.path("title").asText("");
+                        String sourceBranch = mr.path("source_branch").asText("");
+                        String targetBranch = mr.path("target_branch").asText("");
+                        String author = mr.path("author").path("name").asText(
+                                mr.path("author").path("username").asText(""));
+                        String createdOn = mr.path("created_at").asText("");
+                        String updatedOn = mr.path("updated_at").asText("");
+                        prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                                sourceBranch, targetBranch, author, createdOn, updatedOn, null, "OPEN", false));
+                    }
+                }
+                url = nextPageUrl(response);
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse open MRs response for %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d open MRs for GitLab repo %s/%s", prs.size(), org, repo);
+        return prs;
     }
 
     @Override

@@ -1,5 +1,6 @@
 package com.eneve.agent.scm.github;
 
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.PrCommitEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformService;
@@ -385,6 +386,46 @@ public class GitHubPlatformService implements GitPlatformService {
 
         LOG.infof("Listed %d repositories for org %s", repos.size(), org);
         return repos;
+    }
+
+    @Override
+    public List<OpenPrEntry> listOpenPullRequests(String org, String project, String repo) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls?state=open&per_page=100";
+
+        while (url != null) {
+            HttpResponse<String> response;
+            try {
+                response = getWithResponse(url, "list open PRs for " + org + "/" + repo);
+            } catch (Exception e) {
+                LOG.warnf("Failed to list open PRs for GitHub repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+            try {
+                JsonNode nodes = objectMapper.readTree(response.body());
+                if (nodes.isArray()) {
+                    for (JsonNode pr : nodes) {
+                        String prId = String.valueOf(pr.path("number").asInt());
+                        String prUrl = pr.path("html_url").asText("");
+                        String title = pr.path("title").asText("");
+                        String sourceBranch = pr.path("head").path("ref").asText("");
+                        String targetBranch = pr.path("base").path("ref").asText("");
+                        String author = pr.path("user").path("login").asText("");
+                        String createdOn = pr.path("created_at").asText("");
+                        String updatedOn = pr.path("updated_at").asText("");
+                        prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                                sourceBranch, targetBranch, author, createdOn, updatedOn, null, "OPEN", false));
+                    }
+                }
+                url = nextPageUrl(response);
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse open PRs response for %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d open PRs for GitHub repo %s/%s", prs.size(), org, repo);
+        return prs;
     }
 
     private String token() {
