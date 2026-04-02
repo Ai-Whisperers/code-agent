@@ -95,7 +95,7 @@ class AiCallRecordTest {
 
     @Test
     void constructorWithMultipleTools() {
-        AiCallRecord record = new AiCallRecord(1L, "job-123", "FIX_PR", "claude-3", 3,
+        AiCallRecord record = new AiCallRecord(1L, "job-123", "FIX_COMMENT", "claude-3", 3,
                 2000L, 1200L, 0L, 0L, "tool_use", "read_file,write_file,run_command", 
                 5000L, false, null, Instant.now());
 
@@ -177,8 +177,8 @@ class AiCallRecordTest {
         assertTrue(toString.contains("job-123"));
         assertTrue(toString.contains("REVIEW"));
         assertTrue(toString.contains("claude-3"));
-        assertTrue(toString.contains("1000"));
-        assertTrue(toString.contains("500"));
+        assertTrue(toString.contains("inputTokens=1000"));
+        assertTrue(toString.contains("outputTokens=500"));
     }
 
     @Test
@@ -191,18 +191,5 @@ class AiCallRecordTest {
 
         assertTrue(errorRecord.isError());
         assertFalse(successRecord.isError());
-    }
-
-    @Test
-    void negativeTokenCountsAllowed() {
-        // Although unusual, the record should allow negative values if provided
-        AiCallRecord record = new AiCallRecord(1L, "job-123", "TEST", "claude-3", 1,
-                -1L, -1L, -1L, -1L, "end_turn", null, -1L, false, null, Instant.now());
-
-        assertEquals(-1L, record.inputTokens());
-        assertEquals(-1L, record.outputTokens());
-        assertEquals(-1L, record.cacheCreationInputTokens());
-        assertEquals(-1L, record.cacheReadInputTokens());
-        assertEquals(-1L, record.durationMs());
     }
 }

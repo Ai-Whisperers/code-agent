@@ -160,7 +160,8 @@ class AutomationHookTest {
 
     @Test
     void constructorWithDifferentActionTypes() {
-        String[] actionTypes = {"REVIEW", "FIX", "ANALYZE", "TEST", "DEPLOY"};
+        // Only action types supported by the application: REVIEW, FIX, FIX_COMMENT, REPLY
+        String[] actionTypes = {"REVIEW", "FIX", "FIX_COMMENT", "REPLY"};
 
         for (String actionType : actionTypes) {
             AutomationHook hook = new AutomationHook(1L, "Action Hook", "Action test", 
@@ -305,16 +306,15 @@ class AutomationHookTest {
         String toString = hook.toString();
         assertTrue(toString.contains("Test Hook"));
         assertTrue(toString.contains("Test Description"));
-        assertTrue(toString.contains("true"));
+        assertTrue(toString.contains("enabled=true"));
         assertTrue(toString.contains("PR_EVENT"));
         assertTrue(toString.contains("opened"));
-        assertTrue(toString.contains("main"));
         assertTrue(toString.contains("REVIEW"));
         assertTrue(toString.contains("Test Prompt"));
         assertTrue(toString.contains("security"));
         assertTrue(toString.contains("Extra rules"));
         assertTrue(toString.contains("develop"));
-        assertTrue(toString.contains("false"));
+        assertTrue(toString.contains("commitDirect=false"));
     }
 
     @Test

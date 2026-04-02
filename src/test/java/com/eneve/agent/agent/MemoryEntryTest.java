@@ -15,7 +15,9 @@ class MemoryEntryTest {
         String memoryText = "Prefer composition over inheritance";
         String createdBy = "john.doe";
 
+        Instant before = Instant.now().minusSeconds(1);
         MemoryEntry entry = MemoryEntry.explicit(workspace, repoSlug, memoryText, createdBy);
+        Instant after = Instant.now().plusSeconds(1);
 
         assertNull(entry.id());
         assertEquals(workspace, entry.workspace());
@@ -27,7 +29,8 @@ class MemoryEntryTest {
         assertNull(entry.sourcePrId());
         assertTrue(entry.isActive());
         assertNotNull(entry.createdAt());
-        assertTrue(entry.createdAt().isBefore(Instant.now().plusSeconds(1)));
+        assertTrue(entry.createdAt().isAfter(before));
+        assertTrue(entry.createdAt().isBefore(after));
         assertEquals(createdBy, entry.createdBy());
     }
 
@@ -41,8 +44,10 @@ class MemoryEntryTest {
         String sourcePrId = "PR-456";
         String createdBy = "jane.doe";
 
+        Instant before = Instant.now().minusSeconds(1);
         MemoryEntry entry = MemoryEntry.extracted(workspace, repoSlug, memoryText, 
                 category, sourceCommentId, sourcePrId, createdBy);
+        Instant after = Instant.now().plusSeconds(1);
 
         assertNull(entry.id());
         assertEquals(workspace, entry.workspace());
@@ -54,7 +59,8 @@ class MemoryEntryTest {
         assertEquals(sourcePrId, entry.sourcePrId());
         assertTrue(entry.isActive());
         assertNotNull(entry.createdAt());
-        assertTrue(entry.createdAt().isBefore(Instant.now().plusSeconds(1)));
+        assertTrue(entry.createdAt().isAfter(before));
+        assertTrue(entry.createdAt().isBefore(after));
         assertEquals(createdBy, entry.createdBy());
     }
 
