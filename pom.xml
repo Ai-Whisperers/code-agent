@@ -16,6 +16,8 @@
         <quarkus.platform.group-id>io.quarkus.platform</quarkus.platform.group-id>
         <quarkus.platform.artifact-id>quarkus-bom</quarkus.platform.artifact-id>
         <quarkus.platform.version>3.32.3</quarkus.platform.version>
+        <!-- Override Netty to 4.1.132.Final: fixes CVE-2026-33870 (HTTP smuggling) and CVE-2026-33871 (HTTP/2 resource exhaustion) -->
+        <netty.version>4.1.132.Final</netty.version>
         <compiler-plugin.version>3.13.0</compiler-plugin.version>
         <surefire-plugin.version>3.5.2</surefire-plugin.version>
 
@@ -47,6 +49,14 @@
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>quarkus-amazon-services-bom</artifactId>
                 <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- Netty override: fixes CVE-2026-33870 and CVE-2026-33871 (fixed in 4.1.132.Final) -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
@@ -178,6 +188,16 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>sts</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: Amazon Transcribe Streaming (speech-to-text, replaces local Whisper sidecar) -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>transcribestreaming</artifactId>
+        </dependency>
+        <!-- Netty NIO HTTP/2 client required by TranscribeStreamingAsyncClient -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>netty-nio-client</artifactId>
         </dependency>
         <!-- AWS SDK v2: Bedrock embeddings (InvokeModel) and reranking -->
         <dependency>

@@ -26,7 +26,7 @@ RUN mvn -B dependency:go-offline -q
 COPY src src
 RUN mvn -B package -DskipTests -q
 
-# Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js + .NET SDK 9
+# Stage 2: Runtime image with JDK 21 + Git + Maven 3.9.14 + Node.js 22 + .NET SDK 9
 FROM eclipse-temurin:21-jdk-noble@sha256:bf62453dde8d7b979d43a25b8bd14f69902a1bb3b19f5b6572ed7f9fd3c8ae57
 
 RUN echo 'APT::Get::AllowUnauthenticated "true";' > /etc/apt/apt.conf.d/99insecure && \
@@ -49,22 +49,28 @@ RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf 
     mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
 
 RUN apt-get update && \
+    # Apply available security updates for packages with known CVEs (binutils, coreutils, tzdata)
+    apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends git curl ca-certificates gnupg && \
-    # Node.js 20.x (for ESLint + Mermaid CLI)
+    # Node.js 22.x (for ESLint + Mermaid CLI) — 22.x is the current LTS
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
         | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_20.x nodistro main" \
+    echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
         > /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
     apt-get install -y --no-install-recommends nodejs && \
-    # Chromium headless dependencies (required by Mermaid CLI / Puppeteer)
+    # Google Chrome stable — avoids the Ubuntu 24.04 chromium snap stub which
+    # pulls in snapd (compiled with Go 1.22.2, carrying 3C/11H Go stdlib CVEs).
+    curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
+        | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+    echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
+        > /etc/apt/sources.list.d/google-chrome.list && \
+    apt-get update && \
     apt-get install -y --no-install-recommends \
-        chromium \
+        google-chrome-stable \
         fonts-liberation fonts-noto-color-emoji \
-        libgbm1 libasound2t64 libatk1.0-0 libatk-bridge2.0-0 libcups2t64 \
-        libdbus-1-3 libdrm2 libgtk-3-0t64 libnspr4 libnss3 libx11-xcb1 \
-        libxcomposite1 libxdamage1 libxrandr2 xdg-utils && \
+        xdg-utils && \
     # Mermaid CLI for local diagram rendering
     npm install -g @mermaid-js/mermaid-cli && \
     # pnpm and yarn — required for JS/TS coverage in projects that use these package managers
@@ -79,11 +85,18 @@ RUN apt-get update && \
     apt-get purge -y gnupg && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
 
+
 # Install dotnet global tools to a shared system path accessible by all users
 ENV DOTNET_TOOLS=/usr/share/dotnet-tools
 RUN mkdir -p $DOTNET_TOOLS && \
     DOTNET_ROOT=/usr/share/dotnet dotnet tool install --tool-path $DOTNET_TOOLS dotnet-reportgenerator-globaltool
 ENV PATH="${DOTNET_TOOLS}:${PATH}"
+
+# Upgrade plexus-utils bundled with Maven 3.9.x from 3.6.0 to 4.0.3 (CVE-2025-67030)
+RUN PLEXUS_VERSION=4.0.3 && \
+    curl -fsSL "https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/${PLEXUS_VERSION}/plexus-utils-${PLEXUS_VERSION}.jar" \
+        -o /opt/maven/lib/plexus-utils-${PLEXUS_VERSION}.jar && \
+    rm -f /opt/maven/lib/plexus-utils-3.6.0.jar
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
     mkdir -p /home/appuser/.m2 /opt/maven-settings && \
@@ -92,8 +105,8 @@ RUN useradd -m -u 1001 -s /bin/bash appuser && \
     printf '[core]\n\texcludesfile = /home/appuser/.gitignore_global\n' > /home/appuser/.gitconfig && \
     chown appuser:appuser /home/appuser/.gitignore_global /home/appuser/.gitconfig
 
-# Tell Puppeteer to use the system-installed Chromium
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+# Tell Puppeteer to use the system-installed Google Chrome
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1
 ENV DOTNET_NOLOGO=1

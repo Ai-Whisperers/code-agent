@@ -21,6 +21,7 @@ Internet
       ECS Service (Fargate)
         └─ Task: code-agent
              ├─ Container: code-agent          (this image, port 8080)
+             │  (speech-to-text via Amazon Transcribe Streaming — no sidecar)
              ├─ Mount: EFS volume              (/workspace)
              └─ Sidecar optional: log router   (FireLens / awslogs)
 
@@ -551,6 +552,58 @@ Add the following statement to the **task role** (`code-agent-task-role`) to all
 
 ---
 
+## Speech Dictation — Amazon Transcribe Streaming
+
+The chat input supports voice dictation via **Amazon Transcribe Streaming** (AWS SDK v2). No sidecar container, no Docker image to harden, and no supply-chain CVEs to manage — transcription runs entirely inside the JVM using the existing IAM task role.
+
+### How it works
+
+1. The browser records audio with `MediaRecorder` and uses Voice Activity Detection (VAD) to split speech into chunks on silence.
+2. Each chunk is POSTed to `POST /api/speech/transcribe` on the main container.
+3. The main container streams the audio bytes to Amazon Transcribe Streaming via `TranscribeStreamingAsyncClient`, collects the final transcript, and returns it to the browser as `{ "transcript": "…" }`.
+4. The AWS region is read at request time from the `transcribe.region` setting (DB → `application.properties` fallback), so it can be changed in **Settings → Integrations → Speech Dictation** without a redeploy.
+
+### IAM permissions
+
+The ECS task role needs one additional permission:
+
+```json
+{
+  "Effect": "Allow",
+  "Action": "transcribe:StartStreamTranscription",
+  "Resource": "*"
+}
+```
+
+Add this statement to the task role's inline or managed policy alongside the existing Bedrock and S3 permissions.
+
+### Configuration
+
+| Property | Environment variable | Default | Description |
+|----------|---------------------|---------|-------------|
+| `transcribe.region` | `TRANSCRIBE_REGION` | `eu-west-1` | AWS region for Transcribe Streaming. Must be a region where the service is available. |
+| `transcribe.sample-rate` | `TRANSCRIBE_SAMPLE_RATE` | `16000` | PCM sample rate in Hz. OGG/Opus chunks from `MediaRecorder` are passed through as-is; this value is still required by the Transcribe API. |
+
+Both settings can also be overridden at runtime via **Settings → Integrations → Speech Dictation (Amazon Transcribe)** in the UI.
+
+### Supported audio formats
+
+| Browser output | Transcribe encoding used |
+|----------------|--------------------------|
+| `audio/webm;codecs=opus` (Chrome, Edge) | `OGG_OPUS` |
+| `audio/ogg;codecs=opus` (Firefox) | `OGG_OPUS` |
+| `audio/wav` / `audio/wave` | `PCM` |
+
+### Supported regions
+
+Amazon Transcribe Streaming is available in: `us-east-1`, `us-west-2`, `eu-west-1`, `eu-central-1`, `ap-southeast-2`, `ap-northeast-1`, and others. See the [AWS regional services list](https://aws.amazon.com/about-aws/global-infrastructure/regional-product-services/) for the current full list.
+
+### No task size change required
+
+Removing the Whisper sidecar saves approximately **600 MB RAM** per task. The Transcribe Streaming client adds negligible memory overhead (it uses the existing Netty NIO HTTP/2 client already present in the AWS SDK). You can reduce the task memory allocation if it was previously sized for the sidecar.
+
+---
+
 ## Post-Deployment Checklist
 
 Once the task is running and `/q/health/ready` returns 200:
@@ -563,3 +616,4 @@ Once the task is running and `/q/health/ready` returns 200:
 6. Set Teams webhook URL for notifications (Integrations → Notifications)
 7. Set SOC2 production branch and SLA days (Compliance tab)
 8. Register repository webhooks via the SCM platform pointing to `https://your-alb-host/api/webhooks/{platform}/pull-request`
+9. Verify voice dictation works in the chat input. Confirm the Transcribe region in **Settings → Integrations → Speech Dictation (Amazon Transcribe)** matches the region where your task role has `transcribe:StartStreamTranscription` permission.
