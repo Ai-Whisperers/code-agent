@@ -87,6 +87,49 @@ public class MemoryStore {
     }
 
     /**
+     * Returns all memories across all repositories — used by the global management UI.
+     */
+    public List<MemoryEntry> listAll() {
+        String sql = """
+                SELECT id, workspace, repo_slug, memory_text, category, source,
+                       source_comment_id, source_pr_id, is_active, created_at, created_by
+                FROM review_memory
+                ORDER BY created_at DESC
+                """;
+        List<MemoryEntry> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                results.add(mapRow(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list all review memories: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Toggles the {@code is_active} flag for a memory entry.
+     * Returns {@code true} if a row was updated.
+     */
+    public boolean toggleActive(long id) {
+        String sql = "UPDATE review_memory SET is_active = NOT is_active WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            int rows = ps.executeUpdate();
+            if (rows > 0) {
+                LOG.debugf("Toggled active state for review memory id=%d", id);
+            }
+            return rows > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to toggle review memory id=%d: %s", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Soft-deletes a memory by setting {@code is_active = false}.
      * Returns {@code true} if a row was updated.
      */

@@ -1,5 +1,7 @@
 package com.eneve.agent.agent.model;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+
 import java.time.Instant;
 
 /**
@@ -11,12 +13,12 @@ public record MemoryEntry(
         Long id,
         String workspace,
         String repoSlug,
-        String memoryText,
+        @JsonProperty("content") String memoryText,
         String category,
         String source,
         Long sourceCommentId,
         String sourcePrId,
-        boolean isActive,
+        @JsonProperty("active") boolean isActive,
         Instant createdAt,
         String createdBy
 ) {

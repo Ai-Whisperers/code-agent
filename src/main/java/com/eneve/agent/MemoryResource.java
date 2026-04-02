@@ -18,6 +18,7 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.PATCH;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -40,6 +41,17 @@ public class MemoryResource {
     MemoryStore memoryStore;
 
     @GET
+    @Operation(
+            operationId = "listAllMemories",
+            summary = "List all review memories",
+            description = "Returns all memory entries (including inactive) across all repositories."
+    )
+    @APIResponse(responseCode = "200", description = "List of memory entries")
+    public Response listAll() {
+        return Response.ok(memoryStore.listAll()).build();
+    }
+
+    @GET
     @Path("/{workspace}/{repoSlug}")
     @Operation(
             operationId = "listMemories",
@@ -55,6 +67,30 @@ public class MemoryResource {
 
         List<MemoryEntry> memories = memoryStore.listAll(workspace, repoSlug);
         return Response.ok(memories).build();
+    }
+
+    @PATCH
+    @Path("/{id}")
+    @Operation(
+            operationId = "toggleMemory",
+            summary = "Toggle a review memory active state",
+            description = "Flips the active flag of a memory entry. Active entries are injected into review prompts."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Memory toggled"),
+            @APIResponse(responseCode = "404", description = "Memory not found")
+    })
+    public Response toggle(
+            @Parameter(description = "Memory entry ID", required = true)
+            @PathParam("id") long id) {
+
+        boolean updated = memoryStore.toggleActive(id);
+        if (!updated) {
+            return Response.status(404)
+                    .entity(Map.of("error", "Memory entry not found"))
+                    .build();
+        }
+        return Response.ok(Map.of("action", "toggled", "id", id)).build();
     }
 
     @POST
