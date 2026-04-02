@@ -18,6 +18,7 @@ import com.eneve.agent.agent.store.CommentFeedbackStore;
 import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
+import com.eneve.agent.SecurityIssuesCacheService;
 import com.eneve.agent.linter.LinterFinding;
 import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
@@ -44,6 +45,7 @@ public class QualityReportCollector {
     @Inject TestPresenceChecker testPresenceChecker;
     @Inject LinterService linterService;
     @Inject AikidoService aikidoService;
+    @Inject SecurityIssuesCacheService securityIssuesCacheService;
     @Inject CodeMetricsCalculator metricsCalculator;
     @Inject CommentStore commentStore;
     @Inject CommentFeedbackStore feedbackStore;
@@ -177,7 +179,8 @@ public class QualityReportCollector {
                 LOG.debugf("QualityReportCollector: Aikido not configured — skipping security section");
                 return null;
             }
-            List<AikidoIssueInfo> issues = aikidoService.findOpenIssuesForRepo(repoSlug);
+            // Prefer the in-memory cache to avoid direct API calls and rate limiting.
+            List<AikidoIssueInfo> issues = securityIssuesCacheService.getIssuesForRepo(repoSlug, false);
             if (issues == null) return null;
 
             int critical = 0, high = 0, medium = 0, low = 0;

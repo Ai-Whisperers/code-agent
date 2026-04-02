@@ -9,6 +9,7 @@ import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.model.CommentChatRequest;
 import com.eneve.agent.model.JobDiffResponse;
 import com.eneve.agent.model.JobStatusResponse;
+import com.eneve.agent.model.RejectRequest;
 
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
@@ -51,6 +52,9 @@ public class JobsResource {
 
     @Inject
     JobsService jobsService;
+
+    @Inject
+    RunFixService runFixService;
 
     @GET
     @Operation(
@@ -447,5 +451,89 @@ public class JobsResource {
             return Multi.createFrom().item(new ChatEvent.Error("commentId is required"));
         }
         return jobsService.commentChat(jobId, request);
+    }
+
+    @POST
+    @Path("/{jobId}/rerun")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "rerunJob",
+            summary = "Rerun a failed or finished job",
+            description = "Creates a new job with the same parameters as the original and queues it for execution."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "New job queued",
+                    content = @Content(schema = @Schema(example = "{\"status\": \"queued\", \"jobId\": \"...\", \"originalJobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not in a rerunnable state")
+    })
+    public Response rerunJob(
+            @Parameter(description = "UUID of the job to rerun", required = true)
+            @PathParam("jobId") String jobId) {
+        try {
+            String newJobId = runFixService.rerunJob(jobId);
+            return Response.ok(Map.of("status", "queued", "jobId", newJobId, "originalJobId", jobId)).build();
+        } catch (JobNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        } catch (JobConflictException e) {
+            return Response.status(409).entity(Map.of("error", e.getMessage())).build();
+        }
+    }
+
+    @POST
+    @Path("/{jobId}/cancel")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "cancelJob",
+            summary = "Cancel a queued job",
+            description = "Cancels a PENDING or QUEUED job, removing it from the dispatch queue."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Job cancelled",
+                    content = @Content(schema = @Schema(example = "{\"status\": \"cancelled\", \"jobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not in a cancellable state")
+    })
+    public Response cancelJob(
+            @Parameter(description = "UUID of the job to cancel", required = true)
+            @PathParam("jobId") String jobId) {
+        try {
+            runFixService.cancelJob(jobId);
+            return Response.ok(Map.of("status", "cancelled", "jobId", jobId)).build();
+        } catch (JobNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        } catch (RunFixService.Soc2DeletionBlockedException e) {
+            return Response.status(403).entity(Map.of("error", e.getMessage())).build();
+        } catch (JobConflictException e) {
+            return Response.status(409).entity(Map.of("error", e.getMessage())).build();
+        }
+    }
+
+    @POST
+    @Path("/{jobId}/reject")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "rejectJob",
+            summary = "Reject and decline the PR",
+            description = "Declines the pull request in the SCM and adds a JIRA comment with the rejection reason."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "PR declined",
+                    content = @Content(schema = @Schema(example = "{\"status\": \"rejected\", \"jobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not awaiting approval")
+    })
+    public Response rejectJob(
+            @Parameter(description = "UUID of the job to reject", required = true)
+            @PathParam("jobId") String jobId,
+            RejectRequest request) {
+        try {
+            runFixService.reject(jobId, request);
+            return Response.ok(Map.of("status", "rejected", "jobId", jobId)).build();
+        } catch (JobNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        } catch (JobConflictException e) {
+            return Response.status(409).entity(Map.of("error", e.getMessage())).build();
+        }
     }
 }

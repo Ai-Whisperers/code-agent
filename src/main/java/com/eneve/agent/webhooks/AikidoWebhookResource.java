@@ -8,6 +8,7 @@ import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.eneve.agent.SecurityIssuesCacheService;
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
@@ -56,6 +57,7 @@ public class AikidoWebhookResource {
     @Inject AikidoTriageService aikidoTriageService;
     @Inject HookEvaluator hookEvaluator;
     @Inject TeamsNotifier teamsNotifier;
+    @Inject SecurityIssuesCacheService securityIssuesCacheService;
 
     ObjectMapper objectMapper = new ObjectMapper();
 
@@ -167,6 +169,8 @@ public class AikidoWebhookResource {
                 });
                 evaluateAikidoHooks(eventType, repo, payloadNode);
 
+                securityIssuesCacheService.invalidate();
+
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("action", "triage_started");
                 body.put("workspace", repo.workspace());
@@ -194,6 +198,8 @@ public class AikidoWebhookResource {
                     }
                 });
                 evaluateAikidoHooks(eventType, repo, payloadNode);
+
+                securityIssuesCacheService.invalidate();
 
                 Map<String, Object> body = new LinkedHashMap<>();
                 body.put("action", "upgrade_check_started");

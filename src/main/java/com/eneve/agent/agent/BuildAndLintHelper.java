@@ -77,10 +77,18 @@ public class BuildAndLintHelper {
                         attempts, maxBuildRetries(),
                         buildError.length() > 200 ? buildError.substring(0, 200) + "..." : buildError);
 
+                String jiraKey = job.getRequest() != null && job.getRequest().jiraKey() != null
+                        ? job.getRequest().jiraKey() : "(unknown)";
+                String branch = job.getFixBranchName() != null
+                        ? job.getFixBranchName() : "(unknown)";
+                String diff = captureAgentDiff(workspace);
                 String retryPrompt = promptTemplates.resolve("build-retry", Map.of(
                         "BUILD_OUTPUT", buildError,
                         "ATTEMPT", String.valueOf(attempts),
-                        "MAX_ATTEMPTS", String.valueOf(maxBuildRetries())));
+                        "MAX_ATTEMPTS", String.valueOf(maxBuildRetries()),
+                        "JIRA_KEY", jiraKey,
+                        "BRANCH", branch,
+                        "AGENT_DIFF", diff));
 
                 try {
                     toolUseLoop.run(retryPrompt, workspace, 30, jobId, jobType);
@@ -227,6 +235,21 @@ public class BuildAndLintHelper {
         LOG.infof("Static analysis diff: verdict=%s, newIssues=%d, resolvedIssues=%d",
                 report.verdict(), report.newIssues().size(), report.resolvedIssues().size());
         return report;
+    }
+
+    private String captureAgentDiff(WorkspaceContext workspace) {
+        try {
+            String diff = workspace.getWorkingDiff();
+            if (diff == null || diff.isBlank()) return "(no uncommitted changes detected)";
+            final int MAX_DIFF = 4000;
+            if (diff.length() > MAX_DIFF) {
+                return diff.substring(0, MAX_DIFF) + "\n... [diff truncated at " + MAX_DIFF + " chars]";
+            }
+            return diff;
+        } catch (Exception e) {
+            LOG.warnf("Could not capture agent diff for build-retry prompt (non-fatal): %s", e.getMessage());
+            return "(diff unavailable)";
+        }
     }
 
     private int maxBuildRetries() {

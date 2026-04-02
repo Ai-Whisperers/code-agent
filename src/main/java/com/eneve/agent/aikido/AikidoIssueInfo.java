@@ -7,6 +7,7 @@ package com.eneve.agent.aikido;
 public record AikidoIssueInfo(
         int issueGroupId,
         String issueType,
+        String title,
         String severity,
         String packageName,
         String currentVersion,
@@ -19,6 +20,18 @@ public record AikidoIssueInfo(
         String containerImage,
         String changelogSummary
 ) {
+    /**
+     * Returns a copy of this record with the repoName replaced by the given slug.
+     * Used when a multi-repo issue group is assigned to a specific repo bucket.
+     */
+    public AikidoIssueInfo withRepoName(String slug) {
+        return new AikidoIssueInfo(
+                issueGroupId, issueType, title, severity, packageName,
+                currentVersion, fixedVersion, cveId, cveDescription, cvssScore,
+                slug, repoUrl, containerImage, changelogSummary
+        );
+    }
+
     /**
      * Build a detailed prompt section from this vulnerability info.
      */

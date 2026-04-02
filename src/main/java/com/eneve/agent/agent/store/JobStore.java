@@ -101,8 +101,8 @@ public class JobStore {
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
                      pr_author, workspace, repo_slug, priority, coverage_data,
                      aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                     promotion_job_id)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?)
+                     promotion_job_id, workspace_path)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -137,6 +137,7 @@ public class JobStore {
                     ins.setNull(23, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
                 }
                 setNullable(ins, 24, job.getPromotionJobId());
+                setNullable(ins, 25, job.getWorkspacePath());
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -172,7 +173,8 @@ public class JobStore {
                     jira_issue_type  = ?,
                     jira_priority    = ?,
                     jira_created_at  = ?,
-                    promotion_job_id = ?
+                    promotion_job_id = ?,
+                    workspace_path   = ?
                 WHERE job_id = ?
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -197,7 +199,8 @@ public class JobStore {
                 ps.setNull(15, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
             }
             setNullable(ps, 16, job.getPromotionJobId());
-            ps.setString(17, job.getJobId());
+            setNullable(ps, 17, job.getWorkspacePath());
+            ps.setString(18, job.getJobId());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to update job %s: %s", job.getJobId(), e.getMessage());
@@ -230,7 +233,7 @@ public class JobStore {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id
+                       promotion_job_id, workspace_path
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -268,6 +271,100 @@ public class JobStore {
                 LIMIT 1
                 """;
         return existsQuery(sql, groupId);
+    }
+
+    /**
+     * Returns the most recent job (by created_at DESC) linked to the given Aikido issue group ID,
+     * searching both the active jobs table and job_history. Returns {@code null} if none found.
+     * Used by the security issues view to show linked job status.
+     */
+    /**
+     * Finds the most recent job for an Aikido issue group, optionally scoped to a specific
+     * repository slug. When {@code repoSlug} is non-null the query prefers an exact
+     * repo_slug match; if no repo-scoped job exists it falls back to any job for that group.
+     * This prevents a job created for repo A from appearing as the linked job for repo B
+     * when both repos share the same Aikido vulnerability group ID.
+     */
+    public JobRecord findLatestJobForAikidoGroupId(String groupId, String repoSlug) {
+        // Prefer repo-scoped match; fall back to any match for the group
+        if (repoSlug != null && !repoSlug.isBlank()) {
+            JobRecord scoped = findLatestJobForAikidoGroupAndRepo(groupId, repoSlug);
+            if (scoped != null) return scoped;
+        }
+        return findLatestJobForAikidoGroupAndRepo(groupId, null);
+    }
+
+    /** @deprecated Use {@link #findLatestJobForAikidoGroupId(String, String)} with a repoSlug. */
+    @Deprecated
+    public JobRecord findLatestJobForAikidoGroupId(String groupId) {
+        return findLatestJobForAikidoGroupId(groupId, null);
+    }
+
+    private JobRecord findLatestJobForAikidoGroupAndRepo(String groupId, String repoSlug) {
+        boolean scoped = repoSlug != null && !repoSlug.isBlank();
+        String repoFilter = scoped ? " AND repo_slug = ?" : "";
+        String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
+                + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
+                + " pr_author, workspace, repo_slug, priority, coverage_data,"
+                + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
+                + " promotion_job_id, workspace_path"
+                + " FROM ("
+                + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
+                + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
+                + "          pr_author, workspace, repo_slug, priority, coverage_data,"
+                + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
+                + "          promotion_job_id, workspace_path"
+                + "   FROM jobs WHERE aikido_issue_id = ?" + repoFilter
+                + "   UNION ALL"
+                + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
+                + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
+                + "          pr_author, workspace, repo_slug, priority, coverage_data,"
+                + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
+                + "          promotion_job_id, workspace_path"
+                + "   FROM job_history WHERE aikido_issue_id = ?" + repoFilter
+                + " ) combined"
+                + " ORDER BY created_at DESC LIMIT 1";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            int idx = 1;
+            ps.setString(idx++, groupId);
+            if (scoped) ps.setString(idx++, repoSlug);
+            ps.setString(idx++, groupId);
+            if (scoped) ps.setString(idx, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return mapRow(rs);
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findLatestJobForAikidoGroupAndRepo(%s, %s) failed: %s", groupId, repoSlug, e.getMessage());
+        }
+        return null;
+    }
+
+    /**
+     * Looks up the workspace_path recorded on the most recent FAILED job for the given
+     * branch name. Returns {@code null} if no such job exists or it has no preserved path.
+     * Used by RunFixHandler to reuse an already-cloned workspace instead of cloning again.
+     */
+    public String findPreservedWorkspacePath(String branchName) {
+        if (branchName == null || branchName.isBlank()) return null;
+        String sql = """
+                SELECT workspace_path FROM job_history
+                WHERE fix_branch_name = ?
+                  AND status = 'FAILED'
+                  AND workspace_path IS NOT NULL
+                ORDER BY archived_at DESC
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, branchName);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return rs.getString("workspace_path");
+            }
+        } catch (SQLException e) {
+            LOG.warnf("findPreservedWorkspacePath(%s) failed: %s", branchName, e.getMessage());
+        }
+        return null;
     }
 
     public boolean hasActiveJobForJiraKey(String jiraKey) {
@@ -460,7 +557,9 @@ public class JobStore {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id, workspace_path
                 FROM jobs
                 WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
                   AND status = 'QUEUED'
@@ -527,14 +626,14 @@ public class JobStore {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id
+                       promotion_job_id, workspace_path
                 FROM jobs WHERE pr_id = ?
                 UNION ALL
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id
+                       promotion_job_id, workspace_path
                 FROM job_history WHERE pr_id = ?
                 ORDER BY created_at DESC
                 """;
@@ -560,14 +659,14 @@ public class JobStore {
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                            pr_author, workspace, repo_slug, priority, coverage_data,
                            aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id
+                           promotion_job_id, workspace_path
                     FROM jobs WHERE pr_url LIKE ?
                     UNION ALL
                     SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                            pr_author, workspace, repo_slug, priority, coverage_data,
                            aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id
+                           promotion_job_id, workspace_path
                     FROM job_history WHERE pr_url LIKE ?
                     ORDER BY created_at DESC
                     """;
@@ -602,7 +701,7 @@ public class JobStore {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id
+                       promotion_job_id, workspace_path
                 FROM jobs
                 WHERE jira_key IS NOT NULL
                 UNION ALL
@@ -610,7 +709,7 @@ public class JobStore {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id
+                       promotion_job_id, workspace_path
                 FROM job_history
                 WHERE jira_key IS NOT NULL
                 ORDER BY created_at DESC
@@ -670,7 +769,7 @@ public class JobStore {
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + " pr_author, workspace, repo_slug, priority, coverage_data,"
                 + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + " promotion_job_id"
+                + " promotion_job_id, workspace_path"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -754,6 +853,7 @@ public class JobStore {
             Timestamp jiraCreatedAt = rs.getTimestamp("jira_created_at");
             if (jiraCreatedAt != null) job.setJiraCreatedAt(jiraCreatedAt.toInstant());
             job.setPromotionJobId(rs.getString("promotion_job_id"));
+            job.setWorkspacePath(rs.getString("workspace_path"));
         } catch (Exception e) {
             LOG.warnf("Failed to read Aikido/SLA fields for job %s (non-fatal): %s", jobId, e.getMessage());
         }

@@ -68,9 +68,14 @@ public class RunFixHandler implements JobHandler {
 
         WorkspaceContext workspace;
         try {
-            workspace = job.getPlanId() != null
-                    ? planWorkspaceManager.acquire(job.getPlanId())
-                    : WorkspaceContext.create(job.getJobId());
+            if (job.getPlanId() != null) {
+                workspace = planWorkspaceManager.acquire(job.getPlanId());
+            } else {
+                // Try to reuse the preserved workspace from a previous failed job on the same branch
+                WorkspaceContext reused = WorkspaceContext.reuse(
+                        jobStore.findPreservedWorkspacePath(request.branchName()));
+                workspace = reused != null ? reused : WorkspaceContext.create(job.getJobId());
+            }
         } catch (Exception e) {
             lifecycle.failFix(job, "Failed to acquire workspace: " + e.getMessage());
             return;
@@ -96,8 +101,8 @@ public class RunFixHandler implements JobHandler {
                     }
                 }
             } else {
-                LOG.infof("Reusing existing workspace for plan %s (branch: %s)",
-                        job.getPlanId(), request.branchName());
+                LOG.infof("Reusing preserved workspace for branch %s (job: %s)",
+                        request.branchName(), job.getJobId());
             }
 
             gitHelper.configureGitIfNeeded(workspace);
@@ -178,7 +183,7 @@ public class RunFixHandler implements JobHandler {
             }
 
             if (!buildAndLintHelper.runBuildWithRetry(workspace, job)) {
-                lifecycle.failFix(job, "Build validation failed after retry attempt(s)");
+                preserveAndFail(workspace, job, "Build validation failed after retry attempt(s)");
                 return;
             }
 
@@ -439,6 +444,18 @@ public class RunFixHandler implements JobHandler {
 
             LOG.infof("Quality-fix job %s completed successfully. PR: %s", job.getJobId(), prUrl);
         }
+    }
+
+    /**
+     * Preserves the workspace on disk (so a retry job can reuse the cloned repo),
+     * records its path on the job record, then delegates to the normal fail path.
+     */
+    private void preserveAndFail(WorkspaceContext workspace, JobRecord job, String message) {
+        workspace.keepOnClose();
+        job.setWorkspacePath(workspace.getAbsolutePath());
+        jobStore.update(job);
+        LOG.infof("Preserved workspace for failed job %s at %s", job.getJobId(), workspace.getAbsolutePath());
+        lifecycle.failFix(job, message);
     }
 
     private String resolvePrompt(RunFixRequest request) {

@@ -43,10 +43,38 @@ public class BuildValidator {
             throw new RuntimeException("Build validation timed out after " + timeoutMinutes + " minutes");
         }
         if (proc.exitValue() != 0) {
-            String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
-            throw new RuntimeException("Build validation failed (exit " + proc.exitValue() + "):\n" + tail);
+            String excerpt = buildErrorExcerpt(output);
+            throw new RuntimeException("Build validation failed (exit " + proc.exitValue() + "):\n" + excerpt);
         }
         LOG.info("Build validation passed");
+    }
+
+    /**
+     * Extracts a useful excerpt from build output for feeding back to the agent.
+     * Prefers lines containing [ERROR] or [WARN], then falls back to head+tail.
+     * This avoids the common problem of classpath dumps burying the actual failure.
+     */
+    static String buildErrorExcerpt(String output) {
+        if (output == null) return "";
+        final int MAX = 3000;
+        if (output.length() <= MAX) return output;
+
+        // Extract lines that contain actual errors/warnings — these are the most useful
+        String errorLines = output.lines()
+                .filter(l -> l.contains("[ERROR]") || l.contains("[FATAL]")
+                        || l.contains("FAILED") || l.contains("BUILD FAILURE"))
+                .collect(java.util.stream.Collectors.joining("\n"));
+
+        if (!errorLines.isBlank() && errorLines.length() <= MAX) {
+            return errorLines;
+        }
+
+        // Fall back to head + tail so the agent sees both the failure reason and context
+        int headLen = MAX * 2 / 3;
+        int tailLen = MAX - headLen;
+        String head = output.substring(0, Math.min(headLen, output.length()));
+        String tail = output.length() > tailLen ? output.substring(output.length() - tailLen) : "";
+        return tail.isBlank() ? head : head + "\n...\n" + tail;
     }
 
     private String detectTestCommand(Path root) {

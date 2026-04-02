@@ -40,6 +40,7 @@ public class JobRecord {
     private volatile String prAuthor;
     private volatile String workspace;
     private volatile String repoSlug;
+    private volatile String workspacePath;
     private volatile JobCoverageData coverageData;
 
     // Jira metadata cached at submission time so approve() needs zero external calls
@@ -381,6 +382,9 @@ public class JobRecord {
 
     public String getRepoSlug() { return repoSlug; }
     public void setRepoSlug(String repoSlug) { this.repoSlug = repoSlug; }
+
+    public String getWorkspacePath() { return workspacePath; }
+    public void setWorkspacePath(String workspacePath) { this.workspacePath = workspacePath; }
 
     public JobCoverageData getCoverageData() { return coverageData; }
     public void setCoverageData(JobCoverageData coverageData) { this.coverageData = coverageData; }

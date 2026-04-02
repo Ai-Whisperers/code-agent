@@ -11,11 +11,14 @@ import com.eneve.agent.exception.JobConflictException;
 import com.eneve.agent.exception.JobNotFoundException;
 import com.eneve.agent.exception.JobQueueFullException;
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.model.GitConfig;
+import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.AikidoFixRequest;
 import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.GenerateDocsRequest;
@@ -47,6 +50,7 @@ public class RunFixService {
     @Inject AuditService auditService;
     @Inject SettingsService settings;
     @Inject Soc2Policy soc2Policy;
+    @Inject CustomerRegistryStore registryStore;
 
     // ── RunFix-specific exceptions ────────────────────────────────────────
 
@@ -193,10 +197,11 @@ public class RunFixService {
             repoUrl = resolveRepoUrlFromContainer(issueInfo, descCtx, request.jiraKey());
         }
         if (repoUrl == null || repoUrl.isBlank()) {
-            throw new IllegalArgumentException("Could not resolve repository URL from Aikido. "
-                    + "Issue references a container image"
-                    + (issueInfo.containerImage() != null ? " (" + issueInfo.containerImage() + ")" : "")
-                    + " but no matching code repo was found. Provide repoUrl explicitly.");
+            repoUrl = resolveRepoUrlFromRegistry(issueInfo.repoName());
+        }
+        if (repoUrl == null || repoUrl.isBlank()) {
+            throw new IllegalArgumentException("Could not resolve repository URL for '"
+                    + issueInfo.repoName() + "'. Provide repoUrl explicitly.");
         }
 
         String jiraKey = request.jiraKey();
@@ -570,12 +575,74 @@ public class RunFixService {
         if (repoUrl == null) {
             repoUrl = resolveRepoUrlFromContainer(issueInfo, descCtx, issueKey);
         }
+        if (repoUrl == null) {
+            repoUrl = resolveRepoUrlFromRegistry(issueInfo.repoName());
+        }
 
         String prompt = issueInfo.toPromptSection();
         String branchSuffix = slugify(issueInfo.packageName() + "-"
                 + (issueInfo.fixedVersion() != null ? issueInfo.fixedVersion() : "fix"));
 
         return new AikidoEnrichment(repoUrl, prompt, branchSuffix);
+    }
+
+    /**
+     * Looks up the clone URL for a repo slug by scanning all configured products in the
+     * customer registry. Checks both {@code git.repos} (programmatic) and
+     * {@code metadata.repos} (UI-managed) to find a matching slug, then constructs the
+     * clone URL from the product's git workspace and platform.
+     */
+    private String resolveRepoUrlFromRegistry(String repoSlug) {
+        if (repoSlug == null || repoSlug.isBlank()) return null;
+        // Strip org prefix if present (e.g. "julesenergy/fit" → "fit")
+        String slug = repoSlug.contains("/")
+                ? repoSlug.substring(repoSlug.lastIndexOf('/') + 1)
+                : repoSlug;
+
+        GitConfig fallbackGit = null;
+        try {
+            for (ProductConfig product : registryStore.listAllProducts()) {
+                GitConfig git = product.git();
+                if (git == null || git.workspace() == null) continue;
+                if (fallbackGit == null) fallbackGit = git;
+
+                // Collect slugs from both sources
+                java.util.List<String> slugs = new java.util.ArrayList<>();
+                if (git.repos() != null) slugs.addAll(git.repos());
+                if (product.metadata() != null) {
+                    Object raw = product.metadata().get("repos");
+                    if (raw instanceof java.util.List<?> list) {
+                        for (Object item : list) {
+                            if (item instanceof String s) slugs.add(s);
+                        }
+                    }
+                }
+
+                for (String r : slugs) {
+                    if (r.equalsIgnoreCase(slug)) {
+                        String base = (git.baseUrl() != null && !git.baseUrl().isBlank())
+                                ? git.baseUrl().replaceAll("/$", "")
+                                : "https://bitbucket.org";
+                        String url = base + "/" + git.workspace() + "/" + slug + ".git";
+                        LOG.infof("Resolved repo URL for '%s' from registry (product=%s): %s",
+                                slug, product.productId(), url);
+                        return url;
+                    }
+                }
+            }
+            // Repo not listed under any product — assume it lives in the same workspace
+            if (fallbackGit != null) {
+                String base = (fallbackGit.baseUrl() != null && !fallbackGit.baseUrl().isBlank())
+                        ? fallbackGit.baseUrl().replaceAll("/$", "")
+                        : "https://bitbucket.org";
+                String url = base + "/" + fallbackGit.workspace() + "/" + slug + ".git";
+                LOG.infof("Resolved repo URL for '%s' via workspace fallback: %s", slug, url);
+                return url;
+            }
+        } catch (Exception e) {
+            LOG.warnf("Failed to resolve repo URL from registry for '%s': %s", slug, e.getMessage());
+        }
+        return null;
     }
 
     private String resolveRepoUrlFromContainer(AikidoIssueInfo issueInfo,

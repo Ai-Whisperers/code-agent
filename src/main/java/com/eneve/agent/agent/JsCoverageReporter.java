@@ -40,10 +40,10 @@ public class JsCoverageReporter {
     private static final long INSTALL_TIMEOUT_MINUTES = 10L;
 
     /**
-     * Returns {@code true} when the workspace looks like a Jest or Vitest project.
+     * Returns {@code true} when the workspace looks like a Jest, Vitest, or Angular project.
      * Detection prefers explicit config files ({@code jest.config.*},
-     * {@code vitest.config.*}) and falls back to checking {@code devDependencies} /
-     * {@code dependencies} in {@code package.json}.
+     * {@code vitest.config.*}, {@code angular.json}) and falls back to checking
+     * {@code devDependencies} / {@code dependencies} in {@code package.json}.
      */
     public boolean isApplicable(WorkspaceContext workspace) {
         Path root = workspace.getRoot();
@@ -95,7 +95,7 @@ public class JsCoverageReporter {
     // ── Runner detection ─────────────────────────────────────────────────
 
     /**
-     * Returns {@code "jest"}, {@code "vitest"}, or {@code null}.
+     * Returns {@code "jest"}, {@code "vitest"}, {@code "angular"}, or {@code null}.
      * Config files take priority over package.json dependency entries.
      */
     private String detectRunner(Path root) {
@@ -103,12 +103,15 @@ public class JsCoverageReporter {
         if (hasConfigFile(root, "vitest.config")) return "vitest";
         if (hasConfigFile(root, "jest.config"))   return "jest";
 
+        // Angular workspace — detected by angular.json or .angular/
+        if (Files.exists(root.resolve("angular.json"))) return "angular";
+
         // Fall back to package.json dependency names
         try {
             String pkg = Files.readString(root.resolve("package.json"));
-            // Check scripts first (e.g. "test": "vitest")
-            if (pkg.contains("\"vitest\"")) return "vitest";
-            if (pkg.contains("\"jest\""))   return "jest";
+            if (pkg.contains("\"vitest\""))       return "vitest";
+            if (pkg.contains("\"jest\""))         return "jest";
+            if (pkg.contains("\"@angular/core\"")) return "angular";
         } catch (IOException e) {
             LOG.debugf("JsCoverageReporter: could not read package.json: %s", e.getMessage());
         }
@@ -137,18 +140,32 @@ public class JsCoverageReporter {
 
     /**
      * Installs project dependencies using the detected package manager.
+     * For npm, tries {@code npm ci} first and falls back to {@code npm install}
+     * when the lock file is out of sync with package.json (EUSAGE).
      */
     private boolean install(Path root, String pkgManager) {
-        String installCmd = switch (pkgManager) {
-            case "pnpm" -> "pnpm install --frozen-lockfile --ignore-scripts";
-            case "yarn" -> "yarn install --frozen-lockfile --ignore-scripts";
-            default     -> Files.exists(root.resolve("package-lock.json"))
-                    ? "npm ci --ignore-scripts"
-                    : "npm install --ignore-scripts";
+        return switch (pkgManager) {
+            case "pnpm" -> {
+                LOG.infof("JsCoverageReporter: installing dependencies (pnpm)");
+                yield runInstallCommand(root, "pnpm install --frozen-lockfile --ignore-scripts",
+                        INSTALL_TIMEOUT_MINUTES);
+            }
+            case "yarn" -> {
+                LOG.infof("JsCoverageReporter: installing dependencies (yarn)");
+                yield runInstallCommand(root, "yarn install --frozen-lockfile --ignore-scripts",
+                        INSTALL_TIMEOUT_MINUTES);
+            }
+            default -> {
+                boolean hasLock = Files.exists(root.resolve("package-lock.json"));
+                if (hasLock) {
+                    LOG.infof("JsCoverageReporter: installing dependencies (npm ci)");
+                    if (runInstallCommand(root, "npm ci --ignore-scripts", INSTALL_TIMEOUT_MINUTES)) yield true;
+                    LOG.infof("JsCoverageReporter: npm ci failed — retrying with npm install");
+                }
+                LOG.infof("JsCoverageReporter: installing dependencies (npm install)");
+                yield runInstallCommand(root, "npm install --ignore-scripts", INSTALL_TIMEOUT_MINUTES);
+            }
         };
-
-        LOG.infof("JsCoverageReporter: installing dependencies (%s): %s", pkgManager, installCmd);
-        return runInstallCommand(root, installCmd, INSTALL_TIMEOUT_MINUTES);
     }
 
     /**
@@ -230,29 +247,74 @@ public class JsCoverageReporter {
             return null;
         }
 
-        Path reportFile = CoberturaXmlParser.findReport(root);
-        if (reportFile == null) {
-            LOG.warnf("JsCoverageReporter: no cobertura-coverage.xml found under %s", root);
-            return null;
+        // Try Cobertura XML first (Jest/Vitest), then LCOV (Angular/Karma)
+        Path coberturaReport = CoberturaXmlParser.findReport(root);
+        if (coberturaReport != null) {
+            try {
+                CoverageSnapshot snap = CoberturaXmlParser.parse(coberturaReport);
+                LOG.infof("JsCoverageReporter: parsed Cobertura report — lines %.1f%%, branches %.1f%%",
+                        snap.lineRate(), snap.branchRate());
+                return snap;
+            } catch (Exception e) {
+                LOG.warnf("JsCoverageReporter: failed to parse Cobertura report: %s", e.getMessage());
+            }
         }
 
-        try {
-            CoverageSnapshot snap = CoberturaXmlParser.parse(reportFile);
-            LOG.infof("JsCoverageReporter: parsed report — lines %.1f%%, branches %.1f%%",
-                    snap.lineRate(), snap.branchRate());
-            return snap;
-        } catch (Exception e) {
-            LOG.warnf("JsCoverageReporter: failed to parse Cobertura report: %s", e.getMessage());
-            return null;
+        // LCOV fallback — Angular/Karma writes coverage/lcov.info by default
+        Path lcovReport = findLcovReport(root);
+        if (lcovReport != null) {
+            try {
+                CoverageSnapshot snap = LcovParser.parse(lcovReport);
+                LOG.infof("JsCoverageReporter: parsed LCOV report — lines %.1f%%", snap.lineRate());
+                return snap;
+            } catch (Exception e) {
+                LOG.warnf("JsCoverageReporter: failed to parse LCOV report: %s", e.getMessage());
+            }
         }
+
+        LOG.warnf("JsCoverageReporter: no coverage report found under %s (tried Cobertura XML and LCOV)", root);
+        return null;
+    }
+
+    /** Searches common locations for an lcov.info file produced by Karma or Istanbul. */
+    private Path findLcovReport(Path root) {
+        String[] candidates = {
+            "coverage/lcov.info",
+            "coverage/lcov-report/lcov.info",
+            "coverage/browser/lcov.info",
+        };
+        for (String candidate : candidates) {
+            Path p = root.resolve(candidate);
+            if (Files.exists(p)) return p;
+        }
+        // Also search one level deep under coverage/
+        Path coverageDir = root.resolve("coverage");
+        if (Files.isDirectory(coverageDir)) {
+            try (var stream = Files.list(coverageDir)) {
+                return stream
+                        .filter(Files::isDirectory)
+                        .map(d -> d.resolve("lcov.info"))
+                        .filter(Files::exists)
+                        .findFirst()
+                        .orElse(null);
+            } catch (IOException e) {
+                LOG.debugf("JsCoverageReporter: could not scan coverage dir: %s", e.getMessage());
+            }
+        }
+        return null;
     }
 
     private String buildCoverageCommand(String runner) {
-        if ("vitest".equals(runner)) {
-            // By this point the coverage provider is guaranteed to be present
-            return "npx vitest run --coverage --coverage.provider=v8 --coverage.reporter=cobertura --passWithNoTests";
-        }
-        return "npx jest --coverage --coverageReporters=cobertura --passWithNoTests --forceExit";
+        return switch (runner) {
+            case "vitest" ->
+                // Coverage provider is guaranteed present at this point
+                "npx vitest run --coverage --coverage.provider=v8 --coverage.reporter=cobertura --passWithNoTests";
+            case "angular" ->
+                // ng test with ChromeHeadless; --no-progress keeps output readable in CI
+                "npx ng test --no-watch --code-coverage --browsers=ChromeHeadless --no-progress 2>&1 || true";
+            default ->
+                "npx jest --coverage --coverageReporters=cobertura --passWithNoTests --forceExit";
+        };
     }
 
     /**

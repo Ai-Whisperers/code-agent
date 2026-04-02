@@ -224,6 +224,10 @@
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>rds</artifactId>
         </dependency>
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ses</artifactId>
+        </dependency>
 
         <!-- pgvector JDBC support for semantic code search -->
         <dependency>

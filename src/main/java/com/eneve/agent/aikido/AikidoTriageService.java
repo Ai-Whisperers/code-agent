@@ -5,11 +5,14 @@ import java.util.List;
 import java.util.UUID;
 
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.audit.AuditStore;
 import com.eneve.agent.audit.AuditEntry;
 import com.eneve.agent.jira.JiraService;
+import com.eneve.agent.model.GitConfig;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.TeamsNotifier;
@@ -47,6 +50,7 @@ public class AikidoTriageService {
     @Inject SettingsService settings;
     @Inject AuditStore auditStore;
     @Inject Soc2Policy soc2Policy;
+    @Inject CustomerRegistryStore registryStore;
 
     /**
      * Result of a triage operation. Callers can inspect this to build an appropriate HTTP response.
@@ -94,19 +98,26 @@ public class AikidoTriageService {
             return TriageResult.skipped("Could not load Aikido issue details for group " + groupId);
         }
 
-        // Use repo URL from Aikido if not provided
+        // Resolve repo URL: caller → Aikido issue detail → customer registry
         String effectiveRepoUrl = (repoUrl != null && !repoUrl.isBlank())
                 ? repoUrl : issueInfo.repoUrl();
         if (effectiveRepoUrl == null || effectiveRepoUrl.isBlank()) {
-            return TriageResult.skipped("No repository URL available for group " + groupId);
+            effectiveRepoUrl = resolveRepoUrlFromRegistry(issueInfo.repoName());
+        }
+        if (effectiveRepoUrl == null || effectiveRepoUrl.isBlank()) {
+            return TriageResult.skipped("No repository URL available for group " + groupId
+                    + " (repo: " + issueInfo.repoName() + ")");
         }
 
         // ── 3. JIRA issue lookup / creation ───────────────────────────────────
+        // Resolve the product that owns this repo so we can use its Jira project key
+        ProductConfig owningProduct = resolveProductForRepo(issueInfo.repoName());
+
         String jiraKey = aikidoService.findLinkedJiraKeyForGroup(groupId);
         boolean jiraCreated = false;
 
         if (jiraKey == null || jiraKey.isBlank()) {
-            jiraKey = createJiraBug(issueInfo, severity);
+            jiraKey = createJiraBug(issueInfo, severity, owningProduct);
             if (jiraKey == null) {
                 LOG.warnf("AikidoTriage: JIRA creation failed for group %d — continuing with synthetic key", groupId);
                 jiraKey = "AIKIDO-" + groupId;
@@ -157,6 +168,11 @@ public class AikidoTriageService {
         JobRecord job = new JobRecord(jobId, fixRequest);
         job.setAikidoIssueId(groupIdStr);
         job.setFixBranchName(branchName);
+        // Tag the job with the repo slug so findLatestJobForAikidoGroupId can scope by repo.
+        // issueInfo.repoName() is the slug (e.g. "julesnotify-backend") as returned by Aikido.
+        if (issueInfo.repoName() != null && !issueInfo.repoName().isBlank()) {
+            job.setRepoSlug(issueInfo.repoName());
+        }
 
         // Populate SLA fields from JIRA
         populateSlaFields(job, jiraKey, severity);
@@ -184,10 +200,22 @@ public class AikidoTriageService {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
-    private String createJiraBug(AikidoIssueInfo info, String severity) {
-        String projectKey = settings.get("aikido.jira.default-project", "");
+    private String createJiraBug(AikidoIssueInfo info, String severity, ProductConfig product) {
+        // Prefer the product's own Jira project key ("default" role), fall back to global setting
+        String projectKey = null;
+        if (product != null && product.jira() != null && product.jira().projects() != null) {
+            projectKey = product.jira().projects().get("default");
+            if (projectKey != null && !projectKey.isBlank()) {
+                LOG.infof("AikidoTriage: using product Jira project '%s' for product '%s'",
+                        projectKey, product.productId());
+            }
+        }
+        if (projectKey == null || projectKey.isBlank()) {
+            projectKey = settings.get("aikido.jira.default-project", "");
+        }
         if (projectKey.isBlank()) {
-            LOG.warnf("AikidoTriage: aikido.jira.default-project not configured — cannot create JIRA bug");
+            LOG.warnf("AikidoTriage: no Jira project key configured (product=%s, global setting aikido.jira.default-project not set) — cannot create JIRA bug",
+                    product != null ? product.productId() : "unknown");
             return null;
         }
 
@@ -268,6 +296,95 @@ public class AikidoTriageService {
             case "medium"   -> "Medium";
             default         -> "Low";
         };
+    }
+
+    /**
+     * Finds the product that owns the given repo slug by scanning all products and checking
+     * both {@code metadata.repos} (UI-managed) and {@code git.repos} (programmatic).
+     * Returns {@code null} if no product claims the repo.
+     */
+    private ProductConfig resolveProductForRepo(String repoSlug) {
+        if (repoSlug == null || repoSlug.isBlank()) return null;
+        String slug = repoSlug.contains("/")
+                ? repoSlug.substring(repoSlug.lastIndexOf('/') + 1)
+                : repoSlug;
+        try {
+            for (ProductConfig product : registryStore.listAllProducts()) {
+                java.util.List<String> slugs = new java.util.ArrayList<>();
+                if (product.git() != null && product.git().repos() != null) {
+                    slugs.addAll(product.git().repos());
+                }
+                if (product.metadata() != null) {
+                    Object raw = product.metadata().get("repos");
+                    if (raw instanceof java.util.List<?> list) {
+                        for (Object item : list) {
+                            if (item instanceof String s) slugs.add(s);
+                        }
+                    }
+                }
+                for (String r : slugs) {
+                    if (r.equalsIgnoreCase(slug)) {
+                        LOG.infof("AikidoTriage: resolved product '%s' for repo '%s'",
+                                product.productId(), slug);
+                        return product;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("AikidoTriage: failed to resolve product for repo '%s': %s", slug, e.getMessage());
+        }
+        return null;
+    }
+
+    private String resolveRepoUrlFromRegistry(String repoSlug) {
+        if (repoSlug == null || repoSlug.isBlank()) return null;
+        String slug = repoSlug.contains("/")
+                ? repoSlug.substring(repoSlug.lastIndexOf('/') + 1)
+                : repoSlug;
+        GitConfig fallbackGit = null;
+        try {
+            for (ProductConfig product : registryStore.listAllProducts()) {
+                GitConfig git = product.git();
+                if (git == null || git.workspace() == null) continue;
+                if (fallbackGit == null) fallbackGit = git;
+
+                java.util.List<String> slugs = new java.util.ArrayList<>();
+                if (git.repos() != null) slugs.addAll(git.repos());
+                if (product.metadata() != null) {
+                    Object raw = product.metadata().get("repos");
+                    if (raw instanceof java.util.List<?> list) {
+                        for (Object item : list) {
+                            if (item instanceof String s) slugs.add(s);
+                        }
+                    }
+                }
+
+                for (String r : slugs) {
+                    if (r.equalsIgnoreCase(slug)) {
+                        String base = (git.baseUrl() != null && !git.baseUrl().isBlank())
+                                ? git.baseUrl().replaceAll("/$", "")
+                                : "https://bitbucket.org";
+                        String url = base + "/" + git.workspace() + "/" + slug + ".git";
+                        LOG.infof("AikidoTriage: resolved repo URL for '%s' from registry (product=%s): %s",
+                                slug, product.productId(), url);
+                        return url;
+                    }
+                }
+            }
+            // Repo not listed under any product — assume it lives in the same workspace
+            if (fallbackGit != null) {
+                String base = (fallbackGit.baseUrl() != null && !fallbackGit.baseUrl().isBlank())
+                        ? fallbackGit.baseUrl().replaceAll("/$", "")
+                        : "https://bitbucket.org";
+                String url = base + "/" + fallbackGit.workspace() + "/" + slug + ".git";
+                LOG.infof("AikidoTriage: resolved repo URL for '%s' via workspace fallback: %s", slug, url);
+                return url;
+            }
+        } catch (Exception e) {
+            LOG.warnf("AikidoTriage: failed to resolve repo URL from registry for '%s': %s",
+                    slug, e.getMessage());
+        }
+        return null;
     }
 
     private static String slugify(String input) {

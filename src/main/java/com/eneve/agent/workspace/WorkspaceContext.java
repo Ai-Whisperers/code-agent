@@ -29,6 +29,7 @@ public class WorkspaceContext implements AutoCloseable {
     private final Map<String, String> metadata = new HashMap<>();
     private final Map<String, Path> clonedRepos = new HashMap<>(); // repoSlug -> subdirectory path
     private boolean planManaged;
+    private boolean keepOnClose;
     private String userId;
     private String conversationId;
 
@@ -68,6 +69,26 @@ public class WorkspaceContext implements AutoCloseable {
         Path tmp = Files.createTempDirectory("agent-job-" + jobId + "-");
         LOG.infof("Created workspace: %s", tmp);
         return new WorkspaceContext(tmp);
+    }
+
+    /**
+     * Reuses an existing workspace directory from a previous (failed) job.
+     * The directory must exist and already contain a cloned repository.
+     * Returns {@code null} if the path is blank, does not exist, or has no {@code .git} directory.
+     */
+    public static WorkspaceContext reuse(String workspacePath) {
+        if (workspacePath == null || workspacePath.isBlank()) return null;
+        Path root = Path.of(workspacePath);
+        if (!Files.exists(root) || !Files.isDirectory(root)) {
+            LOG.warnf("Cannot reuse workspace — directory does not exist: %s", workspacePath);
+            return null;
+        }
+        if (!Files.exists(root.resolve(".git"))) {
+            LOG.warnf("Cannot reuse workspace — no .git directory found: %s", workspacePath);
+            return null;
+        }
+        LOG.infof("Reusing preserved workspace: %s", root);
+        return new WorkspaceContext(root);
     }
 
     /**
@@ -424,9 +445,23 @@ public class WorkspaceContext implements AutoCloseable {
         return resolved;
     }
 
+    /**
+     * Marks this workspace to be preserved on disk when {@link #close()} is called.
+     * Use this before failing a job so a subsequent retry job can reuse the
+     * already-cloned repository via {@link #reuse(String)}.
+     */
+    public void keepOnClose() {
+        this.keepOnClose = true;
+    }
+
+    /** Returns the absolute path of the workspace root directory. */
+    public String getAbsolutePath() {
+        return root.toAbsolutePath().toString();
+    }
+
     @Override
     public void close() {
-        if (planManaged) {
+        if (planManaged || keepOnClose) {
             return;
         }
         doClose();

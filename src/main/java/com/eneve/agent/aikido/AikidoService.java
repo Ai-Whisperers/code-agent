@@ -201,6 +201,11 @@ public class AikidoService {
      * Fetch all open issue groups and return enriched details for those belonging to the given repo.
      * Matching is lenient: a group matches if its repo name contains {@code repoSlug} (case-insensitive),
      * or if the last path segment of the repo URL matches {@code repoSlug}.
+     *
+     * <p><b>Note:</b> this method calls the list endpoint once and then one detail endpoint per
+     * matching group. For scanning multiple repos in one pass use
+     * {@link #findOpenIssuesForAllRepos(java.util.Collection)} to avoid redundant list calls and
+     * stay within Aikido's rate limit (20 req/min).
      */
     public List<AikidoIssueInfo> findOpenIssuesForRepo(String repoSlug) {
         if (repoSlug == null || repoSlug.isBlank()) return List.of();
@@ -210,33 +215,114 @@ public class AikidoService {
 
         List<AikidoIssueInfo> results = new ArrayList<>();
         try {
-            JsonNode root = objectMapper.readTree(json);
-            JsonNode groups = root.isArray() ? root : root.path("data");
-            if (!groups.isArray()) {
-                groups = root.path("groups");
-            }
-            if (!groups.isArray()) {
-                LOG.warnf("Aikido: unexpected response shape when listing open issues");
-                return List.of();
-            }
+            JsonNode groups = parseGroups(json);
+            if (groups == null) return List.of();
 
             String slugLower = repoSlug.toLowerCase();
             for (JsonNode group : groups) {
                 if (!groupMatchesRepo(group, slugLower)) continue;
-
                 int groupId = group.path("id").asInt(-1);
                 if (groupId < 0) continue;
-
                 AikidoIssueInfo info = getIssueGroupDetail(groupId);
-                if (info != null) {
-                    results.add(info);
-                }
+                if (info != null) results.add(info);
             }
             LOG.infof("Aikido: found %d open issue(s) for repo '%s'", results.size(), repoSlug);
         } catch (Exception e) {
             LOG.errorf("Aikido: failed to parse open issues for repo '%s': %s", repoSlug, e.getMessage());
         }
         return results;
+    }
+
+    /**
+     * Fetches the open-issue-groups list <b>once</b> and returns a map of
+     * {@code repoSlug → List<AikidoIssueInfo>} for every slug in {@code repoSlugs}.
+     *
+     * <p>This is the preferred method when scanning multiple repos: it makes exactly
+     * 1 list call + 1 detail call per distinct matching group, keeping total API calls
+     * well within Aikido's 20 req/min rate limit.
+     */
+    public java.util.Map<String, List<AikidoIssueInfo>> findOpenIssuesForAllRepos(
+            java.util.Collection<String> repoSlugs) {
+
+        java.util.Map<String, List<AikidoIssueInfo>> result = new java.util.LinkedHashMap<>();
+        for (String slug : repoSlugs) {
+            result.put(slug, new ArrayList<>());
+        }
+
+        String json = get("/api/public/v1/open-issue-groups", "list open issues (bulk)");
+        if (json == null) return result;
+
+        try {
+            JsonNode groups = parseGroups(json);
+            if (groups == null) return result;
+
+            // Pre-lowercase all slugs once
+            java.util.Map<String, String> slugMap = new java.util.LinkedHashMap<>();
+            for (String slug : repoSlugs) {
+                slugMap.put(slug, slug.toLowerCase());
+            }
+
+            // Collect group IDs per slug — a group can match multiple repos (monorepo)
+            java.util.Map<String, java.util.Set<Integer>> slugToGroupIds = new java.util.LinkedHashMap<>();
+            for (String slug : repoSlugs) {
+                slugToGroupIds.put(slug, new java.util.LinkedHashSet<>());
+            }
+
+            for (JsonNode group : groups) {
+                int groupId = group.path("id").asInt(-1);
+                if (groupId < 0) continue;
+                for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
+                    if (groupMatchesRepo(group, entry.getValue())) {
+                        slugToGroupIds.get(entry.getKey()).add(groupId);
+                    }
+                }
+            }
+
+            // Fetch detail for each distinct group ID exactly once
+            java.util.Map<Integer, AikidoIssueInfo> detailCache = new java.util.LinkedHashMap<>();
+            for (java.util.Set<Integer> ids : slugToGroupIds.values()) {
+                for (int id : ids) {
+                    if (!detailCache.containsKey(id)) {
+                        AikidoIssueInfo info = getIssueGroupDetail(id);
+                        if (info != null) detailCache.put(id, info);
+                    }
+                }
+            }
+
+            // Assemble results — override repoName with the matched slug so multi-repo
+            // issue groups are attributed to the correct repo card, not whichever repo
+            // Aikido happened to return first in the detail response.
+            for (java.util.Map.Entry<String, java.util.Set<Integer>> entry : slugToGroupIds.entrySet()) {
+                String slug = entry.getKey();
+                List<AikidoIssueInfo> issues = result.get(slug);
+                for (int id : entry.getValue()) {
+                    AikidoIssueInfo info = detailCache.get(id);
+                    if (info != null) issues.add(info.withRepoName(slug));
+                }
+                LOG.infof("Aikido: found %d open issue(s) for repo '%s'", issues.size(), slug);
+            }
+
+        } catch (Exception e) {
+            LOG.errorf("Aikido: failed to parse open issues (bulk): %s", e.getMessage());
+        }
+        return result;
+    }
+
+    /** Parses the open-issue-groups JSON response and returns the groups array, or null on error. */
+    private JsonNode parseGroups(String json) {
+        try {
+            JsonNode root = objectMapper.readTree(json);
+            JsonNode groups = root.isArray() ? root : root.path("data");
+            if (!groups.isArray()) groups = root.path("groups");
+            if (!groups.isArray()) {
+                LOG.warnf("Aikido: unexpected response shape when listing open issues");
+                return null;
+            }
+            return groups;
+        } catch (Exception e) {
+            LOG.errorf("Aikido: failed to parse open-issue-groups response: %s", e.getMessage());
+            return null;
+        }
     }
 
     /**
@@ -308,17 +394,35 @@ public class AikidoService {
     }
 
     private boolean groupMatchesRepo(JsonNode group, String slugLower) {
-        // Check repo_name / repository_name / code_repo.name
-        for (String field : new String[]{"repo_name", "repository_name"}) {
-            String name = group.path(field).asText("");
-            if (!name.isBlank() && name.toLowerCase().contains(slugLower)) return true;
+        // Primary: check the locations array — Aikido's actual structure.
+        // Each location has { "id": ..., "name": "repo-slug", "type": "code_repository" | "container_repository" }
+        // The name can be a plain slug ("fit") or "org/repo" ("julesenergy/fit").
+        JsonNode locations = group.path("locations");
+        if (locations.isArray()) {
+            for (JsonNode loc : locations) {
+                String locName = loc.path("name").asText("").toLowerCase();
+                if (locName.isBlank()) continue;
+                // Exact match or last path segment match (handles "org/repo" format)
+                String lastSegment = locName.substring(locName.lastIndexOf('/') + 1);
+                if (locName.equals(slugLower) || lastSegment.equals(slugLower)) return true;
+            }
+        }
+
+        // Fallback: legacy fields that some Aikido API versions use
+        for (String field : new String[]{"repo_name", "repository_name", "name"}) {
+            String name = group.path(field).asText("").toLowerCase();
+            if (name.isBlank()) continue;
+            String lastSegment = name.substring(name.lastIndexOf('/') + 1);
+            if (name.equals(slugLower) || lastSegment.equals(slugLower)) return true;
         }
         JsonNode codeRepo = group.path("code_repo");
         if (!codeRepo.isMissingNode()) {
-            String name = codeRepo.path("name").asText(codeRepo.path("repo_name").asText(""));
-            if (!name.isBlank() && name.toLowerCase().contains(slugLower)) return true;
+            String name = codeRepo.path("name").asText(codeRepo.path("repo_name").asText("")).toLowerCase();
+            if (!name.isBlank()) {
+                String lastSegment = name.substring(name.lastIndexOf('/') + 1);
+                if (name.equals(slugLower) || lastSegment.equals(slugLower)) return true;
+            }
         }
-        // Check last path segment of any repo URL fields
         for (String field : new String[]{"repo_url", "repository_url", "clone_url"}) {
             String url = group.path(field).asText("");
             if (url.isBlank() && !codeRepo.isMissingNode()) {
@@ -346,6 +450,7 @@ public class AikidoService {
             String issueType = extractIssueType(root);
             LOG.debugf("Aikido issue group %d: issueType=%s", issueGroupId, issueType);
 
+            String title = extractText(root, "title", "");
             String severity = extractText(root, "severity", "medium");
             String packageName = extractText(root, "affected_package",
                     extractText(root, "package_name",
@@ -384,7 +489,7 @@ public class AikidoService {
             }
 
             return new AikidoIssueInfo(
-                    issueGroupId, issueType, severity, packageName, currentVersion, fixedVersion,
+                    issueGroupId, issueType, title, severity, packageName, currentVersion, fixedVersion,
                     cveId, cveDescription, cvssScore, repoName, repoUrl, containerImage, changelogSummary
             );
         } catch (Exception e) {
@@ -566,6 +671,22 @@ public class AikidoService {
         JsonNode repo = root.path("code_repo");
         if (!repo.isMissingNode()) {
             return repo.path("name").asText(repo.path("repo_name").asText(""));
+        }
+        // Fall back to locations array — pick the first code_repository entry's name
+        JsonNode locations = root.path("locations");
+        if (locations.isArray()) {
+            for (JsonNode loc : locations) {
+                String type = loc.path("type").asText("");
+                if ("code_repository".equals(type) || type.isBlank()) {
+                    String name = loc.path("name").asText("");
+                    if (!name.isBlank()) {
+                        // Strip org prefix if present (e.g. "julesenergy/fit" → "fit")
+                        return name.contains("/")
+                                ? name.substring(name.lastIndexOf('/') + 1)
+                                : name;
+                    }
+                }
+            }
         }
         return "";
     }

@@ -48,6 +48,7 @@ public class ReviewHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
     @Inject SettingsService settings;
+    @Inject com.eneve.agent.notifications.ReviewEmailNotifier emailNotifier;
 
     @Override
     public JobType jobType() {
@@ -332,6 +333,7 @@ public class ReviewHandler implements JobHandler {
 
             RunResult result = lifecycle.buildReviewResult(job, true);
             lifecycle.notifyResult(result, request.n8nWebhookUrl());
+            emailNotifier.sendReviewDigest(request, job, coords);
 
             LOG.infof("Review job %s completed for PR #%s", job.getJobId(), request.prId());
 

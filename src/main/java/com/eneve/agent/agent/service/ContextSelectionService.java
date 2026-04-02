@@ -3,6 +3,7 @@ package com.eneve.agent.agent.service;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.aikido.AikidoIssueInfo;
+import com.eneve.agent.SecurityIssuesCacheService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.confluence.ConfluenceService;
 import com.eneve.agent.mcp.LinkedAccountService;
@@ -18,7 +19,6 @@ import jakarta.ws.rs.WebApplicationException;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
 
-import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -34,10 +34,13 @@ public class ContextSelectionService {
 
     @Inject
     CustomerRegistryStore customerRegistryStore;
-    
+
     @Inject
     AikidoService aikidoService;
-    
+
+    @Inject
+    SecurityIssuesCacheService securityIssuesCacheService;
+
     @Inject
     JiraService jiraService;
     
@@ -86,10 +89,9 @@ public class ContextSelectionService {
             
             List<AikidoIssueInfo> issues;
             if (repoSlug != null && !repoSlug.isBlank()) {
-                issues = aikidoService.findActionableIssuesForRepo(repoSlug);
+                // Use the in-memory cache (actionable = SAST/SCA only) to avoid direct API calls.
+                issues = securityIssuesCacheService.getIssuesForRepo(repoSlug, true);
             } else {
-                // If no repoSlug provided, we can't easily get all issues
-                // Return empty list or implement a different approach
                 return List.of();
             }
             

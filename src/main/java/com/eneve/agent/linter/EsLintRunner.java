@@ -83,9 +83,20 @@ public class EsLintRunner implements LinterRunner {
     }
 
     private String installDependencies(Path workspaceRoot, long timeoutMinutes) {
-        String command = Files.exists(workspaceRoot.resolve("package-lock.json"))
-                ? "npm ci --ignore-scripts"
-                : "npm install --ignore-scripts";
+        boolean hasLockFile = Files.exists(workspaceRoot.resolve("package-lock.json"));
+        // Try npm ci first when a lock file exists — it is faster and reproducible.
+        // If the lock file is out of sync with package.json (e.g. the agent just bumped a
+        // dependency), npm ci exits with EUSAGE. In that case fall back to npm install so
+        // the lock file is regenerated and ESLint can still run.
+        if (hasLockFile) {
+            String result = runNpmCommand("npm ci --ignore-scripts", workspaceRoot, timeoutMinutes);
+            if (result != null) return result;
+            LOG.info("npm ci failed (lock file out of sync) — retrying with npm install");
+        }
+        return runNpmCommand("npm install --ignore-scripts", workspaceRoot, timeoutMinutes);
+    }
+
+    private String runNpmCommand(String command, Path workspaceRoot, long timeoutMinutes) {
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())
@@ -97,16 +108,16 @@ public class EsLintRunner implements LinterRunner {
 
             if (!finished) {
                 proc.destroyForcibly();
-                LOG.warn("npm install timed out");
+                LOG.warnf("'%s' timed out", command);
                 return null;
             }
             if (proc.exitValue() != 0) {
-                LOG.warnf("npm install failed (exit %d): %s", proc.exitValue(), LinterUtils.truncate(output));
+                LOG.warnf("'%s' failed (exit %d): %s", command, proc.exitValue(), LinterUtils.truncate(output));
                 return null;
             }
             return output;
         } catch (IOException | InterruptedException e) {
-            LOG.warnf("npm install failed: %s", e.getMessage());
+            LOG.warnf("'%s' failed: %s", command, e.getMessage());
             return null;
         }
     }
