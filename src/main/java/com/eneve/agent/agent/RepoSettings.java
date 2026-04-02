@@ -21,7 +21,8 @@ public record RepoSettings(
 ) {
 
     public static RepoSettings defaults(String workspace, String repoSlug) {
+        Instant now = Instant.now();
         return new RepoSettings(null, workspace, repoSlug, true,
-                List.of(), null, List.of(), Instant.now(), Instant.now());
+                List.of(), null, List.of(), now, now);
     }
 }
