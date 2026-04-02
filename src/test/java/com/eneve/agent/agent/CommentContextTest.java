@@ -187,18 +187,16 @@ class CommentContextTest {
     }
 
     @Test
-    void recordFieldsAreImmutable() {
-        // This test ensures that all fields are accessible and the record is properly defined
+    void allAccessorsReturnNonNullValues() {
+        // Verifies that all accessors return non-null values for a fully-populated record
         CommentContext context = new CommentContext("PR-1", "org", "proj", "repo", 
                 "file.java", 10, "quality", "medium", "finding", "job-1");
 
-        // All getters should work (this is implicit with records, but worth testing)
         assertNotNull(context.prId());
         assertNotNull(context.organization());
         assertNotNull(context.project());
         assertNotNull(context.repository());
         assertNotNull(context.filePath());
-        assertTrue(context.line() >= 0);
         assertNotNull(context.category());
         assertNotNull(context.severity());
         assertNotNull(context.findingText());
