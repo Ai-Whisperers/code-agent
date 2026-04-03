@@ -10,24 +10,26 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(17, values.length);
-        assertEquals(JobType.FIX,              values[0]);
-        assertEquals(JobType.REVIEW,           values[1]);
-        assertEquals(JobType.FIX_PR,           values[2]);
-        assertEquals(JobType.REPLY,            values[3]);
-        assertEquals(JobType.FIX_COMMENT,      values[4]);
-        assertEquals(JobType.HOOK,             values[5]);
-        assertEquals(JobType.GENERATE_TESTS,   values[6]);
-        assertEquals(JobType.GENERATE_DOCS,    values[7]);
-        assertEquals(JobType.SYNC_CONFLUENCE,  values[8]);
-        assertEquals(JobType.METRICS,          values[9]);
-        assertEquals(JobType.QUALITY_REPORT,   values[10]);
-        assertEquals(JobType.REVIEW_EPIC,      values[11]);
-        assertEquals(JobType.REVIEW_FEATURE,   values[12]);
-        assertEquals(JobType.REVIEW_USERSTORY, values[13]);
-        assertEquals(JobType.CHAT,             values[14]);
-        assertEquals(JobType.PROMOTE,          values[15]);
-        assertEquals(JobType.SELF_ANALYSIS,    values[16]);
+        assertEquals(19, values.length);
+        assertEquals(JobType.FIX,                        values[0]);
+        assertEquals(JobType.REVIEW,                     values[1]);
+        assertEquals(JobType.FIX_PR,                     values[2]);
+        assertEquals(JobType.REPLY,                      values[3]);
+        assertEquals(JobType.FIX_COMMENT,                values[4]);
+        assertEquals(JobType.HOOK,                       values[5]);
+        assertEquals(JobType.GENERATE_TESTS,             values[6]);
+        assertEquals(JobType.GENERATE_DOCS,              values[7]);
+        assertEquals(JobType.SYNC_CONFLUENCE,            values[8]);
+        assertEquals(JobType.METRICS,                    values[9]);
+        assertEquals(JobType.QUALITY_REPORT,             values[10]);
+        assertEquals(JobType.REVIEW_EPIC,                values[11]);
+        assertEquals(JobType.REVIEW_FEATURE,             values[12]);
+        assertEquals(JobType.REVIEW_USERSTORY,           values[13]);
+        assertEquals(JobType.CHAT,                       values[14]);
+        assertEquals(JobType.PROMOTE,                    values[15]);
+        assertEquals(JobType.SELF_ANALYSIS,              values[16]);
+        assertEquals(JobType.GENERATE_ARCHITECTURE,      values[17]);
+        assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,values[18]);
     }
 
     @Test
@@ -47,8 +49,10 @@ class JobTypeTest {
         assertEquals("REVIEW_FEATURE",   JobType.REVIEW_FEATURE.name());
         assertEquals("REVIEW_USERSTORY", JobType.REVIEW_USERSTORY.name());
         assertEquals("CHAT",             JobType.CHAT.name());
-        assertEquals("PROMOTE",          JobType.PROMOTE.name());
-        assertEquals("SELF_ANALYSIS",    JobType.SELF_ANALYSIS.name());
+        assertEquals("PROMOTE",                    JobType.PROMOTE.name());
+        assertEquals("SELF_ANALYSIS",              JobType.SELF_ANALYSIS.name());
+        assertEquals("GENERATE_ARCHITECTURE",      JobType.GENERATE_ARCHITECTURE.name());
+        assertEquals("GENERATE_CLOUD_ARCHITECTURE",JobType.GENERATE_CLOUD_ARCHITECTURE.name());
     }
 
     @Test
@@ -68,8 +72,10 @@ class JobTypeTest {
         assertEquals(JobType.REVIEW_FEATURE,   JobType.valueOf("REVIEW_FEATURE"));
         assertEquals(JobType.REVIEW_USERSTORY, JobType.valueOf("REVIEW_USERSTORY"));
         assertEquals(JobType.CHAT,             JobType.valueOf("CHAT"));
-        assertEquals(JobType.PROMOTE,          JobType.valueOf("PROMOTE"));
-        assertEquals(JobType.SELF_ANALYSIS,    JobType.valueOf("SELF_ANALYSIS"));
+        assertEquals(JobType.PROMOTE,                    JobType.valueOf("PROMOTE"));
+        assertEquals(JobType.SELF_ANALYSIS,              JobType.valueOf("SELF_ANALYSIS"));
+        assertEquals(JobType.GENERATE_ARCHITECTURE,      JobType.valueOf("GENERATE_ARCHITECTURE"));
+        assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,JobType.valueOf("GENERATE_CLOUD_ARCHITECTURE"));
     }
 
     @Test
@@ -103,6 +109,8 @@ class JobTypeTest {
         assertEquals(14, JobType.CHAT.ordinal());
         assertEquals(15, JobType.PROMOTE.ordinal());
         assertEquals(16, JobType.SELF_ANALYSIS.ordinal());
+        assertEquals(17, JobType.GENERATE_ARCHITECTURE.ordinal());
+        assertEquals(18, JobType.GENERATE_CLOUD_ARCHITECTURE.ordinal());
     }
 
     @Test
