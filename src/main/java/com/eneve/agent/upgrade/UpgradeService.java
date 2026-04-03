@@ -412,8 +412,10 @@ public class UpgradeService {
                 2. Run `./mvnw quarkus:update` (or `mvn quarkus:update` if no wrapper) if the Quarkus Maven plugin is present.
                 3. Apply any breaking changes listed in the Migration Guide section below.
                 4. Java version check: %s
-                5. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists in the project root, otherwise `mvn compile`
-                6. Run tests: run `./mvnw test` if ./mvnw exists in the project root, otherwise `mvn test`
+                5. If a Dockerfile exists, update any base image FROM lines to use a pinned \
+                version tag matching the new Java requirement — never use :latest.
+                6. Ensure the project compiles: run `./mvnw compile` if ./mvnw exists in the project root, otherwise `mvn compile`
+                7. Run tests: run `./mvnw test` if ./mvnw exists in the project root, otherwise `mvn test`
 
                 Current version: %s
                 Target version: %s
@@ -442,8 +444,10 @@ public class UpgradeService {
                 (`dotnet outdated` or `dotnet list package --outdated`).
                 4. Review the .NET %s release notes for breaking changes and deprecated APIs: \
                 https://learn.microsoft.com/en-us/dotnet/core/whats-new/
-                5. Ensure the project builds successfully: run `dotnet build`
-                6. Run the test suite: run `dotnet test`
+                5. If a Dockerfile exists, update any base image FROM lines to use a pinned \
+                version tag for .NET %s (e.g. FROM mcr.microsoft.com/dotnet/aspnet:%s) — never use :latest.
+                6. Ensure the project builds successfully: run `dotnet build`
+                7. Run the test suite: run `dotnet test`
 
                 Current version: %s
                 Target version: %s
@@ -452,6 +456,7 @@ public class UpgradeService {
                 """.formatted(
                 currentVersion, latestVersion,
                 latestVersion, latestVersion, latestVersion, latestVersion,
+                latestVersion, latestVersion,
                 currentVersion, latestVersion,
                 branchName, defaultBranch());
     }
@@ -665,7 +670,8 @@ public class UpgradeService {
                 1. Update the `php` version constraint in composer.json to `^%s`.
                 2. Update the PHP version in any CI/CD pipeline configuration files \
                 (.github/workflows/*.yml, .gitlab-ci.yml, bitbucket-pipelines.yml, etc.).
-                3. Update the PHP version in Dockerfile or docker-compose.yml if present.
+                3. Update the PHP version in Dockerfile or docker-compose.yml if present. \
+                Use a pinned version tag (e.g. FROM php:%s-fpm) — never use :latest.
                 4. Review the PHP %s migration guide for breaking changes: \
                 https://www.php.net/manual/en/migration%s.php
                 5. Fix any deprecated or removed functions, extensions, or behaviors \
@@ -680,7 +686,7 @@ public class UpgradeService {
                 Target branch (PR base): %s
                 """.formatted(
                 currentVersion, latestVersion,
-                majorMinor, majorMinor, noDotsVersion,
+                majorMinor, majorMinor, majorMinor, noDotsVersion,
                 currentVersion, latestVersion,
                 branchName, defaultBranch());
     }

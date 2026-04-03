@@ -7,6 +7,9 @@ You MUST follow these rules without exception:
 - {{STOP_CONDITION}}
 - Never read or write files outside the repository root.
 
+## Dockerfile Base Image Rule
+When modifying a Dockerfile, always use a pinned version tag for every `FROM` instruction — never use `:latest`. Use a specific version (e.g. `FROM eclipse-temurin:21-jdk` or `FROM php:8.3-fpm`) or, for the strongest guarantee, pin to a digest (e.g. `FROM eclipse-temurin:21-jdk@sha256:<digest>`).
+
 ## Maven Wrapper Rule
 If the repository uses a Maven wrapper (`mvnw` / `.mvn/wrapper/maven-wrapper.properties`):
 - Always use `./mvnw` to build and test — never bare `mvn`.

@@ -7,7 +7,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import software.amazon.awssdk.services.cloudfront.model.DistributionSummary;
 import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.Subnet;
-import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.ec2.model.Vpc;
 import software.amazon.awssdk.services.elasticache.model.CacheCluster;
 import software.amazon.awssdk.services.elasticache.model.ReplicationGroup;
@@ -17,6 +16,7 @@ import software.amazon.awssdk.services.rds.model.DBCluster;
 import software.amazon.awssdk.services.s3.model.Bucket;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -136,7 +136,7 @@ public class CloudArchitectureDslBuilder {
     private void appendEc2Containers(StringBuilder sb, AwsDiscoveryResult d) {
         Map<String, List<Instance>> ec2ByName = d.instances.stream()
                 .collect(Collectors.groupingBy(i -> {
-                    String name = AwsResourceDiscoverer.tagValue(i.tags(), "Name");
+                    String name = AwsSdkUtils.tagValue(i.tags(), "Name");
                     return name.isBlank() ? i.instanceId() : name;
                 }));
         if (!ec2ByName.isEmpty()) {
@@ -243,17 +243,35 @@ public class CloudArchitectureDslBuilder {
 
     // ── Relationships ─────────────────────────────────────────────────────────
 
+    /**
+     * Emits relationships using conservative rules to avoid misleading Cartesian-product edges:
+     * <ul>
+     *   <li>CloudFront → only ALBs whose DNS name appears in the distribution's origins.</li>
+     *   <li>ALB → ECS services only when there is exactly one cluster (unambiguous routing).</li>
+     *   <li>ECS → RDS / cache only when there is exactly one database or cache group
+     *       (otherwise the mapping is arbitrary and is omitted).</li>
+     * </ul>
+     */
     private void appendRelationships(StringBuilder sb, String systemId, AwsDiscoveryResult d) {
         if (!d.cfDistributions.isEmpty()) {
             for (DistributionSummary dist : d.cfDistributions) {
                 sb.append("        user -> ").append(systemId).append(".")
                   .append(toId(dist.id())).append(" \"Requests via\" \"HTTPS\"\n");
             }
+            // Link each CloudFront distribution only to ALBs referenced in its origins.
             for (DistributionSummary dist : d.cfDistributions) {
+                Set<String> originDomains = dist.origins() != null
+                        ? dist.origins().items().stream()
+                              .map(o -> o.domainName() != null ? o.domainName().toLowerCase() : "")
+                              .collect(Collectors.toSet())
+                        : Collections.emptySet();
                 for (LoadBalancer lb : d.loadBalancers) {
-                    sb.append("        ").append(systemId).append(".").append(toId(dist.id()))
-                      .append(" -> ").append(systemId).append(".").append(toId(lb.loadBalancerName()))
-                      .append(" \"Forwards to\" \"HTTPS\"\n");
+                    String lbDns = lb.dnsName() != null ? lb.dnsName().toLowerCase() : "";
+                    if (!lbDns.isBlank() && originDomains.contains(lbDns)) {
+                        sb.append("        ").append(systemId).append(".").append(toId(dist.id()))
+                          .append(" -> ").append(systemId).append(".").append(toId(lb.loadBalancerName()))
+                          .append(" \"Forwards to\" \"HTTPS\"\n");
+                    }
                 }
             }
         } else if (!d.loadBalancers.isEmpty()) {
@@ -265,10 +283,11 @@ public class CloudArchitectureDslBuilder {
             sb.append("        user -> ").append(systemId).append(" \"Uses\" \"HTTPS\"\n");
         }
 
-        if (!d.loadBalancers.isEmpty() && !d.ecsClusters.isEmpty()) {
-            EcsClusterInfo firstCluster = d.ecsClusters.get(0);
+        // ALB → ECS: only emit when there is exactly one cluster to avoid arbitrary fan-out.
+        if (!d.loadBalancers.isEmpty() && d.ecsClusters.size() == 1) {
+            EcsClusterInfo onlyCluster = d.ecsClusters.get(0);
             for (LoadBalancer lb : d.loadBalancers) {
-                for (EcsServiceInfo svc : firstCluster.services()) {
+                for (EcsServiceInfo svc : onlyCluster.services()) {
                     sb.append("        ").append(systemId).append(".").append(toId(lb.loadBalancerName()))
                       .append(" -> ").append(systemId).append(".").append(toId(svc.name()))
                       .append(" \"Routes to\" \"HTTP\"\n");
@@ -276,16 +295,28 @@ public class CloudArchitectureDslBuilder {
             }
         }
 
-        for (EcsClusterInfo cluster : d.ecsClusters) {
-            for (EcsServiceInfo svc : cluster.services()) {
-                for (RdsInstanceInfo rds : d.rdsInstances) {
+        // ECS → RDS: only emit when there is exactly one RDS instance/cluster (unambiguous).
+        int rdsCount = d.rdsInstances.size() + d.rdsClusters.size();
+        if (rdsCount == 1) {
+            String rdsId = d.rdsInstances.isEmpty()
+                    ? d.rdsClusters.get(0).dbClusterIdentifier()
+                    : d.rdsInstances.get(0).id();
+            for (EcsClusterInfo cluster : d.ecsClusters) {
+                for (EcsServiceInfo svc : cluster.services()) {
                     sb.append("        ").append(systemId).append(".").append(toId(svc.name()))
-                      .append(" -> ").append(systemId).append(".").append(toId(rds.id()))
+                      .append(" -> ").append(systemId).append(".").append(toId(rdsId))
                       .append(" \"Reads/writes\" \"JDBC\"\n");
                 }
-                for (ReplicationGroup rg : d.replicationGroups) {
+            }
+        }
+
+        // ECS → Cache: only emit when there is exactly one replication group (unambiguous).
+        if (d.replicationGroups.size() == 1) {
+            String rgId = d.replicationGroups.get(0).replicationGroupId();
+            for (EcsClusterInfo cluster : d.ecsClusters) {
+                for (EcsServiceInfo svc : cluster.services()) {
                     sb.append("        ").append(systemId).append(".").append(toId(svc.name()))
-                      .append(" -> ").append(systemId).append(".").append(toId(rg.replicationGroupId()))
+                      .append(" -> ").append(systemId).append(".").append(toId(rgId))
                       .append(" \"Caches via\" \"Redis\"\n");
                 }
             }
@@ -344,7 +375,7 @@ public class CloudArchitectureDslBuilder {
 
     private void appendVpcDeploymentNode(StringBuilder sb, String systemId, Vpc vpc,
                                          AwsDiscoveryResult d, Map<String, Subnet> subnetById) {
-        String vpcName = AwsResourceDiscoverer.tagValue(vpc.tags(), "Name");
+        String vpcName = AwsSdkUtils.tagValue(vpc.tags(), "Name");
         if (vpcName.isBlank()) vpcName = vpc.vpcId();
         sb.append("            deploymentNode \"").append(escape(vpcName))
           .append("\" \"VPC ").append(vpc.vpcId())
@@ -399,7 +430,7 @@ public class CloudArchitectureDslBuilder {
 
         for (Instance inst : d.instances) {
             if (!vpc.vpcId().equals(inst.vpcId())) continue;
-            String name = AwsResourceDiscoverer.tagValue(inst.tags(), "Name");
+            String name = AwsSdkUtils.tagValue(inst.tags(), "Name");
             String key  = name.isBlank() ? inst.instanceId() : name;
             place.accept(key, systemId + "." + toId(key));
         }
@@ -438,7 +469,7 @@ public class CloudArchitectureDslBuilder {
 
         for (Map.Entry<String, List<String>> entry : subnetInstances.entrySet()) {
             Subnet subnet = subnetById.get(entry.getKey());
-            String subnetName = AwsResourceDiscoverer.tagValue(subnet.tags(), "Name");
+            String subnetName = AwsSdkUtils.tagValue(subnet.tags(), "Name");
             if (subnetName.isBlank()) subnetName = subnet.subnetId();
             String subnetLabel = subnet.cidrBlock() != null
                     ? subnetName + " (" + subnet.cidrBlock() + ")" : subnetName;
@@ -527,9 +558,20 @@ public class CloudArchitectureDslBuilder {
         return id.isBlank() ? "unknown" : id;
     }
 
+    /**
+     * Escapes a string for use inside a Structurizr DSL double-quoted value.
+     * Replaces characters that would break DSL parsing: double-quotes become single-quotes,
+     * backslashes are removed, newlines/carriage-returns become spaces, and curly braces
+     * (which delimit DSL blocks) are replaced with parentheses.
+     */
     static String escape(String s) {
         if (s == null) return "";
-        return s.replace("\"", "'");
+        return s.replace("\\", "")
+                .replace("\"", "'")
+                .replace("\n", " ")
+                .replace("\r", " ")
+                .replace("{", "(")
+                .replace("}", ")");
     }
 
     private static String truncate(String s, int max) {

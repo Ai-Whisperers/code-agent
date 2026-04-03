@@ -33,6 +33,8 @@ public class CoverageReporter {
 
     private static final Logger LOG = Logger.getLogger(CoverageReporter.class);
     private static final String JACOCO_REPORT_PATH = "target/site/jacoco/jacoco.xml";
+    private static final String JACOCO_VERSION_SETTING = "quality-report.jacoco.version";
+    private static final String JACOCO_VERSION_DEFAULT = "0.8.12";
 
     @Inject SettingsService settings;
 
@@ -234,7 +236,7 @@ public class CoverageReporter {
 
         boolean jacocoPresent = isJacocoPresent(workspace);
         if (!jacocoPresent) {
-            String version = settings.get("quality-report.jacoco.version", "0.8.12");
+            String version = settings.get(JACOCO_VERSION_SETTING, JACOCO_VERSION_DEFAULT);
             try {
                 injectJacocoPlugin(pom, version);
             } catch (IOException e) {
@@ -243,18 +245,8 @@ public class CoverageReporter {
             }
         }
 
-        // Use fully-qualified goal form (groupId:artifactId:goal) so Maven does not need
-        // to resolve the "jacoco" prefix from plugin groups — this works even when the
-        // plugin is not yet cached in the local Nexus/Maven repository.
-        // -Dmaven.test.failure.ignore=true lets Maven continue to jacoco:report even
-        // when environment-sensitive integration tests fail in the sandbox.
-        String mavenHomeVal = settings.get("build.maven-home", "");
-        String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
-        String jacocoVersion = settings.get("quality-report.jacoco.version", "0.8.12");
-        String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
-        String command = ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome)
-                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
-                + " -q -Dmaven.test.failure.ignore=true";
+        String effectiveMavenHome = resolveMavenHome();
+        String command = buildJacocoCommand(workspace, effectiveMavenHome);
 
         LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
                 jacocoPresent ? "configured" : "injected into pom.xml", command);
@@ -338,15 +330,10 @@ public class CoverageReporter {
         }
 
         LOG.info("Running JaCoCo coverage measurement...");
-        String mavenHomeVal2 = settings.get("build.maven-home", "");
-        String effectiveMavenHome2 = mavenHomeVal2.isBlank() ? null : mavenHomeVal2;
-        String jacocoVersion = settings.get("quality-report.jacoco.version", "0.8.12");
-        String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
-        String command = ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome2)
-                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
-                + " -q -Dmaven.test.failure.ignore=true";
+        String effectiveMavenHome = resolveMavenHome();
+        String command = buildJacocoCommand(workspace, effectiveMavenHome);
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome2, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();
@@ -392,6 +379,26 @@ public class CoverageReporter {
     }
 
     // ─── Helpers ─────────────────────────────────────────────────────────
+
+    private String resolveMavenHome() {
+        String val = settings.get("build.maven-home", "");
+        return val.isBlank() ? null : val;
+    }
+
+    /**
+     * Builds the {@code mvn jacoco:prepare-agent test jacoco:report} shell command.
+     * Uses the fully-qualified goal form so Maven does not need to resolve the "jacoco"
+     * prefix from plugin groups — works even when the plugin is not yet in the local repo.
+     * {@code -Dmaven.test.failure.ignore=true} lets Maven reach jacoco:report even when
+     * environment-sensitive integration tests fail in the sandbox.
+     */
+    private String buildJacocoCommand(WorkspaceContext workspace, String effectiveMavenHome) {
+        String jacocoVersion = settings.get(JACOCO_VERSION_SETTING, JACOCO_VERSION_DEFAULT);
+        String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+        return ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome)
+                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
+                + " -q -Dmaven.test.failure.ignore=true";
+    }
 
     /**
      * Returns true when the Maven output indicates a permanent JDK/compiler version
@@ -465,12 +472,8 @@ public class CoverageReporter {
     // ─── Parsing ─────────────────────────────────────────────────────────
 
     private CoverageSnapshot parseReport(Path reportFile) throws Exception {
-        // Harden against XXE attacks — JaCoCo reports reference an external DTD
+        // createSecureBuilder() already disables all external entity resolution (DTD, schemas).
         DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
-        builder.setEntityResolver((publicId, systemId) -> {
-            // Suppress all external entity resolution (DTD, schemas)
-            return new org.xml.sax.InputSource(new java.io.StringReader(""));
-        });
 
         Document doc = builder.parse(reportFile.toFile());
         Element root = doc.getDocumentElement();

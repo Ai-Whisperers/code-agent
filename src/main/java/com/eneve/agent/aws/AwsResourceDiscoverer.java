@@ -45,6 +45,7 @@ import software.amazon.awssdk.services.lambda.model.ListFunctionsRequest;
 import software.amazon.awssdk.services.rds.RdsClient;
 import software.amazon.awssdk.services.rds.model.DescribeDbClustersRequest;
 import software.amazon.awssdk.services.rds.model.DescribeDbInstancesRequest;
+import software.amazon.awssdk.services.rds.model.DescribeDbSubnetGroupsRequest;
 import software.amazon.awssdk.services.s3.S3Client;
 
 import java.util.ArrayList;
@@ -135,20 +136,21 @@ public class AwsResourceDiscoverer {
     private void discoverEcs(AwsDiscoveryResult d, String roleArn, String region,
                              CloudAccount cloudAccount) {
         try (EcsClient ecs = clientFactory.ecsClient(roleArn, region, cloudAccount)) {
-            List<String> clusterArns = ecs.listClusters(
-                    ListClustersRequest.builder().maxResults(100).build()).clusterArns();
+            List<String> clusterArns = listAllClusterArns(ecs);
             for (String clusterArn : clusterArns) {
                 String clusterName = arnToName(clusterArn);
                 List<EcsServiceInfo> services = new ArrayList<>();
-                List<String> serviceArns = ecs.listServices(
-                        ListServicesRequest.builder().cluster(clusterArn).maxResults(100).build()
-                ).serviceArns();
+                List<String> serviceArns = listAllServiceArns(ecs, clusterArn);
                 if (!serviceArns.isEmpty()) {
-                    for (Service svc : ecs.describeServices(DescribeServicesRequest.builder()
-                            .cluster(clusterArn).services(serviceArns).build()).services()) {
-                        String image = resolveImage(ecs, svc.taskDefinition());
-                        services.add(new EcsServiceInfo(svc.serviceName(), image,
-                                svc.launchTypeAsString(), svc.desiredCount()));
+                    // describeServices accepts at most 10 ARNs per call
+                    for (int i = 0; i < serviceArns.size(); i += 10) {
+                        List<String> batch = serviceArns.subList(i, Math.min(i + 10, serviceArns.size()));
+                        for (Service svc : ecs.describeServices(DescribeServicesRequest.builder()
+                                .cluster(clusterArn).services(batch).build()).services()) {
+                            String image = resolveImage(ecs, svc.taskDefinition());
+                            services.add(new EcsServiceInfo(svc.serviceName(), image,
+                                    svc.launchTypeAsString(), svc.desiredCount()));
+                        }
                     }
                 }
                 resolveEcsTaskSubnets(ecs, d, clusterArn, clusterName, services);
@@ -159,13 +161,45 @@ public class AwsResourceDiscoverer {
         }
     }
 
+    private List<String> listAllClusterArns(EcsClient ecs) {
+        List<String> arns = new ArrayList<>();
+        String nextToken = null;
+        do {
+            var req = ListClustersRequest.builder().maxResults(100);
+            if (nextToken != null) req.nextToken(nextToken);
+            var resp = ecs.listClusters(req.build());
+            arns.addAll(resp.clusterArns());
+            nextToken = resp.nextToken();
+        } while (nextToken != null);
+        return arns;
+    }
+
+    private List<String> listAllServiceArns(EcsClient ecs, String clusterArn) {
+        List<String> arns = new ArrayList<>();
+        String nextToken = null;
+        do {
+            var req = ListServicesRequest.builder().cluster(clusterArn).maxResults(100);
+            if (nextToken != null) req.nextToken(nextToken);
+            var resp = ecs.listServices(req.build());
+            arns.addAll(resp.serviceArns());
+            nextToken = resp.nextToken();
+        } while (nextToken != null);
+        return arns;
+    }
+
     private void resolveEcsTaskSubnets(EcsClient ecs, AwsDiscoveryResult d,
                                        String clusterArn, String clusterName,
                                        List<EcsServiceInfo> services) {
         try {
-            List<String> taskArns = ecs.listTasks(
-                    ListTasksRequest.builder().cluster(clusterArn).maxResults(100).build()
-            ).taskArns();
+            List<String> taskArns = new ArrayList<>();
+            String nextToken = null;
+            do {
+                var req = ListTasksRequest.builder().cluster(clusterArn).maxResults(100);
+                if (nextToken != null) req.nextToken(nextToken);
+                var resp = ecs.listTasks(req.build());
+                taskArns.addAll(resp.taskArns());
+                nextToken = resp.nextToken();
+            } while (nextToken != null);
             if (taskArns.isEmpty()) return;
 
             List<Task> tasks = ecs.describeTasks(
@@ -222,8 +256,25 @@ public class AwsResourceDiscoverer {
                 rds.describeDBClusters(DescribeDbClustersRequest.builder().build()).dbClusters()
                         .forEach(c -> {
                             d.rdsClusters.add(c);
+                            // Resolve the subnet group name to an actual subnet ID so that
+                            // CloudArchitectureDslBuilder can place the cluster in the correct
+                            // VPC deployment node (resourceSubnetMap values must be subnet IDs).
                             if (c.dbSubnetGroup() != null && !c.dbSubnetGroup().isBlank()) {
-                                d.resourceSubnetMap.putIfAbsent(c.dbClusterIdentifier(), c.dbSubnetGroup());
+                                try {
+                                    var subnetGroupResp = rds.describeDBSubnetGroups(
+                                            DescribeDbSubnetGroupsRequest.builder()
+                                                    .dbSubnetGroupName(c.dbSubnetGroup())
+                                                    .build());
+                                    subnetGroupResp.dbSubnetGroups().stream()
+                                            .filter(sg -> sg.subnets() != null && !sg.subnets().isEmpty())
+                                            .findFirst()
+                                            .ifPresent(sg -> d.resourceSubnetMap.putIfAbsent(
+                                                    c.dbClusterIdentifier(),
+                                                    sg.subnets().get(0).subnetIdentifier()));
+                                } catch (Exception ex) {
+                                    LOG.debugf("Could not resolve subnet for RDS cluster %s: %s",
+                                            c.dbClusterIdentifier(), ex.getMessage());
+                                }
                             }
                         });
             } catch (Exception e) {
@@ -369,15 +420,15 @@ public class AwsResourceDiscoverer {
         return "";
     }
 
+    /** @deprecated Use {@link AwsSdkUtils#tagValue(List, String)} directly. */
+    @Deprecated
     static String tagValue(List<Tag> tags, String key) {
-        if (tags == null) return "";
-        return tags.stream().filter(t -> key.equals(t.key()))
-                .map(Tag::value).findFirst().orElse("");
+        return AwsSdkUtils.tagValue(tags, key);
     }
 
+    /** @deprecated Use {@link AwsSdkUtils#arnToName(String)} directly. */
+    @Deprecated
     static String arnToName(String arn) {
-        if (arn == null) return "unknown";
-        int slash = arn.lastIndexOf('/');
-        return slash >= 0 ? arn.substring(slash + 1) : arn;
+        return AwsSdkUtils.arnToName(arn);
     }
 }
