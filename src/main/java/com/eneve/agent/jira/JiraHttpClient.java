@@ -141,7 +141,7 @@ class JiraHttpClient {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(SsrfGuard.safePublicUri(creds.baseUrl() + path))
+                    .uri(SsrfGuard.safeSameHostUri(creds.baseUrl(), creds.baseUrl() + path))
                     .header("Authorization", authHeader(creds))
                     .header("Accept", "application/json")
                     .GET()
@@ -164,7 +164,7 @@ class JiraHttpClient {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(SsrfGuard.safePublicUri(creds.baseUrl() + path))
+                    .uri(SsrfGuard.safeSameHostUri(creds.baseUrl(), creds.baseUrl() + path))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -188,7 +188,7 @@ class JiraHttpClient {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(SsrfGuard.safePublicUri(creds.baseUrl() + path))
+                    .uri(SsrfGuard.safeSameHostUri(creds.baseUrl(), creds.baseUrl() + path))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -207,7 +207,7 @@ class JiraHttpClient {
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(SsrfGuard.safePublicUri(creds.baseUrl() + path))
+                    .uri(SsrfGuard.safeSameHostUri(creds.baseUrl(), creds.baseUrl() + path))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
