@@ -1,10 +1,14 @@
 package com.eneve.agent;
 
 import com.eneve.agent.Soc2Policy;
+import com.eneve.agent.RepoSettingsService;
+import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.service.PrCacheSyncService;
 import com.eneve.agent.agent.store.CommentStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.PrCacheStore;
+import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.diff.JobDiffParser;
 import com.eneve.agent.model.JobCommitsResponse;
 import com.eneve.agent.model.JobDiffResponse;
@@ -13,6 +17,7 @@ import com.eneve.agent.model.JobReviewResponse;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.OpenPrEntry;
+import com.eneve.agent.model.PromoteRequest;
 import com.eneve.agent.model.ReviewCommentEntry;
 import com.eneve.agent.scm.AgentComment;
 import com.eneve.agent.scm.GitPlatformRegistry;
@@ -68,6 +73,15 @@ public class PullRequestsResource {
 
     @Inject
     Soc2Policy soc2Policy;
+
+    @Inject
+    JobQueue jobQueue;
+
+    @Inject
+    RepoSettingsStore repoSettingsStore;
+
+    @Inject
+    RepoSettingsService repoSettingsService;
 
     // ── List PRs from cache (paged + searchable) ──────────────────────────
 
@@ -141,6 +155,181 @@ public class PullRequestsResource {
             LOG.warnf("Manual PR cache sync failed: %s", e.getMessage());
             return Response.status(503).entity(Map.of("error", e.getMessage())).build();
         }
+    }
+
+    // ── Merged PRs from SCM (last N days, for promote tab bootstrap) ─────
+
+    @GET
+    @Blocking
+    @Path("/merged")
+    @Operation(operationId = "listMergedPullRequests",
+               summary = "List recently merged pull requests from SCM",
+               description = "Fetches merged PRs directly from the SCM for all active repositories, "
+                           + "going back the specified number of days (default 30). "
+                           + "Results are not cached — each call hits the SCM API.")
+    public Response listMergedPullRequests(
+            @QueryParam("days") @DefaultValue("30") int days) {
+
+        int safeDays = Math.min(Math.max(1, days), 180);
+        Instant since = Instant.now().minusSeconds((long) safeDays * 86_400);
+
+        List<RepoSettings> repos = repoSettingsService.listAll().stream()
+                .filter(r -> !Boolean.TRUE.equals(r.archived()))
+                .toList();
+
+        if (repos.isEmpty()) {
+            return Response.ok(Map.of("items", List.of(), "days", safeDays)).build();
+        }
+
+        GitPlatformService platform = gitPlatformRegistry.defaultPlatform();
+        List<OpenPrEntry> all = new ArrayList<>();
+
+        for (RepoSettings repo : repos) {
+            try {
+                List<OpenPrEntry> merged = platform.listMergedPullRequests(
+                        repo.workspace(), "", repo.repoSlug(), since);
+                // Also upsert into the cache so the status filter on the main list works too
+                for (OpenPrEntry pr : merged) {
+                    prCacheStore.upsert(pr);
+                }
+                all.addAll(merged);
+            } catch (Exception e) {
+                LOG.warnf("listMergedPullRequests failed for %s/%s (non-fatal): %s",
+                        repo.workspace(), repo.repoSlug(), e.getMessage());
+            }
+        }
+
+        // Sort newest-first by updatedOn
+        all.sort((a, b) -> {
+            String ta = a.updatedOn() != null ? a.updatedOn() : "";
+            String tb = b.updatedOn() != null ? b.updatedOn() : "";
+            return tb.compareTo(ta);
+        });
+
+        return Response.ok(Map.of("items", all, "days", safeDays)).build();
+    }
+
+    // ── Trigger promotion cherry-pick to main ────────────────────────────
+
+    @POST
+    @Blocking
+    @Path("/{workspace}/{repoSlug}/{prId}/promote")
+    @Operation(operationId = "promotePr",
+               summary = "Trigger promotion cherry-pick",
+               description = "Creates a PROMOTE job that cherry-picks the commits from this PR onto the "
+                           + "production branch (main) and raises a promotion PR for review. "
+                           + "Works for both agent-created and manually created PRs. "
+                           + "Returns 409 if a promotion job already exists for this PR.")
+    public Response promotePr(
+            @PathParam("workspace") String workspace,
+            @PathParam("repoSlug") String repoSlug,
+            @PathParam("prId") String prId) {
+
+        // Check for an existing linked job (may be null for manually created PRs)
+        JobRecord originalJob = findLinkedJob(prId, repoSlug);
+
+        if (originalJob != null && originalJob.getPromotionJobId() != null) {
+            return Response.status(409)
+                    .entity(Map.of("error", "A promotion job already exists for this PR.",
+                                   "promotionJobId", originalJob.getPromotionJobId()))
+                    .build();
+        }
+
+        // Resolve repo URL — prefer linked job, fall back to repo settings, then SCM API
+        String repoUrl = null;
+        if (originalJob != null) {
+            if (originalJob.getRequest() != null) repoUrl = originalJob.getRequest().repoUrl();
+            if (repoUrl == null && originalJob.getFixPrRequest() != null)
+                repoUrl = originalJob.getFixPrRequest().repoUrl();
+        }
+        if (repoUrl == null) {
+            repoUrl = repoSettingsStore.find(workspace, repoSlug)
+                    .map(RepoSettings::gitPlatformUrl)
+                    .orElse(null);
+        }
+        if (repoUrl == null) {
+            // Last resort: ask the SCM for the PR info which includes the repo URL
+            try {
+                GitPlatformService platform = gitPlatformRegistry.defaultPlatform();
+                Map<String, String> info = platform.getPullRequestInfo(workspace, "", repoSlug, prId);
+                repoUrl = info.get("repoUrl");
+            } catch (Exception e) {
+                LOG.warnf("Could not resolve repoUrl for %s/%s: %s", workspace, repoSlug, e.getMessage());
+            }
+        }
+        if (repoUrl == null) {
+            return Response.status(400)
+                    .entity(Map.of("error", "Cannot determine repository URL. "
+                            + "Ensure the repository is configured in Repo Settings."))
+                    .build();
+        }
+
+        // Resolve jiraKey and fix branch from linked job if available
+        String jiraKey = null;
+        String fixBranchName = null;
+        if (originalJob != null) {
+            if (originalJob.getRequest() != null) jiraKey = originalJob.getRequest().jiraKey();
+            if (jiraKey == null && originalJob.getFixPrRequest() != null)
+                jiraKey = originalJob.getFixPrRequest().jiraKey();
+            if (jiraKey == null && originalJob.getReviewRequest() != null)
+                jiraKey = originalJob.getReviewRequest().jiraKey();
+            fixBranchName = originalJob.getFixBranchName();
+            if (fixBranchName == null && originalJob.getRequest() != null)
+                fixBranchName = originalJob.getRequest().branchName();
+        }
+
+        // For manually created PRs with no linked job, get the source branch from the SCM
+        if (fixBranchName == null) {
+            try {
+                GitPlatformService platform = gitPlatformRegistry.defaultPlatform();
+                Map<String, String> info = platform.getPullRequestInfo(workspace, "", repoSlug, prId);
+                fixBranchName = info.get("sourceBranch");
+            } catch (Exception e) {
+                LOG.warnf("Could not resolve source branch for PR %s/%s#%s: %s",
+                        workspace, repoSlug, prId, e.getMessage());
+            }
+        }
+
+        String productionBranch = soc2Policy.productionBranch();
+        String effectiveJiraKey = jiraKey != null ? jiraKey : prId;
+
+        PromoteRequest promoteRequest = new PromoteRequest(
+                repoUrl,
+                effectiveJiraKey,
+                fixBranchName != null ? fixBranchName : "",
+                prId,
+                productionBranch,
+                originalJob != null ? originalJob.getAikidoIssueId() : null);
+
+        String promotionJobId = java.util.UUID.randomUUID().toString();
+        JobRecord promoteJob = new JobRecord(promotionJobId, promoteRequest);
+        if (originalJob != null) {
+            promoteJob.setAikidoIssueId(originalJob.getAikidoIssueId());
+            if (jiraKey != null) {
+                promoteJob.setJiraIssueType(originalJob.getJiraIssueType());
+                promoteJob.setJiraPriority(originalJob.getJiraPriority());
+                promoteJob.setJiraCreatedAt(originalJob.getJiraCreatedAt());
+            }
+        }
+
+        jobStore.put(promoteJob);
+
+        if (originalJob != null) {
+            originalJob.setPromotionJobId(promotionJobId);
+            jobStore.update(originalJob);
+        }
+
+        boolean queued = jobQueue.submit(promoteJob);
+        if (!queued) {
+            return Response.status(429)
+                    .entity(Map.of("error", "Job queue is full. Please try again shortly."))
+                    .build();
+        }
+
+        LOG.infof("Manual PROMOTE job %s created for PR %s/%s#%s (linkedJob=%s, queued=true)",
+                promotionJobId, workspace, repoSlug, prId, originalJob != null ? originalJob.getJobId() : "none");
+
+        return Response.accepted(Map.of("jobId", promotionJobId)).build();
     }
 
     // ── PR info ───────────────────────────────────────────────────────────

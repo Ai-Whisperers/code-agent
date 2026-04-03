@@ -428,6 +428,58 @@ public class GitHubPlatformService implements GitPlatformService {
         return prs;
     }
 
+    @Override
+    public List<OpenPrEntry> listMergedPullRequests(String org, String project, String repo,
+                                                     java.time.Instant since) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        // GitHub: state=closed returns both merged and unmerged closed PRs; filter by merged_at
+        String url = baseUrl() + "/repos/" + org + "/" + repo
+                + "/pulls?state=closed&sort=updated&direction=desc&per_page=100";
+
+        outer:
+        while (url != null) {
+            HttpResponse<String> response;
+            try {
+                response = getWithResponse(url, "list merged PRs for " + org + "/" + repo);
+            } catch (Exception e) {
+                LOG.warnf("Failed to list merged PRs for GitHub repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+            try {
+                JsonNode nodes = objectMapper.readTree(response.body());
+                if (!nodes.isArray()) break;
+                for (JsonNode pr : nodes) {
+                    String updatedOn = pr.path("updated_at").asText("");
+                    // Stop paginating once we've gone past the since window
+                    if (!updatedOn.isBlank()) {
+                        java.time.Instant updatedAt = java.time.Instant.parse(updatedOn);
+                        if (updatedAt.isBefore(since)) break outer;
+                    }
+                    // Only include actually merged PRs (not just closed/declined)
+                    String mergedAt = pr.path("merged_at").asText(null);
+                    if (mergedAt == null || mergedAt.isBlank()) continue;
+
+                    String prId = String.valueOf(pr.path("number").asInt());
+                    String prUrl = pr.path("html_url").asText("");
+                    String title = pr.path("title").asText("");
+                    String sourceBranch = pr.path("head").path("ref").asText("");
+                    String targetBranch = pr.path("base").path("ref").asText("");
+                    String author = pr.path("user").path("login").asText("");
+                    String createdOn = pr.path("created_at").asText("");
+                    prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                            sourceBranch, targetBranch, author, createdOn, updatedOn, null, "MERGED", false));
+                }
+                url = nextPageUrl(response);
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse merged PRs response for %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d merged PRs (since %s) for GitHub repo %s/%s", prs.size(), since, org, repo);
+        return prs;
+    }
+
     private String token() {
         return tokenFor("");
     }

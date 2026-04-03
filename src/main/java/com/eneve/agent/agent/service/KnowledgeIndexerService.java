@@ -10,6 +10,7 @@ import com.eneve.agent.agent.SecretRedactor;
 import com.eneve.agent.agent.model.StaticFileSource;
 import com.eneve.agent.agent.model.WebDocSource;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.IntegrationFilterStore;
 import com.eneve.agent.agent.store.KnowledgeEmbeddingStore;
 import com.eneve.agent.agent.store.KnowledgeQualityBlacklistStore;
 import com.eneve.agent.agent.store.StaticFileSourceStore;
@@ -67,6 +68,7 @@ public class KnowledgeIndexerService {
     @Inject KnowledgeEmbeddingStore store;
     @Inject KnowledgeQualityBlacklistStore qualityBlacklist;
     @Inject CustomerRegistryStore registryStore;
+    @Inject IntegrationFilterStore integrationFilterStore;
     @Inject SettingsService settingsService;
     @Inject WebDocsCrawlerService crawlerService;
     @Inject WebDocSourceStore webDocSourceStore;
@@ -344,6 +346,10 @@ public class KnowledgeIndexerService {
         if (product.jira() != null && product.jira().projects() != null) {
             for (String projectKey : product.jira().projects().values()) {
                 if (projectKey != null && !projectKey.isBlank()) {
+                    if (!integrationFilterStore.isEnabled("jira", projectKey)) {
+                        LOG.infof("Skipping disabled Jira project %s for product %s", projectKey, product.productId());
+                        continue;
+                    }
                     results.add(indexJiraProject(projectKey));
                 }
             }
@@ -351,7 +357,12 @@ public class KnowledgeIndexerService {
         if (product.confluence() != null
                 && product.confluence().spaceKey() != null
                 && !product.confluence().spaceKey().isBlank()) {
-            results.add(indexConfluenceSpace(product.confluence().spaceKey()));
+            String spaceKey = product.confluence().spaceKey();
+            if (!integrationFilterStore.isEnabled("confluence", spaceKey)) {
+                LOG.infof("Skipping disabled Confluence space %s for product %s", spaceKey, product.productId());
+            } else {
+                results.add(indexConfluenceSpace(spaceKey));
+            }
         }
         return results;
     }

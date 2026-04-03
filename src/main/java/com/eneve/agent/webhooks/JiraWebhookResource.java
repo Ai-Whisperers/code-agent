@@ -9,6 +9,7 @@ import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.service.KnowledgeReindexQueue;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.IntegrationFilterStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
@@ -59,6 +60,7 @@ public class JiraWebhookResource {
     @Inject KnowledgeReindexQueue reindexQueue;
     @Inject CustomerRegistryStore registryStore;
     @Inject WebhookAuditStore webhookAuditStore;
+    @Inject IntegrationFilterStore integrationFilterStore;
 
     private String agentAssignee()  { return settings.get("jira.agent.assignee", ""); }
     private String defaultRepoUrl() { return settings.get("jira.agent.default-repo-url", ""); }
@@ -108,6 +110,20 @@ public class JiraWebhookResource {
 
             String projectKey = fields.path("project").path("key").asText("");
             String reporter = fields.path("reporter").path("displayName").asText("");
+
+            // Check integration filters — project must be enabled and webhook must be enabled
+            if (!projectKey.isBlank() && !integrationFilterStore.isEnabled("jira", projectKey)) {
+                LOG.infof("JIRA webhook: ignoring event for %s — project %s is disabled", issueKey, projectKey);
+                action = "ignored";
+                audit("jira", event, projectKey, issueKey, action, reporter, rawPayload);
+                return ok(action, "Project disabled: " + projectKey);
+            }
+            if (!projectKey.isBlank() && !integrationFilterStore.isWebhookEnabled("jira", projectKey)) {
+                LOG.infof("JIRA webhook: ignoring event for %s — webhooks disabled for project %s", issueKey, projectKey);
+                action = "ignored";
+                audit("jira", event, projectKey, issueKey, action, reporter, rawPayload);
+                return ok(action, "Webhook disabled for project: " + projectKey);
+            }
 
             // Always reindex tracked issues, regardless of assignee
             triggerKnowledgeReindex(issueKey, fields);

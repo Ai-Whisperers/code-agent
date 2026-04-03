@@ -7,6 +7,7 @@ import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.service.KnowledgeReindexQueue;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.IntegrationFilterStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,6 +44,7 @@ public class ConfluenceWebhookResource {
     @Inject KnowledgeReindexQueue reindexQueue;
     @Inject CustomerRegistryStore registryStore;
     @Inject WebhookAuditStore webhookAuditStore;
+    @Inject IntegrationFilterStore integrationFilterStore;
 
     @Inject ObjectMapper objectMapper;
 
@@ -100,6 +102,18 @@ public class ConfluenceWebhookResource {
             if (pageId.isBlank() || spaceKey.isBlank()) {
                 audit("confluence", eventType, spaceKey, pageId, "ignored", rawPayload);
                 return ok("ignored", "Missing required page or space information");
+            }
+
+            // Check integration filters — space must be enabled and webhook must be enabled
+            if (!integrationFilterStore.isEnabled("confluence", spaceKey)) {
+                LOG.infof("Confluence webhook: ignoring event for page %s — space %s is disabled", pageId, spaceKey);
+                audit("confluence", eventType, spaceKey, pageId, "ignored", rawPayload);
+                return ok("ignored", "Space disabled: " + spaceKey);
+            }
+            if (!integrationFilterStore.isWebhookEnabled("confluence", spaceKey)) {
+                LOG.infof("Confluence webhook: ignoring event for page %s — webhooks disabled for space %s", pageId, spaceKey);
+                audit("confluence", eventType, spaceKey, pageId, "ignored", rawPayload);
+                return ok("ignored", "Webhook disabled for space: " + spaceKey);
             }
 
             LOG.infof("Confluence webhook: %s for page '%s' in space '%s'", eventType, pageTitle, spaceKey);

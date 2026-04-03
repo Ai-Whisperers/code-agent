@@ -90,7 +90,10 @@ public record JobStatusResponse(
         String scytaleEvidenceRef,
 
         @Schema(description = "True when Scytale integration is configured in system settings")
-        boolean scytaleEnabled
+        boolean scytaleEnabled,
+
+        @Schema(description = "Job ID of the SOC2 promotion (cherry-pick to main) job, if one has been created")
+        String promotionJobId
 ) {
     public static JobStatusResponse from(JobRecord record, int queuePosition,
                                          int criticalDays, int highDays,
@@ -181,7 +184,8 @@ public record JobStatusResponse(
                 record.getAikidoIssueId(),
                 soc2Protected,
                 record.getScytaleEvidenceRef(),
-                scytaleEnabled
+                scytaleEnabled,
+                record.getPromotionJobId()
         );
     }
 
@@ -196,7 +200,7 @@ public record JobStatusResponse(
                 null, null, null,
                 null, null,
                 null, null, null, null, null, "NOT_APPLICABLE",
-                null, false, null, false
+                null, false, null, false, null
         );
     }
 }

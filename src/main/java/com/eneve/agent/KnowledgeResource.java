@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.service.KnowledgeIndexerService;
+import com.eneve.agent.agent.store.IntegrationFilterStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
@@ -41,6 +42,9 @@ public class KnowledgeResource {
     @Inject
     KnowledgeService knowledgeService;
 
+    @Inject
+    IntegrationFilterStore integrationFilterStore;
+
     // ── Indexing endpoints ────────────────────────────────────────────────
 
     @POST
@@ -58,6 +62,11 @@ public class KnowledgeResource {
     public Response indexJira(IndexJiraRequest request) {
         if (request == null || request.projectKey() == null || request.projectKey().isBlank()) {
             return Response.status(400).entity(Map.of("error", "projectKey is required")).build();
+        }
+        if (!integrationFilterStore.isEnabled("jira", request.projectKey())) {
+            return Response.status(403)
+                    .entity(Map.of("error", "Project is disabled in integration filters: " + request.projectKey()))
+                    .build();
         }
         return Response.ok(knowledgeService.indexJira(request.projectKey())).build();
     }
@@ -77,6 +86,11 @@ public class KnowledgeResource {
     public Response indexConfluence(IndexConfluenceRequest request) {
         if (request == null || request.spaceKey() == null || request.spaceKey().isBlank()) {
             return Response.status(400).entity(Map.of("error", "spaceKey is required")).build();
+        }
+        if (!integrationFilterStore.isEnabled("confluence", request.spaceKey())) {
+            return Response.status(403)
+                    .entity(Map.of("error", "Space is disabled in integration filters: " + request.spaceKey()))
+                    .build();
         }
         return Response.ok(knowledgeService.indexConfluence(request.spaceKey())).build();
     }

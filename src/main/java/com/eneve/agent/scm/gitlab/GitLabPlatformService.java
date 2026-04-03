@@ -749,6 +749,51 @@ public class GitLabPlatformService implements GitPlatformService {
     }
 
     @Override
+    public List<OpenPrEntry> listMergedPullRequests(String org, String project, String repo,
+                                                     java.time.Instant since) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        String projectPath = encodedProjectPath(org, repo);
+        // GitLab supports updated_after natively — no need to stop mid-page
+        String url = baseUrl() + "/projects/" + projectPath
+                + "/merge_requests?state=merged&sort=desc&order_by=updated_at&per_page=100"
+                + "&updated_after=" + since.toString();
+
+        while (url != null) {
+            HttpResponse<String> response;
+            try {
+                response = getWithResponse(url, "list merged MRs for " + org + "/" + repo);
+            } catch (Exception e) {
+                LOG.warnf("Failed to list merged MRs for GitLab repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+            try {
+                JsonNode nodes = objectMapper.readTree(response.body());
+                if (!nodes.isArray()) break;
+                for (JsonNode mr : nodes) {
+                    String prId = String.valueOf(mr.path("iid").asInt());
+                    String prUrl = mr.path("web_url").asText("");
+                    String title = mr.path("title").asText("");
+                    String sourceBranch = mr.path("source_branch").asText("");
+                    String targetBranch = mr.path("target_branch").asText("");
+                    String author = mr.path("author").path("name").asText(
+                            mr.path("author").path("username").asText(""));
+                    String createdOn = mr.path("created_at").asText("");
+                    String updatedOn = mr.path("updated_at").asText("");
+                    prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                            sourceBranch, targetBranch, author, createdOn, updatedOn, null, "MERGED", false));
+                }
+                url = nextPageUrl(response);
+            } catch (Exception e) {
+                LOG.errorf("Failed to parse merged MRs response for %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d merged MRs (since %s) for GitLab repo %s/%s", prs.size(), since, org, repo);
+        return prs;
+    }
+
+    @Override
     public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
         String projectPath = encodedProjectPath(org, repo);
         List<PrCommitEntry> commits = new ArrayList<>();

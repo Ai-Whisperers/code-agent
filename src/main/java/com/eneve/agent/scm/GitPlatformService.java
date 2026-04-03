@@ -158,6 +158,18 @@ public interface GitPlatformService {
     }
 
     /**
+     * List merged pull requests / merge requests updated on or after {@code since}.
+     * Results are returned newest-first and pagination stops once entries older than
+     * {@code since} are encountered, so callers get a bounded recent window.
+     * <p>
+     * Returns an empty list if the platform does not support this API or on error.
+     */
+    default List<OpenPrEntry> listMergedPullRequests(String org, String project, String repo,
+                                                      java.time.Instant since) {
+        return List.of();
+    }
+
+    /**
      * List all repository slugs / names within an org or workspace.
      * <p>
      * Implementations that do not support workspace-level repository listing

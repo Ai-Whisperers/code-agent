@@ -52,27 +52,57 @@ public class JiraMetaResource {
         if (!jiraService.isConfigured()) {
             return Response.status(503).entity("{\"error\":\"Jira is not configured\"}").build();
         }
-        String raw = jiraService.listProjectsRaw();
-        if (raw == null) {
-            return Response.status(503).entity("{\"error\":\"Jira request failed\"}").build();
-        }
         try {
-            JsonNode root = mapper.readTree(raw);
             ArrayNode result = mapper.createArrayNode();
-            if (root.isArray()) {
-                for (JsonNode p : root) {
-                    ObjectNode item = mapper.createObjectNode();
-                    item.put("id",   p.path("id").asText(""));
-                    item.put("key",  p.path("key").asText(""));
-                    item.put("name", p.path("name").asText(""));
-                    result.add(item);
+            int startAt = 0;
+            final int maxResults = 500;
+            boolean hasMore = true;
+
+            while (hasMore) {
+                String raw = jiraService.listProjectsPageRaw(startAt, maxResults);
+                if (raw == null) {
+                    if (startAt == 0) {
+                        return Response.status(503).entity("{\"error\":\"Jira request failed\"}").build();
+                    }
+                    break;
+                }
+                JsonNode root = mapper.readTree(raw);
+
+                // Jira returns either a plain array or a paginated object {values:[...], isLast:bool}
+                if (root.isArray()) {
+                    for (JsonNode p : root) {
+                        result.add(projectNode(p));
+                    }
+                    hasMore = false; // plain array = all results in one shot
+                } else {
+                    JsonNode values = root.path("values");
+                    if (values.isArray()) {
+                        for (JsonNode p : values) {
+                            result.add(projectNode(p));
+                        }
+                        boolean isLast = root.path("isLast").asBoolean(true);
+                        int total = root.path("total").asInt(-1);
+                        hasMore = !isLast && (total < 0 || startAt + maxResults < total);
+                        startAt += maxResults;
+                    } else {
+                        hasMore = false;
+                    }
                 }
             }
+
             return Response.ok(result).build();
         } catch (Exception e) {
             LOG.warnf("Failed to parse Jira projects response: %s", e.getMessage());
             return Response.status(503).entity("{\"error\":\"Failed to parse Jira response\"}").build();
         }
+    }
+
+    private ObjectNode projectNode(JsonNode p) {
+        ObjectNode item = mapper.createObjectNode();
+        item.put("id",   p.path("id").asText(""));
+        item.put("key",  p.path("key").asText(""));
+        item.put("name", p.path("name").asText(""));
+        return item;
     }
 
     @GET

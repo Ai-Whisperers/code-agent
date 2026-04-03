@@ -721,6 +721,64 @@ public class AzureDevOpsPlatformService implements GitPlatformService {
     }
 
     @Override
+    public List<OpenPrEntry> listMergedPullRequests(String org, String project, String repo,
+                                                     java.time.Instant since) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        int top = 100;
+        int skip = 0;
+        // Azure DevOps: searchCriteria.minTime filters by creation date (closest available filter)
+        // We also stop paginating once closedDate is before since
+        String sinceStr = since.toString(); // ISO-8601
+
+        outer:
+        while (true) {
+            String url = repoApiUrl(org, project, repo)
+                    + "/pullrequests?searchCriteria.status=completed"
+                    + "&searchCriteria.minTime=" + sinceStr
+                    + "&$top=" + top + "&$skip=" + skip
+                    + "&" + API_VERSION;
+            try {
+                String responseBody = getAndReturn(url, "list merged PRs for " + org + "/" + project + "/" + repo);
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode value = root.path("value");
+                if (!value.isArray() || value.isEmpty()) break;
+
+                for (JsonNode pr : value) {
+                    String closedDate = pr.path("closedDate").asText("");
+                    if (!closedDate.isBlank()) {
+                        try {
+                            java.time.Instant closedAt = java.time.Instant.parse(closedDate);
+                            if (closedAt.isBefore(since)) break outer;
+                        } catch (Exception ignored) { /* unparseable date — include it */ }
+                    }
+                    String prId = String.valueOf(pr.path("pullRequestId").asInt());
+                    String prUrl = baseUrl() + "/" + org + "/" + project + "/_git/" + repo
+                            + "/pullrequest/" + prId;
+                    String title = pr.path("title").asText("");
+                    String sourceBranch = stripRefsHeads(pr.path("sourceRefName").asText(""));
+                    String targetBranch = stripRefsHeads(pr.path("targetRefName").asText(""));
+                    String author = pr.path("createdBy").path("displayName").asText(
+                            pr.path("createdBy").path("uniqueName").asText(""));
+                    String createdOn = pr.path("creationDate").asText("");
+                    prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                            sourceBranch, targetBranch, author, createdOn, closedDate, null, "MERGED", false));
+                }
+
+                if (value.size() < top) break;
+                skip += top;
+            } catch (Exception e) {
+                LOG.warnf("Failed to list merged PRs for Azure DevOps repo %s/%s/%s: %s",
+                        org, project, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d merged PRs (since %s) for Azure DevOps repo %s/%s/%s",
+                prs.size(), since, org, project, repo);
+        return prs;
+    }
+
+    @Override
     public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
         String url = repoApiUrl(org, project, repo)
                 + "/pullrequests/" + prId + "/commits?" + API_VERSION;

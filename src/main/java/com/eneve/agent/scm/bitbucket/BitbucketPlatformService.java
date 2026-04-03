@@ -987,6 +987,49 @@ public class BitbucketPlatformService implements GitPlatformService {
     }
 
     @Override
+    public List<OpenPrEntry> listMergedPullRequests(String org, String project, String repo,
+                                                     java.time.Instant since) {
+        List<OpenPrEntry> prs = new ArrayList<>();
+        // Bitbucket returns results sorted by updated_on descending by default
+        String path = "/repositories/" + org + "/" + repo + "/pullrequests?state=MERGED&pagelen=50";
+
+        outer:
+        while (path != null) {
+            try {
+                String responseBody = getAndReturn(path, "list merged PRs for " + org + "/" + repo);
+                JsonNode root = objectMapper.readTree(responseBody);
+                JsonNode values = root.path("values");
+                if (!values.isArray()) break;
+                for (JsonNode pr : values) {
+                    String updatedOn = pr.path("updated_on").asText("");
+                    if (!updatedOn.isBlank()) {
+                        java.time.Instant updatedAt = java.time.Instant.parse(updatedOn);
+                        if (updatedAt.isBefore(since)) break outer;
+                    }
+                    String prId = String.valueOf(pr.path("id").asInt());
+                    String prUrl = pr.path("links").path("html").path("href").asText("");
+                    String title = pr.path("title").asText("");
+                    String sourceBranch = pr.path("source").path("branch").path("name").asText("");
+                    String targetBranch = pr.path("destination").path("branch").path("name").asText("");
+                    String author = pr.path("author").path("display_name").asText(
+                            pr.path("author").path("nickname").asText(""));
+                    String createdOn = pr.path("created_on").asText("");
+                    prs.add(new OpenPrEntry(org, repo, prId, prUrl, title,
+                            sourceBranch, targetBranch, author, createdOn, updatedOn, null, "MERGED", false));
+                }
+                String next = root.path("next").asText(null);
+                path = next != null && !next.isBlank() ? next.replace(baseUrl(), "") : null;
+            } catch (Exception e) {
+                LOG.warnf("Failed to list merged PRs for Bitbucket repo %s/%s: %s", org, repo, e.getMessage());
+                break;
+            }
+        }
+
+        LOG.infof("Listed %d merged PRs (since %s) for Bitbucket repo %s/%s", prs.size(), since, org, repo);
+        return prs;
+    }
+
+    @Override
     public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
         List<PrCommitEntry> commits = new ArrayList<>();
         String path = "/repositories/" + org + "/" + repo

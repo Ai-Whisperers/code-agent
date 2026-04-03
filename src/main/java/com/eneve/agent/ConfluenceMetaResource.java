@@ -1,6 +1,7 @@
 package com.eneve.agent;
 
 import com.eneve.agent.confluence.ConfluenceService;
+import com.eneve.agent.security.SsrfGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -59,28 +60,36 @@ public class ConfluenceMetaResource {
         }
         try {
             String baseUrl = confluenceService.getBaseUrl();
-            String url = baseUrl + "/wiki/api/v2/spaces?limit=50&type=global";
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(url))
-                    .header("Authorization", basicAuthHeader())
-                    .header("Accept", "application/json")
-                    .GET()
-                    .build();
-
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-            if (response.statusCode() != 200) {
-                LOG.warnf("Confluence listSpaces failed (%d): %s", response.statusCode(), response.body());
-                return Response.status(503).entity("{\"error\":\"Confluence request failed\"}").build();
-            }
-
-            var root = mapper.readTree(response.body());
             ArrayNode result = mapper.createArrayNode();
-            for (var space : root.path("results")) {
-                ObjectNode item = mapper.createObjectNode();
-                item.put("key", space.path("key").asText(""));
-                item.put("name", space.path("name").asText(""));
-                result.add(item);
+            String nextUrl = baseUrl + "/wiki/api/v2/spaces?limit=250&type=global";
+
+            while (nextUrl != null) {
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(SsrfGuard.safeSameHostUri(baseUrl, nextUrl))
+                        .header("Authorization", basicAuthHeader())
+                        .header("Accept", "application/json")
+                        .GET()
+                        .build();
+
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                if (response.statusCode() != 200) {
+                    LOG.warnf("Confluence listSpaces failed (%d): %s", response.statusCode(), response.body());
+                    return Response.status(503).entity("{\"error\":\"Confluence request failed\"}").build();
+                }
+
+                var root = mapper.readTree(response.body());
+                for (var space : root.path("results")) {
+                    ObjectNode item = mapper.createObjectNode();
+                    item.put("key", space.path("key").asText(""));
+                    item.put("name", space.path("name").asText(""));
+                    result.add(item);
+                }
+
+                // Follow the next-page cursor if present
+                String cursor = root.path("_links").path("next").asText(null);
+                nextUrl = (cursor != null && !cursor.isBlank()) ? baseUrl + cursor : null;
             }
+
             return Response.ok(result).build();
         } catch (Exception e) {
             LOG.warnf("Failed to list Confluence spaces: %s", e.getMessage());

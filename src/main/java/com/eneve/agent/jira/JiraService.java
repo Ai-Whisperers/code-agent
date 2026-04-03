@@ -335,7 +335,13 @@ public class JiraService {
     // ─── Meta (projects / components) ────────────────────────────────────────
 
     public String listProjectsRaw() {
-        return httpClient.get("/rest/api/3/project", "list projects");
+        return httpClient.get("/rest/api/3/project?maxResults=500", "list projects");
+    }
+
+    public String listProjectsPageRaw(int startAt, int maxResults) {
+        return httpClient.get(
+                "/rest/api/3/project/search?startAt=" + startAt + "&maxResults=" + maxResults,
+                "list projects page startAt=" + startAt);
     }
 
     public String listComponentsRaw(String projectKey) {
