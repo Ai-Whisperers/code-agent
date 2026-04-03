@@ -362,18 +362,10 @@ public class AtlassianOAuthService {
      * @return bearer token string, or {@code null} on failure
      */
     public String getXrayBearerToken(String baseUrl, String clientId, String clientSecret) {
-        // Prefer the known-good allowlist entry; fall back only after SSRF validation
-        String tokenUrl = XRAY_TOKEN_URLS.get(baseUrl);
-        if (tokenUrl == null) {
-            tokenUrl = baseUrl + "/api/v2/authenticate";
-            // Validate the fully-assembled tokenUrl, not just baseUrl, to prevent
-            // fragment/path injection attacks that could bypass host-level checks.
-            String ssrfError = SsrfGuard.validatePublicUrl(tokenUrl);
-            if (ssrfError != null) {
-                LOG.warnf("Xray token request blocked (SSRF): %s — %s", tokenUrl, ssrfError);
-                return null;
-            }
-        }
+        // Prefer the known-good allowlist entry; fall back to the derived endpoint.
+        // safePublicUri validates the fully-assembled URL (not just baseUrl) to prevent
+        // fragment/path injection attacks that could bypass host-level checks.
+        String tokenUrl = XRAY_TOKEN_URLS.getOrDefault(baseUrl, baseUrl + "/api/v2/authenticate");
         try {
             String body = mapper.writeValueAsString(Map.of(
                     "client_id",     clientId,
@@ -381,7 +373,7 @@ public class AtlassianOAuthService {
             ));
             HttpRequest req = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(tokenUrl))
+                    .uri(SsrfGuard.safePublicUri(tokenUrl))
                     .header("Content-Type", "application/json")
                     .POST(HttpRequest.BodyPublishers.ofString(body))
                     .build();

@@ -16,8 +16,13 @@ import java.util.List;
  *       on the same host as the configured base, preventing host-override injection.</li>
  * </ul>
  *
- * <p>Both methods return {@code null} on success or a human-readable error string on failure.
- * Callers must treat a non-null return as a hard rejection.
+ * <p>Both {@code validate*} methods return {@code null} on success or a human-readable error
+ * string on failure. Callers must treat a non-null return as a hard rejection.
+ *
+ * <p>The {@code safeUri*} factory methods combine validation and URI construction in a single
+ * call, throwing {@link IllegalArgumentException} if the URL fails any check. Use these
+ * directly in {@code HttpRequest.newBuilder().uri(...)} chains so that no unvalidated URI
+ * variable ever reaches the HTTP client.
  */
 public final class SsrfGuard {
 
@@ -88,6 +93,42 @@ public final class SsrfGuard {
         }
 
         return null;
+    }
+
+    /**
+     * Validates {@code url} with {@link #validatePublicUrl} and returns the parsed {@link URI}.
+     * Throws {@link IllegalArgumentException} if validation fails, so the URI can be used
+     * directly in an {@code HttpRequest.newBuilder().uri(...)} chain without an intermediate
+     * unvalidated variable.
+     *
+     * @param url the URL to validate and parse
+     * @return a validated {@link URI}
+     * @throws IllegalArgumentException if the URL is rejected by SSRF checks
+     */
+    public static URI safePublicUri(String url) {
+        String error = validatePublicUrl(url);
+        if (error != null) {
+            throw new IllegalArgumentException("SSRF check failed for '" + url + "': " + error);
+        }
+        return URI.create(url);
+    }
+
+    /**
+     * Validates that {@code fullUrl} stays on the same host as {@code configuredBaseUrl} (via
+     * {@link #validateSameHost}) and returns the parsed {@link URI}. Throws
+     * {@link IllegalArgumentException} if validation fails.
+     *
+     * @param configuredBaseUrl the trusted base URL from application settings
+     * @param fullUrl           the fully-assembled URL about to be requested
+     * @return a validated {@link URI}
+     * @throws IllegalArgumentException if the URL is rejected by SSRF checks
+     */
+    public static URI safeSameHostUri(String configuredBaseUrl, String fullUrl) {
+        String error = validateSameHost(configuredBaseUrl, fullUrl);
+        if (error != null) {
+            throw new IllegalArgumentException("SSRF check failed for '" + fullUrl + "': " + error);
+        }
+        return URI.create(fullUrl);
     }
 
     /**
