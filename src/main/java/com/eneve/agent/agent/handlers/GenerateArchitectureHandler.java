@@ -167,6 +167,7 @@ public class GenerateArchitectureHandler implements JobHandler {
             for (ArchitectureDiagramDto diagram : diagrams) {
                 diagramStore.insertRepoVersion(
                         repoSlug,
+                        request.repoUrl(),
                         diagram.viewName(),
                         diagram.viewType(),
                         "ai",

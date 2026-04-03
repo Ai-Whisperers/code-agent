@@ -1,14 +1,18 @@
 package com.eneve.agent;
 
 import com.eneve.agent.agent.JobQueue;
+import com.eneve.agent.agent.store.CustomerRegistryStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.architecture.ArchitectureDiagramStore;
 import com.eneve.agent.architecture.ArchitectureDiagramStore.CloudEnvironmentKey;
 import com.eneve.agent.architecture.ArchitectureDiagramVersion;
 import com.eneve.agent.exception.JobQueueFullException;
+import com.eneve.agent.model.CustomerConfig;
+import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.GenerateArchitectureRequest;
 import com.eneve.agent.model.GenerateCloudArchitectureRequest;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.ProductConfig;
 import io.quarkus.security.Authenticated;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.enterprise.context.RequestScoped;
@@ -38,6 +42,7 @@ public class ArchitectureResource {
     @Inject ArchitectureDiagramStore store;
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
+    @Inject CustomerRegistryStore customerRegistryStore;
 
     // ── Repo architecture ─────────────────────────────────────────────────────
 
@@ -227,6 +232,101 @@ public class ArchitectureResource {
                 .orElse(Response.status(404).entity("No diagrams found for repo: " + repoSlug).build());
     }
 
+    // ── Bulk generation (admin) ───────────────────────────────────────────────
+
+    @POST
+    @Path("/generate-all")
+    @RolesAllowed("app_admin")
+    @Operation(
+            operationId = "generateAllArchitecture",
+            summary = "Queue architecture generation for all known repos and all customer cloud environments",
+            description = "Admin-only. Queues one GENERATE_ARCHITECTURE job per known repo URL "
+                    + "and one GENERATE_CLOUD_ARCHITECTURE job per customer environment. "
+                    + "Returns counts of queued and skipped (queue-full) jobs."
+    )
+    public Response generateAll() {
+        int repoQueued = 0, repoSkipped = 0;
+        int cloudQueued = 0, cloudSkipped = 0;
+
+        // ── Repo architecture ──────────────────────────────────────────────
+        // Build URL list from the product registry (canonical) + stored diagram URLs (fallback).
+        java.util.LinkedHashSet<String> repoUrlSet = new java.util.LinkedHashSet<>();
+        for (ProductConfig product : customerRegistryStore.listAllProducts()) {
+            if (product.git() == null || product.git().repos() == null
+                    || product.git().workspace() == null) continue;
+            for (String repoSlug : product.git().repos()) {
+                try {
+                    String url = buildRepoUrl(product.git().platform(),
+                            product.git().workspace(), repoSlug, product.git().baseUrl());
+                    if (url != null) repoUrlSet.add(url);
+                } catch (Exception e) {
+                    LOG.warnf("generate-all: could not build URL for product=%s repo=%s: %s",
+                            product.productId(), repoSlug, e.getMessage());
+                }
+            }
+        }
+        repoUrlSet.addAll(store.listRepoUrls()); // also include repos not in registry
+
+        for (String repoUrl : repoUrlSet) {
+            try {
+                GenerateArchitectureRequest req = new GenerateArchitectureRequest(
+                        repoUrl, "agent/generate-architecture", null, false);
+                String jobId = UUID.randomUUID().toString();
+                JobRecord job = new JobRecord(jobId, req);
+                jobStore.put(job);
+                if (jobQueue.submit(job)) {
+                    repoQueued++;
+                    LOG.infof("generate-all: queued repo job %s for %s", jobId, repoUrl);
+                } else {
+                    repoSkipped++;
+                    LOG.warnf("generate-all: queue full, skipped repo %s", repoUrl);
+                }
+            } catch (Exception e) {
+                repoSkipped++;
+                LOG.warnf("generate-all: failed to queue repo %s: %s", repoUrl, e.getMessage());
+            }
+        }
+
+        // ── Cloud architecture ─────────────────────────────────────────────
+        List<CustomerConfig> customers = customerRegistryStore.listCustomers();
+        for (CustomerConfig customer : customers) {
+            if (customer.environments() == null) continue;
+            for (EnvironmentConfig env : customer.environments()) {
+                if (env.aws() == null) continue;
+                String envLabel = (env.name() != null && !env.name().isBlank()) ? env.name()
+                        : (env.type() != null && !env.type().isBlank()) ? env.type() : null;
+                if (envLabel == null) continue;
+                try {
+                    GenerateCloudArchitectureRequest req = new GenerateCloudArchitectureRequest(
+                            customer.customerId(), envLabel);
+                    String jobId = UUID.randomUUID().toString();
+                    JobRecord job = new JobRecord(jobId, req);
+                    jobStore.put(job);
+                    if (jobQueue.submit(job)) {
+                        cloudQueued++;
+                        LOG.infof("generate-all: queued cloud job %s for %s/%s", jobId, customer.customerId(), envLabel);
+                    } else {
+                        cloudSkipped++;
+                        LOG.warnf("generate-all: queue full, skipped cloud %s/%s", customer.customerId(), envLabel);
+                    }
+                } catch (Exception e) {
+                    cloudSkipped++;
+                    LOG.warnf("generate-all: failed to queue cloud %s/%s: %s",
+                            customer.customerId(), envLabel, e.getMessage());
+                }
+            }
+        }
+
+        LOG.infof("generate-all complete: repos queued=%d skipped=%d, cloud queued=%d skipped=%d",
+                repoQueued, repoSkipped, cloudQueued, cloudSkipped);
+        return Response.accepted(Map.of(
+                "reposQueued", repoQueued,
+                "reposSkipped", repoSkipped,
+                "cloudQueued", cloudQueued,
+                "cloudSkipped", cloudSkipped
+        )).build();
+    }
+
     // ── Cloud architecture ────────────────────────────────────────────────────
 
     @POST
@@ -318,6 +418,25 @@ public class ArchitectureResource {
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Builds a canonical HTTPS repo URL from a GitConfig platform/workspace/repo tuple.
+     * Returns null if the platform is unrecognised or inputs are blank.
+     */
+    private static String buildRepoUrl(String platform, String workspace, String repoSlug, String baseUrl) {
+        if (platform == null || workspace == null || repoSlug == null) return null;
+        return switch (platform.toLowerCase()) {
+            case "bitbucket"   -> "https://bitbucket.org/" + workspace + "/" + repoSlug + ".git";
+            case "github"      -> "https://github.com/" + workspace + "/" + repoSlug + ".git";
+            case "gitlab"      -> {
+                String base = (baseUrl != null && !baseUrl.isBlank())
+                        ? baseUrl.replaceAll("/$", "") : "https://gitlab.com";
+                yield base + "/" + workspace + "/" + repoSlug + ".git";
+            }
+            case "azuredevops" -> "https://dev.azure.com/" + workspace + "/_git/" + repoSlug;
+            default -> null;
+        };
+    }
 
     private static String buildFilename(ArchitectureDiagramVersion v) {
         if (v.repoSlug() != null) return v.repoSlug() + "-" + v.viewName();

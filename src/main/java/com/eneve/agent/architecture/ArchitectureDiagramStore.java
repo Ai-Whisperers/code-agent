@@ -77,6 +77,20 @@ public class ArchitectureDiagramStore {
         return queryStringList(sql);
     }
 
+    /**
+     * Returns the most-recently stored repo_url for each distinct repo_slug.
+     * Rows without a repo_url (generated before V83 migration) are excluded.
+     */
+    public List<String> listRepoUrls() {
+        String sql = """
+                SELECT DISTINCT ON (repo_slug) repo_url
+                FROM architecture_diagram_versions
+                WHERE repo_slug IS NOT NULL AND repo_url IS NOT NULL
+                ORDER BY repo_slug, id DESC
+                """;
+        return queryStringList(sql);
+    }
+
     // ── Cloud diagrams ────────────────────────────────────────────────────────
 
     /** Returns the current (pinned or latest) version for every view of the given cloud environment. */
@@ -145,18 +159,24 @@ public class ArchitectureDiagramStore {
      * Inserts a new version row for a repo diagram.
      * The version number is auto-incremented as MAX(version)+1 for the given scope+view_name.
      */
-    public long insertRepoVersion(String repoSlug, String viewName, String viewType,
+    public long insertRepoVersion(String repoSlug, String repoUrl, String viewName, String viewType,
                                   String source, String dslSrc, String mermaidSrc) {
         String sql = """
                 INSERT INTO architecture_diagram_versions
-                    (repo_slug, view_name, view_type, version, source, pinned, dsl_src, mermaid_src)
-                VALUES (?, ?, ?, COALESCE(
+                    (repo_slug, repo_url, view_name, view_type, version, source, pinned, dsl_src, mermaid_src)
+                VALUES (?, ?, ?, ?, COALESCE(
                     (SELECT MAX(version) FROM architecture_diagram_versions
                      WHERE repo_slug = ? AND view_name = ?), 0) + 1,
                     ?, false, ?, ?)
                 RETURNING id
                 """;
-        return insertReturningId(sql, repoSlug, viewName, viewType, repoSlug, viewName, source, dslSrc, mermaidSrc);
+        return insertReturningId(sql, repoSlug, repoUrl, viewName, viewType, repoSlug, viewName, source, dslSrc, mermaidSrc);
+    }
+
+    /** Backwards-compatible overload without repoUrl (human edits, etc.). */
+    public long insertRepoVersion(String repoSlug, String viewName, String viewType,
+                                  String source, String dslSrc, String mermaidSrc) {
+        return insertRepoVersion(repoSlug, null, viewName, viewType, source, dslSrc, mermaidSrc);
     }
 
     /**
