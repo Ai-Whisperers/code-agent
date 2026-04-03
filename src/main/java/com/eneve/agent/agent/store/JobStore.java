@@ -965,6 +965,10 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, GenerateArchitectureRequest.class));
                 case GENERATE_CLOUD_ARCHITECTURE -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, GenerateCloudArchitectureRequest.class));
+                case KNOWLEDGE_GRAPH -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, KnowledgeGraphRequest.class));
+                case TECH_DEBT -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, TechDebtRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -993,6 +997,10 @@ public class JobStore {
                     job.getPayload() instanceof GenerateArchitectureRequest r ? r : null;
             case GENERATE_CLOUD_ARCHITECTURE ->
                     job.getPayload() instanceof GenerateCloudArchitectureRequest r ? r : null;
+            case KNOWLEDGE_GRAPH ->
+                    job.getPayload() instanceof KnowledgeGraphRequest r ? r : null;
+            case TECH_DEBT ->
+                    job.getPayload() instanceof TechDebtRequest r ? r : null;
             case CHAT -> null;
         };
         if (request == null) return "{}";

@@ -19,5 +19,6 @@ public sealed interface JobPayload
                 SyncConfluenceRequest, MetricsJobRequest,
                 QualityReportJobRequest, JiraReviewRequest,
                 PromoteRequest, SelfAnalysisRequest,
-                GenerateArchitectureRequest, GenerateCloudArchitectureRequest {
+                GenerateArchitectureRequest, GenerateCloudArchitectureRequest,
+                KnowledgeGraphRequest, TechDebtRequest {
 }

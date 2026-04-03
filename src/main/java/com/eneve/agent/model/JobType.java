@@ -23,7 +23,11 @@ public enum JobType {
     /** Generates a Structurizr DSL architecture model for a repository and persists versioned C4 diagrams. */
     GENERATE_ARCHITECTURE,
     /** Discovers AWS ECS/RDS topology for a customer environment and persists versioned cloud architecture diagrams. */
-    GENERATE_CLOUD_ARCHITECTURE;
+    GENERATE_CLOUD_ARCHITECTURE,
+    /** Analyses git history across repos to score engineer expertise per file/service and surface bus-factor risks. */
+    KNOWLEDGE_GRAPH,
+    /** Combines complexity, coverage, churn, and staleness signals into a per-file technical debt score. */
+    TECH_DEBT;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -48,6 +52,8 @@ public enum JobType {
             case GENERATE_DOCS              ->  20;
             case GENERATE_ARCHITECTURE      ->  20;
             case GENERATE_CLOUD_ARCHITECTURE->  20;
+            case KNOWLEDGE_GRAPH            ->  15;
+            case TECH_DEBT                  ->  15;
             case REVIEW_EPIC      ->  15;
             case REVIEW_FEATURE   ->  15;
             case REVIEW_USERSTORY ->  15;

@@ -305,7 +305,8 @@ public class JobQueue {
             case REVIEW, FIX_PR, FIX, PROMOTE                                -> prWorkSemaphore;
             case METRICS, QUALITY_REPORT, SYNC_CONFLUENCE,
                  GENERATE_TESTS, GENERATE_DOCS, SELF_ANALYSIS,
-                 GENERATE_ARCHITECTURE, GENERATE_CLOUD_ARCHITECTURE           -> backgroundSemaphore;
+                 GENERATE_ARCHITECTURE, GENERATE_CLOUD_ARCHITECTURE,
+                 KNOWLEDGE_GRAPH, TECH_DEBT                                   -> backgroundSemaphore;
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY                -> reviewSemaphore;
         };
     }

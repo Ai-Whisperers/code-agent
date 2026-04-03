@@ -380,6 +380,48 @@ public class JobRecord {
         this.priority = JobType.GENERATE_CLOUD_ARCHITECTURE.defaultPriority();
     }
 
+    public JobRecord(String jobId, KnowledgeGraphRequest request) {
+        this.jobId = jobId;
+        this.payload = request;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jiraReviewRequest = null;
+        this.promoteRequest = null;
+        this.jobType = JobType.KNOWLEDGE_GRAPH;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+        this.priority = JobType.KNOWLEDGE_GRAPH.defaultPriority();
+    }
+
+    public JobRecord(String jobId, TechDebtRequest request) {
+        this.jobId = jobId;
+        this.payload = request;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jiraReviewRequest = null;
+        this.promoteRequest = null;
+        this.jobType = JobType.TECH_DEBT;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+        this.priority = JobType.TECH_DEBT.defaultPriority();
+    }
+
     public String getJobId() { return jobId; }
     public JobType getJobType() { return jobType; }
 

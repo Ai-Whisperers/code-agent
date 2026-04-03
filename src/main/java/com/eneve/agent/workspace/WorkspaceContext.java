@@ -171,6 +171,18 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Full (unshallow) clone — fetches complete git history.
+     * Required for operations that need to traverse the full commit log, such as
+     * the Knowledge Graph analyser which runs {@code git log --since=<N>days}.
+     */
+    public void cloneRepoFull(String authenticatedUrl, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+
+        runGit(timeoutMinutes, "clone", "--branch", branchName, authenticatedUrl, ".");
+        LOG.infof("Full-cloned repo into %s on branch %s", root, branchName);
+    }
+
+    /**
      * Clone, then create and checkout a new branch.
      * Useful when the branch doesn't exist on the remote yet.
      */
