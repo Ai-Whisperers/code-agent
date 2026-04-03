@@ -18,6 +18,7 @@ import org.jboss.logging.Logger;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 /**
@@ -244,13 +245,12 @@ public class GenerateArchitectureHandler implements JobHandler {
         if (priorDsl.isBlank()) {
             // Remove the {{#if PRIOR_ARCHITECTURE_DSL}} block entirely
             return template.replaceAll(
-                    "(?s)\\{\\{#if PRIOR_ARCHITECTURE_DSL\\}\\}.*?\\{\\{/if\\}\\}\\s*",
-                    "");
+                    "(?s)\\{\\{#if PRIOR_ARCHITECTURE_DSL\\}\\}.*?\\{\\{/if\\}\\}\\s*", "");
         } else {
-            return template
+            template = template
                     .replace("{{#if PRIOR_ARCHITECTURE_DSL}}", "")
-                    .replace("{{/if}}", "")
-                    .replace("{{PRIOR_ARCHITECTURE_DSL}}", priorDsl);
+                    .replace("{{/if}}", "");
+            return promptTemplates.resolveTemplate(template, Map.of("PRIOR_ARCHITECTURE_DSL", priorDsl));
         }
     }
 

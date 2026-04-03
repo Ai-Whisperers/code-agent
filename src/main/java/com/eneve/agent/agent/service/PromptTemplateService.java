@@ -106,6 +106,19 @@ public class PromptTemplateService {
             LOG.warnf("No prompt template found for key '%s'", key);
             return "";
         }
+        return resolveTemplate(template, placeholders);
+    }
+
+    /**
+     * Substitutes {@code {{PLACEHOLDER}}} tokens in an already-loaded template string.
+     * Useful when the caller has pre-processed the template (e.g. evaluated conditional blocks)
+     * before delegating placeholder substitution here.
+     *
+     * @param template     the template text (not a key)
+     * @param placeholders map of placeholder name → value
+     * @return the rendered text
+     */
+    public String resolveTemplate(String template, Map<String, String> placeholders) {
         for (Map.Entry<String, String> entry : placeholders.entrySet()) {
             String value = entry.getValue() != null ? entry.getValue() : "";
             template = template.replace("{{" + entry.getKey() + "}}", value);

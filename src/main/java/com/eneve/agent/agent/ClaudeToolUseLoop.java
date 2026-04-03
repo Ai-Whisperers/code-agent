@@ -43,7 +43,9 @@ import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
+import io.quarkus.runtime.ShutdownEvent;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
 
 /**
@@ -77,6 +79,19 @@ public class ClaudeToolUseLoop {
 
     @Inject
     SettingsService settings;
+
+    void onShutdown(@Observes ShutdownEvent event) {
+        PARALLEL_TOOL_EXECUTOR.shutdown();
+        try {
+            if (!PARALLEL_TOOL_EXECUTOR.awaitTermination(10, java.util.concurrent.TimeUnit.SECONDS)) {
+                LOG.warn("PARALLEL_TOOL_EXECUTOR did not terminate in 10 s — forcing shutdown");
+                PARALLEL_TOOL_EXECUTOR.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            PARALLEL_TOOL_EXECUTOR.shutdownNow();
+        }
+    }
 
     /**
      * Run the agentic tool-use loop with a custom tool set and initial user message.

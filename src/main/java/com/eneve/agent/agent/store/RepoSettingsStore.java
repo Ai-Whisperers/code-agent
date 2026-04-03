@@ -67,10 +67,11 @@ public class RepoSettingsStore {
                 """;
         List<RepoSettings> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                results.add(mapRow(rs));
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
             }
         } catch (SQLException e) {
             LOG.errorf("Failed to list repo settings: %s", e.getMessage());
@@ -477,10 +478,11 @@ public class RepoSettingsStore {
                 """;
         List<RepoSettings> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                results.add(mapRow(rs));
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
             }
         } catch (SQLException e) {
             LOG.errorf("Failed to list quality-report-enabled repos: %s", e.getMessage());

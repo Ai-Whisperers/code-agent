@@ -166,7 +166,10 @@
     "placeholders": [
       "BUILD_OUTPUT",
       "ATTEMPT",
-      "MAX_ATTEMPTS"
+      "MAX_ATTEMPTS",
+      "AGENT_DIFF",
+      "JIRA_KEY",
+      "BRANCH"
     ]
   },
   "chat-system": {

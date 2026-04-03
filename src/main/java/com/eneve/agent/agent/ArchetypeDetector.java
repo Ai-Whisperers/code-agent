@@ -527,8 +527,11 @@ public class ArchetypeDetector {
 
             // No SDK project files with a target framework — check for a .sln and treat
             // the presence itself as a signal; version comes from global.json if available.
-            boolean hasSln = Files.list(projectRoot)
-                    .anyMatch(p -> p.getFileName().toString().toLowerCase().endsWith(".sln"));
+            boolean hasSln;
+            try (Stream<Path> slnStream = Files.list(projectRoot)) {
+                hasSln = slnStream
+                        .anyMatch(p -> p.getFileName().toString().toLowerCase().endsWith(".sln"));
+            }
             if (!hasSln && projectFiles.isEmpty()) {
                 return null;
             }

@@ -206,14 +206,12 @@ public class HookEvaluator {
                     jobType.name().replace("REVIEW_", ""));
             String jobId = UUID.randomUUID().toString();
             JobRecord job = new JobRecord(jobId, reviewReq, jobType);
-            jobStore.put(job);
-            if (!jobQueue.submit(job)) {
-                LOG.warnf("Hook '%s' review job rejected: queue full", hook.name());
-                return null;
+            String result = enqueueHookJob(job, hook.name(), jobType + " review for issue " + issueKey);
+            if (result != null) {
+                LOG.infof("Hook '%s' triggered %s review job %s for issue %s",
+                        hook.name(), jobType, result, issueKey);
             }
-            LOG.infof("Hook '%s' triggered %s review job %s for issue %s",
-                    hook.name(), jobType, jobId, issueKey);
-            return jobId;
+            return result;
         }
 
         // Build enhanced prompt with context
@@ -229,16 +227,8 @@ public class HookEvaluator {
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
-        jobStore.put(job);
-
-        if (!jobQueue.submit(job)) {
-            LOG.warnf("Hook '%s' job rejected: queue full", hook.name());
-            return null;
-        }
-
-        LOG.infof("Hook '%s' triggered job %s for %s/%s (branch: %s)",
-                hook.name(), jobId, targetWorkspace, targetRepoSlug, targetBranch);
-        return jobId;
+        return enqueueHookJob(job, hook.name(),
+                targetWorkspace + "/" + targetRepoSlug + " (branch: " + targetBranch + ")");
     }
 
     private String buildPromptWithContext(String basePrompt, Map<String, String> context) {
@@ -275,16 +265,22 @@ public class HookEvaluator {
 
         String jobId = UUID.randomUUID().toString();
         JobRecord job = new JobRecord(jobId, request);
-        jobStore.put(job);
+        return enqueueHookJob(job, hook.name(),
+                workspace + "/" + repoSlug + " (branch: " + targetBranch + ")");
+    }
 
+    /**
+     * Persists a hook job and submits it to the queue.
+     * Returns the job ID on success, or {@code null} if the queue is full.
+     */
+    private String enqueueHookJob(JobRecord job, String hookName, String logContext) {
+        jobStore.put(job);
         if (!jobQueue.submit(job)) {
-            LOG.warnf("Hook '%s' job rejected: queue full", hook.name());
+            LOG.warnf("Hook '%s' job rejected: queue full", hookName);
             return null;
         }
-
-        LOG.infof("Hook '%s' triggered job %s for %s/%s (branch: %s)",
-                hook.name(), jobId, workspace, repoSlug, targetBranch);
-        return jobId;
+        LOG.infof("Hook '%s' triggered job %s for %s", hookName, job.getJobId(), logContext);
+        return job.getJobId();
     }
 
     /**

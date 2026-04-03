@@ -511,13 +511,16 @@ public class WorkspaceContext implements AutoCloseable {
                 .directory(root.toFile())
                 .redirectErrorStream(true);
         Process proc = pb.start();
+        // Read stdout+stderr fully BEFORE waitFor to prevent a pipe-buffer deadlock:
+        // if the child writes more than the OS pipe buffer it blocks on write while
+        // the parent blocks in waitFor — draining first avoids the deadlock.
+        String output = new String(proc.getInputStream().readAllBytes());
         boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
         if (!finished) {
             proc.destroyForcibly();
             throw new IOException("Git command timed out: " + String.join(" ", cmd));
         }
         if (proc.exitValue() != 0) {
-            String output = new String(proc.getInputStream().readAllBytes());
             throw new IOException("Git command failed (exit " + proc.exitValue() + "): " + output);
         }
     }
@@ -536,6 +539,9 @@ public class WorkspaceContext implements AutoCloseable {
         if (!finished) {
             proc.destroyForcibly();
             throw new IOException("Git command timed out: " + String.join(" ", cmd));
+        }
+        if (proc.exitValue() != 0) {
+            throw new IOException("Git command failed (exit " + proc.exitValue() + "): " + output);
         }
         return output;
     }

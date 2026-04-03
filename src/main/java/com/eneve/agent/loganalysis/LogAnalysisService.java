@@ -5,6 +5,7 @@ import com.anthropic.errors.RateLimitException;
 import com.anthropic.models.messages.*;
 import com.eneve.agent.agent.TokenBudgetTracker;
 import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.AiCallStore;
 import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
@@ -23,8 +24,6 @@ import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient;
 import software.amazon.awssdk.services.cloudwatchlogs.model.FilterLogEventsRequest;
 import software.amazon.awssdk.services.cloudwatchlogs.model.FilteredLogEvent;
 
-import java.io.IOException;
-import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -72,6 +71,7 @@ public class LogAnalysisService {
     @Inject SettingsService settings;
     @Inject TokenBudgetTracker tokenBudgetTracker;
     @Inject ObjectMapper objectMapper;
+    @Inject PromptTemplateService promptTemplates;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -377,16 +377,12 @@ public class LogAnalysisService {
     }
 
     private String loadPromptTemplate() {
-        try (InputStream is = getClass().getResourceAsStream("/prompts/log-analysis-triage.txt")) {
-            if (is == null) {
-                LOG.warn("LogAnalysisService: prompt template not found, using inline fallback");
-                return inlineFallbackPrompt();
-            }
-            return new String(is.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            LOG.warnf("LogAnalysisService: failed to load prompt template: %s", e.getMessage());
-            return inlineFallbackPrompt();
+        String template = promptTemplates.getTemplate("log-analysis-triage");
+        if (!template.isBlank()) {
+            return template;
         }
+        LOG.warn("LogAnalysisService: log-analysis-triage template is empty, using inline fallback");
+        return inlineFallbackPrompt();
     }
 
     private String inlineFallbackPrompt() {

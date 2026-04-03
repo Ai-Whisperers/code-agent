@@ -259,7 +259,30 @@ public class SelfAnalysisHandler implements JobHandler {
 
     private String buildPrompt(SelfAnalysisRequest request, boolean hasCloudWatchLogs) {
         String jiraKey = request.jiraProjectKey() != null ? request.jiraProjectKey() : "";
-        return promptTemplates.resolve("self-analysis", Map.of(
+
+        String template = promptTemplates.getTemplate("self-analysis");
+
+        // Evaluate {{#if HAS_CLOUDWATCH_LOGS}} block
+        if (hasCloudWatchLogs) {
+            template = template
+                    .replace("{{#if HAS_CLOUDWATCH_LOGS}}", "")
+                    .replace("{{/if}}", "");
+        } else {
+            template = template.replaceAll(
+                    "(?s)\\{\\{#if HAS_CLOUDWATCH_LOGS\\}\\}.*?\\{\\{/if\\}\\}\\s*", "");
+        }
+
+        // Evaluate {{#if JIRA_PROJECT_KEY}} block
+        if (!jiraKey.isBlank()) {
+            template = template
+                    .replace("{{#if JIRA_PROJECT_KEY}}", "")
+                    .replace("{{/if}}", "");
+        } else {
+            template = template.replaceAll(
+                    "(?s)\\{\\{#if JIRA_PROJECT_KEY\\}\\}.*?\\{\\{/if\\}\\}\\s*", "");
+        }
+
+        return promptTemplates.resolveTemplate(template, Map.of(
                 "FAILED_JOB_ID", request.failedJobId(),
                 "JIRA_PROJECT_KEY", jiraKey,
                 "HAS_CLOUDWATCH_LOGS", String.valueOf(hasCloudWatchLogs)

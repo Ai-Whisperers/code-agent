@@ -255,7 +255,7 @@ public class PrCacheStore {
                 rs.getString("author"),
                 rs.getString("created_on"),
                 rs.getString("updated_on"),
-                null,
+                null, // jobId: not stored in the pr_cache table; callers must look up via JobStore
                 rs.getString("status"),
                 rs.getBoolean("soc2")
         );

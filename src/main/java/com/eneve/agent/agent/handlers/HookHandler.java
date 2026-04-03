@@ -4,6 +4,7 @@ import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.settings.SettingsService;
@@ -18,7 +19,7 @@ public class HookHandler implements JobHandler {
 
     @Inject ClaudeToolUseLoop toolUseLoop;
     @Inject AgentPromptBuilder promptBuilder;
-    @Inject GitPlatformService platformService;
+    @Inject GitPlatformRegistry platformRegistry;
     @Inject JobStore jobStore;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
@@ -51,6 +52,7 @@ public class HookHandler implements JobHandler {
 
         try (WorkspaceContext workspace = WorkspaceContext.create(job.getJobId())) {
 
+            GitPlatformService platformService = platformRegistry.resolve(request.repoUrl());
             String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
 
             if (request.commitDirect()) {

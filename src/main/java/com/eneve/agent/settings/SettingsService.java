@@ -16,7 +16,7 @@ import jakarta.inject.Inject;
  * Runtime settings service backed by the agent_settings database table.
  *
  * Lookup priority:
- *   1. In-memory cache (TTL: settings.cache.ttl-seconds, default 30 s)
+ *   1. In-memory cache (TTL: settings.cache.ttl-seconds, default 300 s)
  *   2. agent_settings DB table (secret values are decrypted transparently)
  *   3. MicroProfile Config (application.properties / environment variables)
  *
