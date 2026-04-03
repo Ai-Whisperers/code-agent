@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(16, values.length);
+        assertEquals(17, values.length);
         assertEquals(JobType.FIX,              values[0]);
         assertEquals(JobType.REVIEW,           values[1]);
         assertEquals(JobType.FIX_PR,           values[2]);
@@ -27,6 +27,7 @@ class JobTypeTest {
         assertEquals(JobType.REVIEW_USERSTORY, values[13]);
         assertEquals(JobType.CHAT,             values[14]);
         assertEquals(JobType.PROMOTE,          values[15]);
+        assertEquals(JobType.SELF_ANALYSIS,    values[16]);
     }
 
     @Test
@@ -47,6 +48,7 @@ class JobTypeTest {
         assertEquals("REVIEW_USERSTORY", JobType.REVIEW_USERSTORY.name());
         assertEquals("CHAT",             JobType.CHAT.name());
         assertEquals("PROMOTE",          JobType.PROMOTE.name());
+        assertEquals("SELF_ANALYSIS",    JobType.SELF_ANALYSIS.name());
     }
 
     @Test
@@ -67,6 +69,7 @@ class JobTypeTest {
         assertEquals(JobType.REVIEW_USERSTORY, JobType.valueOf("REVIEW_USERSTORY"));
         assertEquals(JobType.CHAT,             JobType.valueOf("CHAT"));
         assertEquals(JobType.PROMOTE,          JobType.valueOf("PROMOTE"));
+        assertEquals(JobType.SELF_ANALYSIS,    JobType.valueOf("SELF_ANALYSIS"));
     }
 
     @Test
@@ -99,6 +102,7 @@ class JobTypeTest {
         assertEquals(13, JobType.REVIEW_USERSTORY.ordinal());
         assertEquals(14, JobType.CHAT.ordinal());
         assertEquals(15, JobType.PROMOTE.ordinal());
+        assertEquals(16, JobType.SELF_ANALYSIS.ordinal());
     }
 
     @Test

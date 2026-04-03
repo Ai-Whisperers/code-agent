@@ -13,9 +13,14 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
+import com.eneve.agent.SecurityIssuesCacheService;
+import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoService;
+import com.eneve.agent.aikido.AikidoTriageService;
+import com.eneve.agent.model.RunResult;
+import com.eneve.agent.notifications.TeamsNotifier;
 import com.eneve.agent.security.WebhookSignatureFilter;
 import com.eneve.agent.upgrade.UpgradeService;
 
@@ -49,6 +54,12 @@ class AikidoWebhookResourceTest {
 
         // Synchronous executor so upgrade calls run on the test thread without delay
         setField(resource, "upgradeExecutor", syncExecutor());
+
+        // No-op stubs for dependencies not under test
+        setField(resource, "hookEvaluator", noopHookEvaluator());
+        setField(resource, "teamsNotifier", noopTeamsNotifier());
+        setField(resource, "securityIssuesCacheService", noopSecurityIssuesCacheService());
+        setField(resource, "aikidoTriageService", noopAikidoTriageService());
     }
 
     // ─── Happy path ──────────────────────────────────────────────────────────────
@@ -314,6 +325,39 @@ class AikidoWebhookResourceTest {
             }
             throw e;
         }
+    }
+
+    private static HookEvaluator noopHookEvaluator() {
+        return new HookEvaluator() {
+            @Override
+            public com.eneve.agent.agent.model.HookEvalResult evaluateByTrigger(
+                    String triggerType, String workspace, String repoSlug,
+                    String repoUrl, Map<String, String> context) {
+                return com.eneve.agent.agent.model.HookEvalResult.empty();
+            }
+        };
+    }
+
+    private static TeamsNotifier noopTeamsNotifier() {
+        return new TeamsNotifier() {
+            @Override public void sendNotification(RunResult result) {}
+        };
+    }
+
+    private static SecurityIssuesCacheService noopSecurityIssuesCacheService() {
+        return new SecurityIssuesCacheService() {
+            @Override public void invalidate() {}
+        };
+    }
+
+    private static AikidoTriageService noopAikidoTriageService() {
+        return new AikidoTriageService() {
+            @Override
+            public TriageResult handleNewIssue(int groupId, String repoUrl,
+                                               String severity, String issueType) {
+                return AikidoTriageService.TriageResult.skipped("noop");
+            }
+        };
     }
 
     /** Returns an {@link ExecutorService} that runs tasks synchronously on the calling thread. */
