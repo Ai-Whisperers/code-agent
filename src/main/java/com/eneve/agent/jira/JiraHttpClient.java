@@ -29,9 +29,16 @@ class JiraHttpClient {
 
     String get(String path, String operation) {
         try {
+            String baseUrl = settingsService.get("jira.base.url", "");
+            String fullUrl = baseUrl + path;
+            String ssrfError = SsrfGuard.validateSameHost(baseUrl, fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return null;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Accept", "application/json")
                     .GET()
@@ -53,9 +60,16 @@ class JiraHttpClient {
 
     String postForBody(String path, String body, String operation) {
         try {
+            String baseUrl = settingsService.get("jira.base.url", "");
+            String fullUrl = baseUrl + path;
+            String ssrfError = SsrfGuard.validateSameHost(baseUrl, fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return null;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -78,9 +92,16 @@ class JiraHttpClient {
 
     void post(String path, String body, String operation) {
         try {
+            String baseUrl = settingsService.get("jira.base.url", "");
+            String fullUrl = baseUrl + path;
+            String ssrfError = SsrfGuard.validateSameHost(baseUrl, fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -100,9 +121,16 @@ class JiraHttpClient {
 
     String putForBody(String path, String body, String operation) {
         try {
+            String baseUrl = settingsService.get("jira.base.url", "");
+            String fullUrl = baseUrl + path;
+            String ssrfError = SsrfGuard.validateSameHost(baseUrl, fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return null;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(settingsService.get("jira.base.url", "") + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", "Basic " + basicAuth())
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -135,9 +163,15 @@ class JiraHttpClient {
 
     String getWithCreds(String path, String operation, JiraService.JiraCredentials creds) {
         try {
+            String fullUrl = creds.baseUrl() + path;
+            String ssrfError = SsrfGuard.validatePublicUrl(fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return null;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(creds.baseUrl() + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", authHeader(creds))
                     .header("Accept", "application/json")
                     .GET()
@@ -158,9 +192,15 @@ class JiraHttpClient {
 
     String postForBodyWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
+            String fullUrl = creds.baseUrl() + path;
+            String ssrfError = SsrfGuard.validatePublicUrl(fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return null;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(creds.baseUrl() + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -182,9 +222,15 @@ class JiraHttpClient {
 
     boolean postWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
+            String fullUrl = creds.baseUrl() + path;
+            String ssrfError = SsrfGuard.validatePublicUrl(fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return false;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(creds.baseUrl() + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")
@@ -201,9 +247,15 @@ class JiraHttpClient {
 
     boolean putWithCreds(String path, String body, String operation, JiraService.JiraCredentials creds) {
         try {
+            String fullUrl = creds.baseUrl() + path;
+            String ssrfError = SsrfGuard.validatePublicUrl(fullUrl);
+            if (ssrfError != null) {
+                LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, fullUrl, ssrfError);
+                return false;
+            }
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
-                    .uri(URI.create(creds.baseUrl() + path))
+                    .uri(URI.create(fullUrl))
                     .header("Authorization", authHeader(creds))
                     .header("Content-Type", "application/json")
                     .header("Accept", "application/json")

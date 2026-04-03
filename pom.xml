@@ -31,6 +31,15 @@
 
     <dependencyManagement>
         <dependencies>
+            <!-- Netty override must come first so it wins over versions locked by quarkus-bom and aws bom -->
+            <!-- Fixes CVE-2026-33870 and CVE-2026-33871 (fixed in 4.1.132.Final) -->
+            <dependency>
+                <groupId>io.netty</groupId>
+                <artifactId>netty-bom</artifactId>
+                <version>${netty.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>${quarkus.platform.artifact-id}</artifactId>
@@ -49,14 +58,6 @@
                 <groupId>${quarkus.platform.group-id}</groupId>
                 <artifactId>quarkus-amazon-services-bom</artifactId>
                 <version>${quarkus.platform.version}</version>
-                <type>pom</type>
-                <scope>import</scope>
-            </dependency>
-            <!-- Netty override: fixes CVE-2026-33870 and CVE-2026-33871 (fixed in 4.1.132.Final) -->
-            <dependency>
-                <groupId>io.netty</groupId>
-                <artifactId>netty-bom</artifactId>
-                <version>${netty.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>

@@ -365,12 +365,14 @@ public class AtlassianOAuthService {
         // Prefer the known-good allowlist entry; fall back only after SSRF validation
         String tokenUrl = XRAY_TOKEN_URLS.get(baseUrl);
         if (tokenUrl == null) {
-            String ssrfError = SsrfGuard.validatePublicUrl(baseUrl);
+            tokenUrl = baseUrl + "/api/v2/authenticate";
+            // Validate the fully-assembled tokenUrl, not just baseUrl, to prevent
+            // fragment/path injection attacks that could bypass host-level checks.
+            String ssrfError = SsrfGuard.validatePublicUrl(tokenUrl);
             if (ssrfError != null) {
-                LOG.warnf("Xray token request blocked (SSRF): %s — %s", baseUrl, ssrfError);
+                LOG.warnf("Xray token request blocked (SSRF): %s — %s", tokenUrl, ssrfError);
                 return null;
             }
-            tokenUrl = baseUrl + "/api/v2/authenticate";
         }
         try {
             String body = mapper.writeValueAsString(Map.of(
