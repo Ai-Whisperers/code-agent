@@ -58,7 +58,7 @@ public class TechDebtHandler implements JobHandler {
     /** Retention: delete snapshots older than this many days. */
     private static final int RETENTION_DAYS = 90;
     /** Default branch to look up quality reports on. */
-    private static final String DEFAULT_BRANCH = "main";
+    private static final String DEFAULT_BRANCH = "develop";
 
     @Inject KnowledgeGraphStore knowledgeStore;
     @Inject QualityReportStore  qualityReportStore;

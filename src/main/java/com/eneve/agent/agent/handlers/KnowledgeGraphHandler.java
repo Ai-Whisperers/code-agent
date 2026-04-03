@@ -107,7 +107,7 @@ public class KnowledgeGraphHandler implements JobHandler {
         List<KnowledgeScore> allScores = new ArrayList<>();
         List<BusFactorRow> allBusFactor = new ArrayList<>();
 
-        String defaultBranch = settings.get("knowledge-graph.default-branch", "main");
+        String defaultBranch = settings.get("knowledge-graph.default-branch", "develop");
 
         // Load author identity resolution state — shared across all repos in this run
         // so that the local-part heuristic is consistent (first-seen canonical email wins)

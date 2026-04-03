@@ -210,5 +210,17 @@
       "JIRA_PROJECT_KEY",
       "HAS_CLOUDWATCH_LOGS"
     ]
+  },
+  "log-analysis-triage": {
+    "description": "Single-shot Haiku triage prompt: classifies a production log exception as GENUINE or NOISE with severity and a one-sentence reason",
+    "placeholders": [
+      "CUSTOMER_ID",
+      "ENVIRONMENT_NAME",
+      "EXCEPTION_CLASS",
+      "LOOKBACK_MINUTES",
+      "OCCURRENCE_COUNT",
+      "TOP_FRAMES",
+      "SAMPLE_MESSAGE"
+    ]
   }
 }
