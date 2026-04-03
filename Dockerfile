@@ -15,10 +15,15 @@ RUN update-ca-certificates && \
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
 ENV PATH="${MAVEN_HOME}/bin:${PATH}"
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+ENV MAVEN_SHA512=d50af8ab5e6005b46a07f0ce9d3719e67cfdf898da988a84871304cd59fb1af0fef2f99dea709e6e66f21f732f905979b5c2dce6b6860406f60a70e84d9cf0b8
+RUN set -e && \
+    apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
     curl -fsSL https://repo1.maven.org/maven2/org/apache/maven/apache-maven/${MAVEN_VERSION}/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
-    | tar -xz -C /opt && \
-    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
+        -o /tmp/maven.tar.gz && \
+    echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c - && \
+    tar -xz -C /opt -f /tmp/maven.tar.gz && \
+    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME} && \
+    rm /tmp/maven.tar.gz
 
 WORKDIR /build
 COPY pom.xml .
@@ -43,19 +48,31 @@ RUN update-ca-certificates && \
 ENV MAVEN_VERSION=3.9.14
 ENV MAVEN_HOME=/opt/maven
 ENV PATH="${MAVEN_HOME}/bin:${PATH}"
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+ENV MAVEN_SHA512=d50af8ab5e6005b46a07f0ce9d3719e67cfdf898da988a84871304cd59fb1af0fef2f99dea709e6e66f21f732f905979b5c2dce6b6860406f60a70e84d9cf0b8
+RUN set -e && \
+    apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
     curl -fsSL https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
-    | tar -xz -C /opt && \
-    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME}
+        -o /tmp/maven.tar.gz && \
+    echo "${MAVEN_SHA512}  /tmp/maven.tar.gz" | sha512sum -c - && \
+    tar -xz -C /opt -f /tmp/maven.tar.gz && \
+    mv /opt/apache-maven-${MAVEN_VERSION} ${MAVEN_HOME} && \
+    rm /tmp/maven.tar.gz
 
-RUN apt-get update && \
+ENV NODESOURCE_KEY_SHA512=bf879a71dd828e8ff9cbd0c3706f3bda96b3178e8c4ea2328d9c821411911245aaf643f53251f2d0115928bb41c993f061a02f001876a240095833efb4d0b99c
+ENV GOOGLE_KEY_SHA512=3e4df93c53e4dff1ab28443b9619b1963dfa05cb494fe582c75cb58a5396ab21beb985046af853c156d2ad06c615d9ebd5d06d12992b05de05fa9641ba3d11c4
+ENV DOTNET_INSTALL_SHA512=971ad8d21a7d17247da2fdfc8867358bde015a7622d09b62324b5d87ddc349c6892727487c700df602e3028eda18216bf40493cb53a989ebf8991dc8cfd78427
+RUN set -e && \
+    apt-get update && \
     # Apply available security updates for packages with known CVEs (binutils, coreutils, tzdata)
     apt-get upgrade -y --no-install-recommends && \
     apt-get install -y --no-install-recommends git curl ca-certificates gnupg && \
     # Node.js 22.x (for ESLint + Mermaid CLI) — 22.x is the current LTS
     mkdir -p /etc/apt/keyrings && \
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
-        | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+        -o /tmp/nodesource-repo.gpg.key && \
+    echo "${NODESOURCE_KEY_SHA512}  /tmp/nodesource-repo.gpg.key" | sha512sum -c - && \
+    cat /tmp/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg && \
+    rm /tmp/nodesource-repo.gpg.key && \
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" \
         > /etc/apt/sources.list.d/nodesource.list && \
     apt-get update && \
@@ -63,7 +80,10 @@ RUN apt-get update && \
     # Google Chrome stable — avoids the Ubuntu 24.04 chromium snap stub which
     # pulls in snapd (compiled with Go 1.22.2, carrying 3C/11H Go stdlib CVEs).
     curl -fsSL https://dl.google.com/linux/linux_signing_key.pub \
-        | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+        -o /tmp/linux_signing_key.pub && \
+    echo "${GOOGLE_KEY_SHA512}  /tmp/linux_signing_key.pub" | sha512sum -c - && \
+    cat /tmp/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg && \
+    rm /tmp/linux_signing_key.pub && \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" \
         > /etc/apt/sources.list.d/google-chrome.list && \
     apt-get update && \
@@ -77,6 +97,7 @@ RUN apt-get update && \
     npm install -g pnpm yarn && \
     # .NET SDK 9.0 (for dotnet format + code coverage)
     curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh && \
+    echo "${DOTNET_INSTALL_SHA512}  /tmp/dotnet-install.sh" | sha512sum -c - && \
     chmod +x /tmp/dotnet-install.sh && \
     /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet && \
     ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet && \
@@ -93,9 +114,12 @@ RUN mkdir -p $DOTNET_TOOLS && \
 ENV PATH="${DOTNET_TOOLS}:${PATH}"
 
 # Upgrade plexus-utils bundled with Maven 3.9.x from 3.6.0 to 4.0.3 (CVE-2025-67030)
-RUN PLEXUS_VERSION=4.0.3 && \
+ENV PLEXUS_VERSION=4.0.3
+ENV PLEXUS_SHA512=ed864c502a54ab2e8e2d4c74479b1cb48c5e44ee56fcad6ba5aec9e20e3e765148299cb8eb8c9a516fb59bf836b12886caca00a9b12eb5cb036271df3437218d
+RUN set -e && \
     curl -fsSL "https://repo1.maven.org/maven2/org/codehaus/plexus/plexus-utils/${PLEXUS_VERSION}/plexus-utils-${PLEXUS_VERSION}.jar" \
         -o /opt/maven/lib/plexus-utils-${PLEXUS_VERSION}.jar && \
+    echo "${PLEXUS_SHA512}  /opt/maven/lib/plexus-utils-${PLEXUS_VERSION}.jar" | sha512sum -c - && \
     rm -f /opt/maven/lib/plexus-utils-3.6.0.jar
 
 RUN useradd -m -u 1001 -s /bin/bash appuser && \
