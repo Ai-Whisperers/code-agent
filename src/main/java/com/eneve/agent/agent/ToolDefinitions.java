@@ -10,6 +10,7 @@ import com.eneve.agent.agent.tools.JiraToolSchemas;
 import com.eneve.agent.agent.tools.KnowledgeToolSchemas;
 import com.eneve.agent.agent.tools.PlanToolSchemas;
 import com.eneve.agent.agent.tools.ScopeImproveToolSchemas;
+import com.eneve.agent.agent.tools.SelfAnalysisToolSchemas;
 import com.eneve.agent.agent.tools.WebSearchToolSchemas;
 import com.eneve.agent.agent.tools.WorkspaceToolSchemas;
 import com.eneve.agent.agent.tools.XrayToolSchemas;
@@ -241,6 +242,25 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(XrayToolSchemas.xrayGetTestCoverage()),
                 ToolUnion.ofTool(XrayToolSchemas.xrayCreateTestExecution()),
                 ToolUnion.ofTool(XrayToolSchemas.xrayUpdateTestRunStatus())
+        );
+    }
+
+    /**
+     * Tool set for the self-analysis agent loop.
+     * Includes full workspace read/write tools, code search, build execution,
+     * read-only database access, and CloudWatch logs for investigating failures.
+     */
+    public static List<ToolUnion> selfAnalysis() {
+        return List.of(
+                ToolUnion.ofTool(WorkspaceToolSchemas.readFile()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.writeFile()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.searchCode()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.listFiles()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.runCommand()),
+                ToolUnion.ofTool(AwsToolSchemas.awsCloudWatchLogs()),
+                ToolUnion.ofTool(SelfAnalysisToolSchemas.readDb())
         );
     }
 

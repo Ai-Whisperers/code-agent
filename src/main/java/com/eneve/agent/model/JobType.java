@@ -17,7 +17,9 @@ public enum JobType {
     REVIEW_USERSTORY,
     CHAT,
     /** Cherry-pick promotion job: creates promote/{jiraKey} from main, cherry-picks fix commits, raises PR → main. */
-    PROMOTE;
+    PROMOTE,
+    /** Autonomous self-analysis job: triggered after a job fails, analyses logs/DB, attempts a code fix, raises PR. */
+    SELF_ANALYSIS;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -43,6 +45,7 @@ public enum JobType {
             case REVIEW_EPIC      ->  15;
             case REVIEW_FEATURE   ->  15;
             case REVIEW_USERSTORY ->  15;
+            case SELF_ANALYSIS    ->  10;
         };
     }
 }

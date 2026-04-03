@@ -202,5 +202,13 @@
   "improve-userstory": {
     "description": "AI rewrite of a Jira User Story following Given/When/Then best practices",
     "placeholders": ["jira_context"]
+  },
+  "self-analysis": {
+    "description": "Autonomous self-analysis prompt: investigates a failed job, identifies code defects, and produces a targeted fix with a PR",
+    "placeholders": [
+      "FAILED_JOB_ID",
+      "JIRA_PROJECT_KEY",
+      "HAS_CLOUDWATCH_LOGS"
+    ]
   }
 }

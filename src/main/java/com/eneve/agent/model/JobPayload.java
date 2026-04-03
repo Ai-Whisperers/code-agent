@@ -18,5 +18,5 @@ public sealed interface JobPayload
                 GenerateTestsRequest, GenerateDocsRequest,
                 SyncConfluenceRequest, MetricsJobRequest,
                 QualityReportJobRequest, JiraReviewRequest,
-                PromoteRequest {
+                PromoteRequest, SelfAnalysisRequest {
 }

@@ -274,6 +274,49 @@ public class JobStore {
     }
 
     /**
+     * Returns true if there is already an active (PENDING/QUEUED/RUNNING) SELF_ANALYSIS job
+     * targeting the given failed job ID. Used by {@code SelfAnalysisTrigger} to prevent
+     * duplicate submissions when the same failure event fires more than once.
+     */
+    public boolean hasActiveSelfAnalysisForJob(String failedJobId) {
+        String sql = """
+                SELECT 1 FROM jobs
+                WHERE job_type = 'SELF_ANALYSIS'
+                  AND status IN ('PENDING','QUEUED','RUNNING')
+                  AND request_payload->>'failedJobId' = ?
+                LIMIT 1
+                """;
+        return existsQuery(sql, failedJobId);
+    }
+
+    /**
+     * Returns true if a successful (SUCCESS or AWAITING_APPROVAL) SELF_ANALYSIS job for the
+     * given failed job ID was archived within the last {@code cooldownHours} hours.
+     * Used by {@code SelfAnalysisTrigger} to enforce the cooldown window.
+     */
+    public boolean hasRecentSuccessfulSelfAnalysisForJob(String failedJobId, int cooldownHours) {
+        String sql = """
+                SELECT 1 FROM job_history
+                WHERE job_type = 'SELF_ANALYSIS'
+                  AND status IN ('SUCCESS','AWAITING_APPROVAL')
+                  AND archived_at > now() - (? || ' hours')::interval
+                  AND request_payload->>'failedJobId' = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, String.valueOf(cooldownHours));
+            ps.setString(2, failedJobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            LOG.errorf("hasRecentSuccessfulSelfAnalysisForJob query failed: %s", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Returns the most recent job (by created_at DESC) linked to the given Aikido issue group ID,
      * searching both the active jobs table and job_history. Returns {@code null} if none found.
      * Used by the security issues view to show linked job status.
@@ -916,6 +959,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, JiraReviewRequest.class), jobType);
                 case PROMOTE -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, PromoteRequest.class));
+                case SELF_ANALYSIS -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, SelfAnalysisRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -939,6 +984,7 @@ public class JobStore {
             case QUALITY_REPORT -> job.getQualityReportRequest();
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> job.getJiraReviewRequest();
             case PROMOTE -> job.getPromoteRequest();
+            case SELF_ANALYSIS -> job.getPayload() instanceof SelfAnalysisRequest r ? r : null;
             case CHAT -> null;
         };
         if (request == null) return "{}";
