@@ -222,5 +222,21 @@
       "TOP_FRAMES",
       "SAMPLE_MESSAGE"
     ]
+  },
+  "generate-architecture": {
+    "description": "Generates a Structurizr DSL C4 architecture model by exploring the repository and writing docs/architecture.dsl",
+    "placeholders": [
+      "PRIOR_ARCHITECTURE_DSL"
+    ]
+  },
+  "scope-improve-chat": {
+    "description": "System prompt for the Product Owner AI chat on the Scope Improve screen — guides the AI to refine Jira scope items and call update_proposal",
+    "placeholders": [
+      "scope_name",
+      "issue_key",
+      "current_proposals",
+      "product_context",
+      "issue_type_guidance"
+    ]
   }
 }

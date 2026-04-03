@@ -1,6 +1,7 @@
 package com.eneve.agent.agent.handlers;
 
 import com.eneve.agent.agent.*;
+import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.architecture.ArchitectureDiagramStore;
 import com.eneve.agent.architecture.ArchitectureDiagramDto;
@@ -48,6 +49,7 @@ public class GenerateArchitectureHandler implements JobHandler {
     @Inject StructurizrService structurizrService;
     @Inject ArchitectureDiagramStore diagramStore;
     @Inject SettingsService settings;
+    @Inject PromptTemplateService promptTemplates;
 
     @Override
     public JobType jobType() {
@@ -232,32 +234,23 @@ public class GenerateArchitectureHandler implements JobHandler {
     }
 
     private String buildPrompt(String priorDsl) {
-        String priorDslSection = priorDsl.isBlank() ? "" : priorDsl;
-        // Use the prompt template service via the promptBuilder's underlying mechanism.
-        // We inline the template loading here to avoid coupling to a specific promptBuilder method.
-        try {
-            String template = new String(
-                    getClass().getClassLoader()
-                            .getResourceAsStream("prompts/generate-architecture.txt")
-                            .readAllBytes(),
-                    java.nio.charset.StandardCharsets.UTF_8);
-
-            if (priorDslSection.isBlank()) {
-                // Remove the {{#if PRIOR_ARCHITECTURE_DSL}} block entirely
-                template = template.replaceAll(
-                        "(?s)\\{\\{#if PRIOR_ARCHITECTURE_DSL\\}\\}.*?\\{\\{/if\\}\\}\\s*",
-                        "");
-            } else {
-                template = template
-                        .replace("{{#if PRIOR_ARCHITECTURE_DSL}}", "")
-                        .replace("{{/if}}", "")
-                        .replace("{{PRIOR_ARCHITECTURE_DSL}}", priorDslSection);
-            }
-            return template;
-        } catch (Exception e) {
-            LOG.warnf("Failed to load generate-architecture.txt prompt, using fallback: %s", e.getMessage());
+        String template = promptTemplates.getTemplate("generate-architecture");
+        if (template.isBlank()) {
+            LOG.warn("generate-architecture prompt template is empty, using fallback");
             return "You are generating a Structurizr DSL architecture model. "
                     + "Explore the repository and write docs/architecture.dsl with C4 model views.";
+        }
+
+        if (priorDsl.isBlank()) {
+            // Remove the {{#if PRIOR_ARCHITECTURE_DSL}} block entirely
+            return template.replaceAll(
+                    "(?s)\\{\\{#if PRIOR_ARCHITECTURE_DSL\\}\\}.*?\\{\\{/if\\}\\}\\s*",
+                    "");
+        } else {
+            return template
+                    .replace("{{#if PRIOR_ARCHITECTURE_DSL}}", "")
+                    .replace("{{/if}}", "")
+                    .replace("{{PRIOR_ARCHITECTURE_DSL}}", priorDsl);
         }
     }
 

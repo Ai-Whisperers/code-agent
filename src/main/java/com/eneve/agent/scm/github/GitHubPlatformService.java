@@ -250,7 +250,9 @@ public class GitHubPlatformService implements GitPlatformService {
                             String author = comment.path("user").path("login").asText("unknown");
                             String content = comment.path("body").asText("").trim();
                             String createdAt = comment.path("created_at").asText("");
-                            long parentId = (id == rootCommentId) ? 0L : rootCommentId;
+                            // Use the actual in_reply_to_id so callers see the real parent chain,
+                            // not a flattened view where every reply points to the root.
+                            long parentId = (id == rootCommentId) ? 0L : inReplyTo;
                             boolean isAgent = !agentUser().isEmpty() && author.equalsIgnoreCase(agentUser());
                             result.add(new ThreadComment(id, parentId, author, content, createdAt, isAgent));
                         }
@@ -767,24 +769,27 @@ public class GitHubPlatformService implements GitPlatformService {
 
     @Override
     public List<PrCommitEntry> getPrCommits(String org, String project, String repo, String prId) {
-        // GitHub returns up to 250 commits per PR in one page
         String url = baseUrl() + "/repos/" + org + "/" + repo + "/pulls/" + prId + "/commits?per_page=100";
         List<PrCommitEntry> commits = new ArrayList<>();
-        try {
-            String responseBody = getAndReturn(url, "get commits for PR #" + prId);
-            JsonNode array = objectMapper.readTree(responseBody);
-            if (array.isArray()) {
-                for (JsonNode commit : array) {
-                    String sha = commit.path("sha").asText("");
-                    String shortSha = sha.length() >= 7 ? sha.substring(0, 7) : sha;
-                    String message = commit.path("commit").path("message").asText("").trim();
-                    String authorName = commit.path("commit").path("author").path("name").asText("");
-                    String authorDate = commit.path("commit").path("author").path("date").asText("");
-                    commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+        while (url != null) {
+            try {
+                HttpResponse<String> response = getWithResponse(url, "get commits for PR #" + prId);
+                JsonNode array = objectMapper.readTree(response.body());
+                if (array.isArray()) {
+                    for (JsonNode commit : array) {
+                        String sha = commit.path("sha").asText("");
+                        String shortSha = sha.length() >= 7 ? sha.substring(0, 7) : sha;
+                        String message = commit.path("commit").path("message").asText("").trim();
+                        String authorName = commit.path("commit").path("author").path("name").asText("");
+                        String authorDate = commit.path("commit").path("author").path("date").asText("");
+                        commits.add(new PrCommitEntry(sha, shortSha, message, authorName, authorDate));
+                    }
                 }
+                url = nextPageUrl(response);
+            } catch (Exception e) {
+                LOG.warnf("Failed to fetch commits for GitHub PR #%s: %s", prId, e.getMessage());
+                break;
             }
-        } catch (Exception e) {
-            LOG.warnf("Failed to fetch commits for GitHub PR #%s: %s", prId, e.getMessage());
         }
         LOG.infof("Fetched %d commits for GitHub PR #%s in %s/%s", commits.size(), prId, org, repo);
         return commits;

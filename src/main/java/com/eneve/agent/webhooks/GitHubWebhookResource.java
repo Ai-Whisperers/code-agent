@@ -179,7 +179,9 @@ public class GitHubWebhookResource extends AbstractPrWebhookHandler {
         } catch (Exception e) {
             LOG.errorf("GitHub webhook processing error: %s", e.getMessage());
             audit("github", event, null, null, null, null, "error", List.of(), rawPayload);
-            return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+            return Response.serverError()
+                    .entity(Map.of("action", "error", "message", e.getMessage()))
+                    .build();
         }
     }
 

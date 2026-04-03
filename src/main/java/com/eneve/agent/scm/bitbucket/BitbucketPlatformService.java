@@ -564,7 +564,7 @@ public class BitbucketPlatformService implements GitPlatformService {
                       "secret": "%s",
                       "events": %s
                     }
-                    """.formatted(webhookUrl, secret, eventsJson);
+                    """.formatted(escapeJson(webhookUrl), escapeJson(secret), eventsJson);
             postAndReturn(path, body, "create webhook " + webhookUrl + " on " + workspace + "/" + repo);
             LOG.infof("Created webhook %s on %s/%s", webhookUrl, workspace, repo);
         } catch (Exception e) {

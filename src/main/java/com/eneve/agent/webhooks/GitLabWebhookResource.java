@@ -181,7 +181,7 @@ public class GitLabWebhookResource extends AbstractPrWebhookHandler {
         } catch (Exception e) {
             LOG.errorf("GitLab webhook processing error: %s", e.getMessage());
             audit("gitlab", event, null, null, null, null, "error", List.of(), rawPayload);
-            return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+            return Response.serverError().entity(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
 

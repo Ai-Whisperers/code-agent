@@ -48,9 +48,9 @@ public abstract class AbstractPrWebhookHandler {
     protected Response submitReviewJob(String repoUrl, String prId, String targetBranch,
                                        String jiraKey, String headCommitSha,
                                        String workspace, String repoSlug, String prAuthor) {
-        if (jobStore.hasActiveReviewJobForPr(prId)) {
-            LOG.infof("%s webhook skipped duplicate review for PR/MR %s — active review job already exists",
-                    getClass().getSimpleName(), prId);
+        if (jobStore.hasActiveReviewJobForPr(prId, workspace, repoSlug)) {
+            LOG.infof("%s webhook skipped duplicate review for PR/MR %s (%s/%s) — active review job already exists",
+                    getClass().getSimpleName(), prId, workspace, repoSlug);
             return Response.ok(Map.of(
                     "action", "skipped",
                     "reason", "Active review job already exists for this PR",
@@ -117,10 +117,10 @@ public abstract class AbstractPrWebhookHandler {
                     workspace, repoSlug, prId, e.getMessage());
         }
 
-        // 2. Cancel any active review jobs for this PR
+        // 2. Cancel any active review jobs for this PR (scoped to this repo to avoid cross-repo collisions)
         int cancelled = 0;
         try {
-            List<JobRecord> activeJobs = jobStore.findByPrId(prId);
+            List<JobRecord> activeJobs = jobStore.findByPrId(prId, workspace, repoSlug);
             for (JobRecord job : activeJobs) {
                 JobStatus s = job.getStatus();
                 if (s == JobStatus.PENDING || s == JobStatus.QUEUED) {

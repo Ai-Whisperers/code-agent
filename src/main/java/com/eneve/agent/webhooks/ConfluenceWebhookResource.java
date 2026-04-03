@@ -163,7 +163,7 @@ public class ConfluenceWebhookResource {
         } catch (Exception e) {
             LOG.errorf("Confluence webhook processing error: %s", e.getMessage());
             audit("confluence", eventType, spaceKey, pageId, "error", rawPayload);
-            return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+            return Response.serverError().entity(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
 

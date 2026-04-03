@@ -64,7 +64,10 @@ public class RunCommandTool implements ToolExecutor {
             }
 
             return "Exit code: " + proc.exitValue() + "\n" + output;
-        } catch (IOException | InterruptedException e) {
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "ERROR: " + e.getMessage();
+        } catch (IOException e) {
             return "ERROR: " + e.getMessage();
         }
     }

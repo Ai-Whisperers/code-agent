@@ -190,7 +190,7 @@ public class GitLabCommentWebhookResource extends AbstractCommentWebhookHandler 
 
         } catch (Exception e) {
             LOG.errorf("GitLab note webhook processing error: %s", e.getMessage());
-            return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+            return Response.serverError().entity(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
 

@@ -163,7 +163,7 @@ public class JiraWebhookResource {
         } catch (Exception e) {
             LOG.errorf("JIRA webhook processing error: %s", e.getMessage());
             audit("jira", event, "", issueKey, "error", "", rawPayload);
-            return Response.ok(Map.of("action", "error", "message", e.getMessage())).build();
+            return Response.serverError().entity(Map.of("action", "error", "message", e.getMessage())).build();
         }
     }
 

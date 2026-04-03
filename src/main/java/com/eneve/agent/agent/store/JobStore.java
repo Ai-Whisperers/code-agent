@@ -83,10 +83,10 @@ public class JobStore {
                 ps.setNull(23, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
             }
             ps.executeUpdate();
+            cache.put(job.getJobId(), job);
         } catch (SQLException e) {
             LOG.errorf("Failed to insert job %s: %s", job.getJobId(), e.getMessage());
         }
-        cache.put(job.getJobId(), job);
     }
 
     /**
@@ -578,18 +578,32 @@ public class JobStore {
 
     /**
      * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
-     * for the given PR ID. Used by webhook handlers to prevent duplicate review jobs
-     * triggered by rapid successive webhook deliveries for the same PR.
+     * for the given PR ID scoped to a specific workspace and repository.
+     * Scoping prevents cross-repo false positives when two repos share the same
+     * numeric PR ID (e.g. PR #1 in org/foo vs PR #1 in org/bar).
      */
-    public boolean hasActiveReviewJobForPr(String prId) {
+    public boolean hasActiveReviewJobForPr(String prId, String workspace, String repoSlug) {
         String sql = """
                 SELECT 1 FROM jobs
                 WHERE job_type = 'REVIEW'
                   AND status IN ('PENDING','QUEUED','RUNNING')
                   AND pr_id = ?
+                  AND workspace = ?
+                  AND repo_slug = ?
                 LIMIT 1
                 """;
-        return existsQuery(sql, prId);
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, prId);
+            ps.setString(2, workspace);
+            ps.setString(3, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                return rs.next();
+            }
+        } catch (SQLException e) {
+            LOG.errorf("hasActiveReviewJobForPr query failed: %s", e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -709,12 +723,60 @@ public class JobStore {
     }
 
     /**
+     * Returns all jobs associated with a given pull request ID scoped to a specific
+     * workspace and repository, ordered by {@code created_at DESC}.
+     * Searches both active and history tables.
+     * Use this overload from webhook handlers to avoid cross-repo collisions.
+     */
+    public List<JobRecord> findByPrId(String prId, String workspace, String repoSlug) {
+        if (prId == null || prId.isBlank()) return List.of();
+        String sql = """
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id, workspace_path
+                FROM jobs WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
+                UNION ALL
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id, workspace_path
+                FROM job_history WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
+                ORDER BY created_at DESC
+                """;
+        List<JobRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, prId);
+            ps.setString(2, workspace);
+            ps.setString(3, repoSlug);
+            ps.setString(4, prId);
+            ps.setString(5, workspace);
+            ps.setString(6, repoSlug);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    JobRecord job = mapRow(rs);
+                    if (job != null) results.add(job);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findByPrId(%s, %s, %s) failed: %s", prId, workspace, repoSlug, e.getMessage());
+        }
+        return results;
+    }
+
+    /**
      * Returns all jobs associated with a given pull request ID, ordered by
      * {@code created_at DESC}. Searches both active and history tables.
      *
      * <p>Falls back to a {@code LIKE} match on {@code pr_url} when {@code prId}
      * is a numeric string, to handle jobs where only {@code prUrl} was stored.
+     *
+     * @deprecated Prefer {@link #findByPrId(String, String, String)} to avoid cross-repo collisions.
      */
+    @Deprecated
     public List<JobRecord> findByPrId(String prId) {
         if (prId == null || prId.isBlank()) return List.of();
 
