@@ -298,6 +298,19 @@ public class KnowledgeIndexerService {
     /**
      * Index all pages in a Confluence space, chunked by heading section.
      *
+     * <p>Three optional quality filters are applied before embedding, mirroring the
+     * Jira indexing pipeline:
+     * <ol>
+     *   <li><b>Minimum character count</b> ({@code knowledge.indexer.confluence-min-chars}) –
+     *       pages whose body text is shorter than this threshold are skipped. Default: {@code 200}.</li>
+     *   <li><b>Claude quality filter</b> ({@code knowledge.indexer.confluence-quality-filter=true}) –
+     *       a fast Claude Haiku call classifies the page as useful/not-useful. Disabled by
+     *       default because it adds latency and incurs extra API cost.</li>
+     *   <li><b>Blacklist</b> – pages rejected by Claude are recorded in
+     *       {@link KnowledgeQualityBlacklistStore} so they are not re-evaluated on subsequent
+     *       runs unless their content changes.</li>
+     * </ol>
+     *
      * @param spaceKey Confluence space key
      */
     public IndexResult indexConfluenceSpace(String spaceKey) {
@@ -306,11 +319,16 @@ public class KnowledgeIndexerService {
         int skipped = 0;
         List<String> errors = new ArrayList<>();
 
+        int minChars = Integer.parseInt(settingsService.get("knowledge.indexer.confluence-min-chars", "200"));
+        boolean qualityFilter = Boolean.parseBoolean(settingsService.get("knowledge.indexer.confluence-quality-filter", "false"));
+
+        LOG.debugf("Confluence quality settings for space %s: minChars=%d, qualityFilter=%b", spaceKey, minChars, qualityFilter);
+
         List<ConfluenceService.ConfluencePage> pages = confluenceService.listPagesInSpace(spaceKey);
         for (ConfluenceService.ConfluencePage page : pages) {
             try {
-                int result = indexConfluencePage(page.pageId(), page.title());
-                indexed += result;
+                int result = indexConfluencePage(page.pageId(), page.title(), minChars, qualityFilter);
+                if (result > 0) indexed += result; else skipped++;
             } catch (Exception e) {
                 errors.add("Page " + page.pageId() + " (" + page.title() + "): " + e.getMessage());
                 LOG.warnf("Failed to index Confluence page %s: %s", page.pageId(), e.getMessage());
@@ -533,8 +551,34 @@ public class KnowledgeIndexerService {
     // ──────────────────────────────────────────────────────────────────────
 
     int indexConfluencePage(String pageId, String title) {
+        return indexConfluencePage(pageId, title, 0, false);
+    }
+
+    int indexConfluencePage(String pageId, String title, int minChars, boolean qualityFilter) {
         String body = SecretRedactor.redact(confluenceService.getPageBody(pageId));
         if (body == null || body.isBlank()) return 0;
+
+        // Minimum character guard — skip stubs that are too short to be useful
+        if (body.length() < minChars) {
+            LOG.debugf("Skipping Confluence page %s (%s): body length %d below threshold %d",
+                    pageId, title, body.length(), minChars);
+            return 0;
+        }
+
+        // Claude quality filter — check blacklist first, then call Claude if needed
+        if (qualityFilter) {
+            String contentHash = KnowledgeQualityBlacklistStore.md5(body);
+            if (qualityBlacklist.isBlacklisted("confluence", pageId, contentHash)) {
+                LOG.debugf("Skipping Confluence page %s (%s): present in quality blacklist", pageId, title);
+                return 0;
+            }
+            if (!isHighQualityPage(pageId, body)) {
+                LOG.debugf("Skipping Confluence page %s (%s): classified as low quality by Claude — adding to blacklist",
+                        pageId, title);
+                qualityBlacklist.add("confluence", pageId, contentHash, "claude-quality-filter");
+                return 0;
+            }
+        }
 
         List<String> chunks = splitIntoChunks(body, CONFLUENCE_CHUNK_CHARS);
         int indexed = 0;
@@ -666,6 +710,76 @@ public class KnowledgeIndexerService {
             return useful;
         } catch (Exception e) {
             LOG.warnf("Quality filter call failed for %s (%s) — keeping ticket to avoid data loss", issueKey, e.getMessage());
+            return true;
+        }
+    }
+
+    /**
+     * Calls Claude Haiku to decide whether a Confluence page contains enough real content
+     * to be worth indexing.
+     *
+     * <p>A page is considered useful when it has substantive documentation, technical
+     * guidance, or domain knowledge that a developer could act on or reference. Stubs,
+     * blank templates, and meeting agendas with no notes are classified as not useful.
+     *
+     * <p>The method returns {@code true} when Claude answers "YES" (or the call fails,
+     * so that network errors never silently drop legitimate pages).
+     *
+     * <p>Only invoked when {@code knowledge.indexer.confluence-quality-filter=true}.
+     *
+     * @param pageId   Confluence page id, used only for log messages
+     * @param pageBody full page body text after secret redaction
+     * @return {@code true} if the page should be indexed, {@code false} if it
+     *         should be silently skipped
+     */
+    private boolean isHighQualityPage(String pageId, String pageBody) {
+        String model = settingsService.get("knowledge.indexer.confluence-quality-model", "claude-haiku-4-5");
+        // Truncate to ~2 000 chars to keep the Haiku call cheap
+        String excerpt = pageBody.length() > 2000 ? pageBody.substring(0, 2000) + "\n…" : pageBody;
+        String prompt = """
+                You are a triage assistant evaluating whether a Confluence page contains \
+                enough real content to be useful knowledge for a developer or technical team member.
+
+                A page is USEFUL if it has at least ONE of:
+                - Technical documentation, architecture decisions, or how-to guides
+                - Runbooks, onboarding guides, or operational procedures
+                - Domain knowledge, glossaries, or meaningful team decisions
+                - Meeting notes with concrete outcomes, action items, or decisions recorded
+
+                A page is NOT USEFUL if it is:
+                - A blank or near-blank template stub
+                - A meeting agenda with no recorded notes or outcomes
+                - A placeholder page (e.g. "TBD", "Coming soon", "Work in progress")
+                - Fewer than 3 meaningful sentences of content
+
+                Reply with exactly one word: YES or NO.
+
+                Page content:
+                """ + excerpt;
+
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(model))
+                .maxTokens(5)
+                .messages(List.of(
+                        MessageParam.builder()
+                                .role(MessageParam.Role.USER)
+                                .content(prompt)
+                                .build()
+                ))
+                .build();
+
+        try {
+            Message response = anthropicClient.messages().create(params);
+            String answer = response.content().stream()
+                    .filter(ContentBlock::isText)
+                    .map(b -> b.asText().text().trim().toUpperCase())
+                    .findFirst()
+                    .orElse("YES");
+            boolean useful = answer.startsWith("YES");
+            LOG.debugf("Confluence quality filter for page %s: %s → %s", pageId, answer, useful ? "KEEP" : "DROP");
+            return useful;
+        } catch (Exception e) {
+            LOG.warnf("Confluence quality filter call failed for page %s (%s) — keeping page to avoid data loss", pageId, e.getMessage());
             return true;
         }
     }

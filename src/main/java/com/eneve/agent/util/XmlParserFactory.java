@@ -45,18 +45,11 @@ public final class XmlParserFactory {
      * Creates a {@link DocumentBuilder} with full XXE hardening.
      * External DTDs, external entities, and XInclude are all disabled.
      * An entity resolver that suppresses all external lookups is pre-installed.
+     * DOCTYPE declarations are permitted (some tool-generated reports include one).
      */
     public static DocumentBuilder createSecureBuilder() throws ParserConfigurationException {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setNamespaceAware(false);
-        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-        factory.setFeature(FEATURE_EXTERNAL_GENERAL_ENTITIES, false);
-        factory.setFeature(FEATURE_EXTERNAL_PARAMETER_ENTITIES, false);
-        factory.setFeature(FEATURE_LOAD_EXTERNAL_DTD, false);
-        factory.setExpandEntityReferences(false);
-        factory.setXIncludeAware(false);
+        applySecureFeatures(factory);
         DocumentBuilder builder = factory.newDocumentBuilder();
         builder.setEntityResolver((publicId, systemId) ->
                 new org.xml.sax.InputSource(new java.io.StringReader("")));
@@ -66,10 +59,30 @@ public final class XmlParserFactory {
     /**
      * Creates a {@link DocumentBuilder} that disallows DOCTYPE declarations entirely.
      * Use for tool-generated reports that are never expected to contain a DOCTYPE.
+     * Inherits the same base XXE hardening as {@link #createSecureBuilder()}.
      */
     public static DocumentBuilder createStrictBuilder() throws ParserConfigurationException {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        applySecureFeatures(factory);
         factory.setFeature(FEATURE_DISALLOW_DOCTYPE, true);
         return factory.newDocumentBuilder();
+    }
+
+    /**
+     * Applies the shared XXE-hardening baseline to a {@link DocumentBuilderFactory}.
+     * Both {@link #createSecureBuilder()} and {@link #createStrictBuilder()} call this
+     * so the two hardening levels stay in sync.
+     */
+    private static void applySecureFeatures(DocumentBuilderFactory factory)
+            throws ParserConfigurationException {
+        factory.setNamespaceAware(false);
+        factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
+        factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+        factory.setFeature(FEATURE_EXTERNAL_GENERAL_ENTITIES, false);
+        factory.setFeature(FEATURE_EXTERNAL_PARAMETER_ENTITIES, false);
+        factory.setFeature(FEATURE_LOAD_EXTERNAL_DTD, false);
+        factory.setExpandEntityReferences(false);
+        factory.setXIncludeAware(false);
     }
 }

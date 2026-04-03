@@ -23,8 +23,6 @@ import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
-import java.util.Optional;
-
 @ApplicationScoped
 public class PmdLinter implements LinterRunner {
 
@@ -33,8 +31,8 @@ public class PmdLinter implements LinterRunner {
     @Inject
     SettingsService settings;
 
-    private static final String PMD_ARGS =
-            " org.apache.maven.plugins:maven-pmd-plugin:3.26.0:pmd -Dformat=xml -q";
+    private static final String PMD_VERSION_SETTING = "linter.pmd.version";
+    private static final String PMD_VERSION_DEFAULT = "3.26.0";
 
     private static final String REPORT_PATH = "target/pmd.xml";
 
@@ -53,7 +51,9 @@ public class PmdLinter implements LinterRunner {
         LOG.info("Running PMD analysis...");
         String mavenHomeVal = settings.get("build.maven-home", "");
         String effectiveMavenHome = mavenHomeVal.isBlank() ? null : mavenHomeVal;
-        String command = ProcessHelper.mvn(workspaceRoot, effectiveMavenHome) + PMD_ARGS;
+        String pmdVersion = settings.get(PMD_VERSION_SETTING, PMD_VERSION_DEFAULT);
+        String pmdArgs = " org.apache.maven.plugins:maven-pmd-plugin:" + pmdVersion + ":pmd -Dformat=xml -q";
+        String command = ProcessHelper.mvn(workspaceRoot, effectiveMavenHome) + pmdArgs;
         String javaHomeVal = settings.get("build.java-home", "");
         String effectiveJavaHome = javaHomeVal.isBlank() ? null : javaHomeVal;
         try {

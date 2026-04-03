@@ -77,129 +77,21 @@ public class CoverageReporter {
         /**
          * Formats a Markdown before/after comparison table. Pass null for {@code before}
          * to render a single-column "after" table.
+         *
+         * @see CoverageMarkdownFormatter#formatComparison(CoverageSnapshot, CoverageSnapshot)
          */
         public String formatMarkdownComparison(CoverageSnapshot before) {
-            if (before == null) {
-                return """
-                        ## Coverage Report
-
-                        | Metric | Coverage |
-                        |--------|----------|
-                        | Lines | %.1f%% (%d/%d) |
-                        | Branches | %.1f%% (%d/%d) |
-                        | Methods | %.1f%% (%d/%d) |
-                        | Classes | %.1f%% (%d/%d) |
-                        """.formatted(
-                        lineRate(), linesCovered, linesCovered + linesMissed,
-                        branchRate(), branchesCovered, branchesCovered + branchesMissed,
-                        methodRate(), methodsCovered, methodsCovered + methodsMissed,
-                        classRate(), classesCovered, classesCovered + classesMissed);
-            }
-
-            return """
-                    ## Coverage Report
-
-                    | Metric | Before | After | Delta |
-                    |--------|--------|-------|-------|
-                    | Lines | %.1f%% (%d/%d) | %.1f%% (%d/%d) | %s |
-                    | Branches | %.1f%% (%d/%d) | %.1f%% (%d/%d) | %s |
-                    | Methods | %.1f%% (%d/%d) | %.1f%% (%d/%d) | %s |
-                    | Classes | %.1f%% (%d/%d) | %.1f%% (%d/%d) | %s |
-                    """.formatted(
-                    before.lineRate(), before.linesCovered, before.linesCovered + before.linesMissed,
-                    lineRate(), linesCovered, linesCovered + linesMissed,
-                    formatDelta(lineRate() - before.lineRate()),
-                    before.branchRate(), before.branchesCovered, before.branchesCovered + before.branchesMissed,
-                    branchRate(), branchesCovered, branchesCovered + branchesMissed,
-                    formatDelta(branchRate() - before.branchRate()),
-                    before.methodRate(), before.methodsCovered, before.methodsCovered + before.methodsMissed,
-                    methodRate(), methodsCovered, methodsCovered + methodsMissed,
-                    formatDelta(methodRate() - before.methodRate()),
-                    before.classRate(), before.classesCovered, before.classesCovered + before.classesMissed,
-                    classRate(), classesCovered, classesCovered + classesMissed,
-                    formatDelta(classRate() - before.classRate()));
+            return CoverageMarkdownFormatter.formatComparison(this, before);
         }
 
         /**
          * Formats a baseline summary suitable for injection into the agent prompt.
          * Groups packages into three tiers: not tested (0%), low (&lt;50%), moderate (&lt;80%).
+         *
+         * @see CoverageMarkdownFormatter#formatForPrompt(CoverageSnapshot)
          */
         public String formatForPrompt() {
-            StringBuilder sb = new StringBuilder();
-            sb.append("## Current Coverage Baseline\n\n");
-            sb.append("| Metric | Coverage |\n|--------|----------|\n");
-            sb.append("| Lines | %.1f%% (%d/%d) |\n".formatted(
-                    lineRate(), linesCovered, linesCovered + linesMissed));
-            sb.append("| Branches | %.1f%% (%d/%d) |\n".formatted(
-                    branchRate(), branchesCovered, branchesCovered + branchesMissed));
-            sb.append("| Methods | %.1f%% (%d/%d) |\n".formatted(
-                    methodRate(), methodsCovered, methodsCovered + methodsMissed));
-            sb.append("| Classes | %.1f%% (%d/%d) |\n".formatted(
-                    classRate(), classesCovered, classesCovered + classesMissed));
-
-            if (packages != null && !packages.isEmpty()) {
-                List<PackageCoverage> notTested = packages.stream()
-                        .filter(p -> p.lineRate() == 0.0)
-                        .sorted((a, b) -> Integer.compare(b.linesMissed(), a.linesMissed()))
-                        .limit(20)
-                        .toList();
-
-                List<PackageCoverage> lowCoverage = packages.stream()
-                        .filter(p -> p.lineRate() > 0.0 && p.lineRate() < 50.0)
-                        .sorted((a, b) -> Double.compare(a.lineRate(), b.lineRate()))
-                        .limit(20)
-                        .toList();
-
-                List<PackageCoverage> moderate = packages.stream()
-                        .filter(p -> p.lineRate() >= 50.0 && p.lineRate() < 80.0)
-                        .sorted((a, b) -> Double.compare(a.lineRate(), b.lineRate()))
-                        .limit(10)
-                        .toList();
-
-                if (!notTested.isEmpty()) {
-                    sb.append("\n### Not tested at all — highest impact targets\n\n");
-                    sb.append("| Package / Namespace | Lines missed |\n|---------------------|-------------|\n");
-                    for (PackageCoverage pkg : notTested) {
-                        sb.append("| `%s` | %d |\n".formatted(
-                                pkg.name().replace('/', '.'), pkg.linesMissed()));
-                    }
-                }
-
-                if (!lowCoverage.isEmpty()) {
-                    sb.append("\n### Low coverage (< 50%) — prioritise these\n\n");
-                    sb.append("| Package / Namespace | Line % | Covered | Missed |\n|---------------------|--------|---------|--------|\n");
-                    for (PackageCoverage pkg : lowCoverage) {
-                        sb.append("| `%s` | %.1f%% | %d | %d |\n".formatted(
-                                pkg.name().replace('/', '.'),
-                                pkg.lineRate(),
-                                pkg.linesCovered(),
-                                pkg.linesMissed()));
-                    }
-                }
-
-                if (!moderate.isEmpty()) {
-                    sb.append("\n### Moderate coverage (50–80%) — improve if time allows\n\n");
-                    sb.append("| Package / Namespace | Line % | Covered | Missed |\n|---------------------|--------|---------|--------|\n");
-                    for (PackageCoverage pkg : moderate) {
-                        sb.append("| `%s` | %.1f%% | %d | %d |\n".formatted(
-                                pkg.name().replace('/', '.'),
-                                pkg.lineRate(),
-                                pkg.linesCovered(),
-                                pkg.linesMissed()));
-                    }
-                }
-            }
-
-            sb.append("\nUse this baseline to prioritise packages and namespaces with the lowest " +
-                    "coverage. Focus first on untested code, then on packages below 50%, " +
-                    "then improve packages between 50–80% if time allows.\n");
-            return sb.toString();
-        }
-
-        private static String formatDelta(double delta) {
-            if (delta > 0) return "+%.1f%%".formatted(delta);
-            if (delta < 0) return "%.1f%%".formatted(delta);
-            return "0.0%";
+            return CoverageMarkdownFormatter.formatForPrompt(this);
         }
     }
 
@@ -214,6 +106,11 @@ public class CoverageReporter {
     }
 
     // ─── Measurement ─────────────────────────────────────────────────────
+
+    /**
+     * Controls how a non-zero Maven exit code is handled by {@link #runMavenJacoco}.
+     */
+    private enum OnBuildFailure { LOG_AND_RETURN_NULL, THROW }
 
     /**
      * Measures JaCoCo coverage for quality report purposes.
@@ -245,11 +142,65 @@ public class CoverageReporter {
             }
         }
 
+        LOG.infof("CoverageReporter: running coverage (%s JaCoCo)",
+                jacocoPresent ? "configured" : "injected into pom.xml");
+        return runMavenJacoco(workspace, timeoutMinutes, OnBuildFailure.LOG_AND_RETURN_NULL);
+    }
+
+    /**
+     * Returns true if the JaCoCo Maven plugin is declared in the project's {@code pom.xml}.
+     *
+     * <p>Checks for {@code <artifactId>jacoco-maven-plugin</artifactId>} in the parsed DOM
+     * rather than a plain string search, so comments and unrelated text are not matched.
+     * Falls back to {@code false} on any parse error.
+     */
+    public boolean isJacocoPresent(WorkspaceContext workspace) {
+        Path pom = workspace.getRoot().resolve("pom.xml");
+        if (!Files.exists(pom)) return false;
+        try {
+            DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
+            Document doc = builder.parse(pom.toFile());
+            NodeList artifactIds = doc.getElementsByTagName("artifactId");
+            for (int i = 0; i < artifactIds.getLength(); i++) {
+                if ("jacoco-maven-plugin".equals(artifactIds.item(i).getTextContent().trim())) {
+                    return true;
+                }
+            }
+            return false;
+        } catch (Exception e) {
+            LOG.debugf("CoverageReporter: could not parse pom.xml to check for JaCoCo: %s", e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Runs {@code mvn jacoco:prepare-agent test jacoco:report} and parses the resulting
+     * XML report. Returns null if JaCoCo is not present in {@code pom.xml} or if the
+     * report cannot be generated. Throws {@link RuntimeException} if the build fails
+     * (exit != 0), so this doubles as a build validator when JaCoCo is available.
+     */
+    public CoverageSnapshot measureCoverage(WorkspaceContext workspace) {
+        if (!isJacocoPresent(workspace)) {
+            return null;
+        }
+        LOG.info("Running JaCoCo coverage measurement...");
+        return runMavenJacoco(workspace, timeoutMinutes(), OnBuildFailure.THROW);
+    }
+
+    /**
+     * Shared Maven/JaCoCo runner used by both public measurement methods.
+     *
+     * <p>Builds the command, starts the process, waits for completion, checks the exit
+     * code according to {@code onFailure}, and finally parses the XML report.
+     *
+     * @param onFailure {@link OnBuildFailure#LOG_AND_RETURN_NULL} to swallow build errors
+     *                  (quality-report path), or {@link OnBuildFailure#THROW} to surface
+     *                  them as a {@link RuntimeException} (test-generation path).
+     */
+    private CoverageSnapshot runMavenJacoco(WorkspaceContext workspace, long timeoutMinutes,
+                                             OnBuildFailure onFailure) {
         String effectiveMavenHome = resolveMavenHome();
         String command = buildJacocoCommand(workspace, effectiveMavenHome);
-
-        LOG.infof("CoverageReporter: running coverage (%s JaCoCo): %s",
-                jacocoPresent ? "configured" : "injected into pom.xml", command);
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
@@ -260,9 +211,12 @@ public class CoverageReporter {
 
             if (!finished) {
                 proc.destroyForcibly();
-                LOG.warnf("CoverageReporter: coverage run timed out after %d minutes", timeoutMinutes);
+                String msg = "JaCoCo coverage run timed out after " + timeoutMinutes + " minutes";
+                if (onFailure == OnBuildFailure.THROW) throw new RuntimeException(msg);
+                LOG.warnf("CoverageReporter: %s", msg);
                 return null;
             }
+
             if (proc.exitValue() != 0) {
                 // Non-zero even with test.failure.ignore means a build/compile error — no report possible.
                 // Detect known permanent incompatibilities and log them concisely at DEBUG to avoid
@@ -271,22 +225,29 @@ public class CoverageReporter {
                     LOG.debugf("CoverageReporter: skipping coverage for %s — JDK/compiler incompatibility " +
                             "(project requires a different Java version than the one running the agent)",
                             workspace.getRoot().getFileName());
-                } else {
-                    String tail = output.length() > 2000 ? output.substring(output.length() - 2000) : output;
-                    LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s",
-                            proc.exitValue(), tail);
+                    return null;
                 }
+                int tailLen = onFailure == OnBuildFailure.THROW ? 3000 : 2000;
+                String tail = output.length() > tailLen ? output.substring(output.length() - tailLen) : output;
+                if (onFailure == OnBuildFailure.THROW) {
+                    throw new RuntimeException("Build error during coverage measurement (exit "
+                            + proc.exitValue() + "):\n" + tail);
+                }
+                LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s",
+                        proc.exitValue(), tail);
                 return null;
             }
-            // Warn if any tests failed so callers can see it in the logs, but proceed.
+
             if (output.contains("[ERROR] Tests run:") || output.contains("BUILD FAILURE")) {
                 LOG.warnf("CoverageReporter: some tests failed during coverage run — coverage reflects passing tests only");
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            if (onFailure == OnBuildFailure.THROW) throw new RuntimeException("Coverage measurement interrupted", e);
             LOG.warnf("CoverageReporter: coverage measurement interrupted");
             return null;
         } catch (IOException e) {
+            if (onFailure == OnBuildFailure.THROW) throw new RuntimeException("Failed to start coverage process: " + e.getMessage(), e);
             LOG.warnf("CoverageReporter: failed to start coverage process: %s", e.getMessage());
             return null;
         }
@@ -301,79 +262,6 @@ public class CoverageReporter {
             return parseReport(report);
         } catch (Exception e) {
             LOG.warnf("CoverageReporter: failed to parse JaCoCo report: %s", e.getMessage());
-            return null;
-        }
-    }
-
-    /**
-     * Returns true if JaCoCo is declared in the project's {@code pom.xml}.
-     */
-    public boolean isJacocoPresent(WorkspaceContext workspace) {
-        Path pom = workspace.getRoot().resolve("pom.xml");
-        if (!Files.exists(pom)) return false;
-        try {
-            return Files.readString(pom).contains("jacoco");
-        } catch (IOException e) {
-            return false;
-        }
-    }
-
-    /**
-     * Runs {@code mvn jacoco:prepare-agent test jacoco:report} and parses the resulting
-     * XML report. Returns null if JaCoCo is not present in {@code pom.xml} or if the
-     * report cannot be generated. Throws {@link RuntimeException} if tests fail (exit != 0),
-     * so this doubles as a build validator when JaCoCo is available.
-     */
-    public CoverageSnapshot measureCoverage(WorkspaceContext workspace) {
-        if (!isJacocoPresent(workspace)) {
-            return null;
-        }
-
-        LOG.info("Running JaCoCo coverage measurement...");
-        String effectiveMavenHome = resolveMavenHome();
-        String command = buildJacocoCommand(workspace, effectiveMavenHome);
-        try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome, "sh", "-c", command)
-                    .directory(workspace.getRoot().toFile())
-                    .redirectErrorStream(true);
-            Process proc = pb.start();
-            String output = new String(proc.getInputStream().readAllBytes());
-            boolean finished = proc.waitFor(timeoutMinutes(), TimeUnit.MINUTES);
-
-            if (!finished) {
-                proc.destroyForcibly();
-                throw new RuntimeException("JaCoCo coverage run timed out after " + timeoutMinutes() + " minutes");
-            }
-            if (proc.exitValue() != 0) {
-                // Non-zero even with test.failure.ignore means a build/compile error.
-                if (isJdkIncompatibilityError(output)) {
-                    LOG.debugf("CoverageReporter: skipping coverage — JDK/compiler incompatibility");
-                    return null;
-                }
-                String tail = output.length() > 3000 ? output.substring(output.length() - 3000) : output;
-                throw new RuntimeException("Build error during coverage measurement (exit "
-                        + proc.exitValue() + "):\n" + tail);
-            }
-            if (output.contains("[ERROR] Tests run:") || output.contains("BUILD FAILURE")) {
-                LOG.warnf("CoverageReporter: some tests failed — coverage reflects passing tests only");
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Coverage measurement interrupted", e);
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to start coverage process: " + e.getMessage(), e);
-        }
-
-        Path report = workspace.getRoot().resolve(JACOCO_REPORT_PATH);
-        if (!Files.exists(report)) {
-            LOG.warnf("JaCoCo report not found at %s despite successful test run", report);
-            return null;
-        }
-
-        try {
-            return parseReport(report);
-        } catch (Exception e) {
-            LOG.warnf("Failed to parse JaCoCo report: %s", e.getMessage());
             return null;
         }
     }

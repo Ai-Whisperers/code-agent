@@ -2,12 +2,12 @@ package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
 import com.eneve.agent.agent.CoverageReporter.PackageCoverage;
+import com.eneve.agent.util.XmlParserFactory;
 import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.NodeList;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
 import java.io.IOException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
@@ -37,22 +37,9 @@ public final class CoberturaXmlParser {
      * @throws Exception if the file cannot be parsed
      */
     public static CoverageSnapshot parse(Path reportFile) throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-        factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        factory.setFeature("http://xml.org/sax/features/validation", false);
-        // Allow DOCTYPE declarations (Vitest/Jest/Istanbul include one) but block
-        // external DTD loading and entity resolution via the EntityResolver below.
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
-        factory.setExpandEntityReferences(false);
-        factory.setXIncludeAware(false);
-
-        DocumentBuilder builder = factory.newDocumentBuilder();
-        builder.setEntityResolver((publicId, systemId) ->
-                new org.xml.sax.InputSource(new java.io.StringReader("")));
-
+        // createSecureBuilder() disables all external entity resolution while allowing
+        // DOCTYPE declarations — Vitest/Jest/Istanbul reports include one.
+        DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
         Document doc = builder.parse(reportFile.toFile());
         Element root = doc.getDocumentElement();
 
