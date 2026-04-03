@@ -101,7 +101,7 @@ public class GitHubWebhookResource extends AbstractPrWebhookHandler {
             String repoUrl = repoHtmlUrl.isBlank() ? "" : repoHtmlUrl + ".git";
 
             if (isMerge) {
-                LOG.infof("GitHub webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
+                LOG.infof("GitHub webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks and updating cache",
                         prNumber, sourceBranch, targetBranch, fullName);
 
                 // Legacy hook evaluation for backward compatibility
@@ -125,13 +125,15 @@ public class GitHubWebhookResource extends AbstractPrWebhookHandler {
                 var allHookNames = new ArrayList<>(legacyResult.hookNames());
                 allHookNames.addAll(newResult.hookNames());
 
-                audit("github", event, org, repo, prNumber, prAuthor,
-                        "hooks_evaluated", allHookNames, rawPayload);
-                return Response.ok(Map.of(
-                        "action", "hooks_evaluated",
-                        "hooksTriggered", totalJobIds.size(),
-                        "jobIds", totalJobIds
-                )).build();
+                String prUrl = prNode.path("html_url").asText("");
+                String createdAt = prNode.path("created_at").asText("");
+                String updatedAt = prNode.path("updated_at").asText("");
+
+                return handleMergedPr("github", org, repo,
+                        prNumber, prUrl, prTitle,
+                        sourceBranch, targetBranch, prAuthor,
+                        createdAt, updatedAt, rawPayload,
+                        "MERGED", totalJobIds, allHookNames);
             }
 
             if (!repoSettingsStore.isReviewEnabled(org, repo)) {

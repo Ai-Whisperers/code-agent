@@ -101,7 +101,7 @@ public class GitLabWebhookResource extends AbstractPrWebhookHandler {
             String repoSlug = pathParts.length == 2 ? pathParts[1] : projectPath;
 
             if (isMerge) {
-                LOG.infof("GitLab webhook: MR !%s merged (%s -> %s) on %s — evaluating hooks",
+                LOG.infof("GitLab webhook: MR !%s merged (%s -> %s) on %s — evaluating hooks and updating cache",
                         mrIid, sourceBranch, targetBranch, projectPath);
 
                 // Legacy hook evaluation for backward compatibility
@@ -125,13 +125,15 @@ public class GitLabWebhookResource extends AbstractPrWebhookHandler {
                 var allHookNames = new ArrayList<>(legacyResult.hookNames());
                 allHookNames.addAll(newResult.hookNames());
 
-                audit("gitlab", event, namespace, repoSlug, mrIid, mrAuthor,
-                        "hooks_evaluated", allHookNames, rawPayload);
-                return Response.ok(Map.of(
-                        "action", "hooks_evaluated",
-                        "hooksTriggered", totalJobIds.size(),
-                        "jobIds", totalJobIds
-                )).build();
+                String mrUrl = attrs.path("url").asText("");
+                String createdAt = attrs.path("created_at").asText("");
+                String updatedAt = attrs.path("updated_at").asText("");
+
+                return handleMergedPr("gitlab", namespace, repoSlug,
+                        mrIid, mrUrl, mrTitle,
+                        sourceBranch, targetBranch, mrAuthor,
+                        createdAt, updatedAt, rawPayload,
+                        "MERGED", totalJobIds, allHookNames);
             }
 
             if (!repoSettingsStore.isReviewEnabled(namespace, repoSlug)) {

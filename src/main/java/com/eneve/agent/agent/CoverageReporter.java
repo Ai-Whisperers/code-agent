@@ -8,7 +8,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+
+import com.eneve.agent.util.XmlParserFactory;
 
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -464,18 +465,8 @@ public class CoverageReporter {
     // ─── Parsing ─────────────────────────────────────────────────────────
 
     private CoverageSnapshot parseReport(Path reportFile) throws Exception {
-        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         // Harden against XXE attacks — JaCoCo reports reference an external DTD
-        factory.setFeature(javax.xml.XMLConstants.FEATURE_SECURE_PROCESSING, true);
-        factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-        factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-        factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-        factory.setFeature("http://xml.org/sax/features/validation", false);
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", false);
-        factory.setExpandEntityReferences(false);
-        factory.setXIncludeAware(false);
-
-        DocumentBuilder builder = factory.newDocumentBuilder();
+        DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
         builder.setEntityResolver((publicId, systemId) -> {
             // Suppress all external entity resolution (DTD, schemas)
             return new org.xml.sax.InputSource(new java.io.StringReader(""));

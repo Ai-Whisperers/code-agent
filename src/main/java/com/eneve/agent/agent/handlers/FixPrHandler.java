@@ -42,7 +42,7 @@ public class FixPrHandler implements JobHandler {
     @Override
     public void handle(JobRecord job) {
         long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
-        FixPrRequest request = job.getFixPrRequest();
+        FixPrRequest request = (FixPrRequest) job.getPayload();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 

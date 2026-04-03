@@ -52,7 +52,7 @@ public class RunFixHandler implements JobHandler {
     @Override
     public void handle(JobRecord job) {
         long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
-        RunFixRequest request = job.getRequest();
+        RunFixRequest request = (RunFixRequest) job.getPayload();
         job.setStatus(JobStatus.RUNNING);
         // Ensure fix_branch_name is always persisted so findPreservedWorkspacePath can find it
         if (job.getFixBranchName() == null && request.branchName() != null) {

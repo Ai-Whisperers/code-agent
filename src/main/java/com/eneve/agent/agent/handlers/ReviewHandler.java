@@ -60,7 +60,7 @@ public class ReviewHandler implements JobHandler {
         long jobTimeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
         boolean prSummaryEnabled = Boolean.parseBoolean(settings.get("review.pr-summary.enabled", "true"));
         boolean sequenceDiagramsEnabled = Boolean.parseBoolean(settings.get("review.sequence-diagrams.enabled", "true"));
-        ReviewPrRequest request = job.getReviewRequest();
+        ReviewPrRequest request = (ReviewPrRequest) job.getPayload();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 

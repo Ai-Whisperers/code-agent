@@ -34,7 +34,7 @@ public class MetricsHandler implements JobHandler {
     @Override
     public void handle(JobRecord job) {
         long metricsTimeoutMinutes = Long.parseLong(settings.get("metrics.job-timeout-minutes", "30"));
-        MetricsJobRequest request = job.getMetricsRequest();
+        MetricsJobRequest request = (MetricsJobRequest) job.getPayload();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 

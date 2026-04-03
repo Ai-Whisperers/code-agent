@@ -17,9 +17,10 @@ import java.util.regex.Pattern;
 import java.util.stream.Stream;
 import java.util.TreeMap;
 
-import javax.xml.XMLConstants;
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+
+import com.eneve.agent.util.XmlParserFactory;
 
 import org.jboss.logging.Logger;
 import org.w3c.dom.Document;
@@ -118,19 +119,7 @@ public class ArchetypeDetector {
             Document doc = null;
             Map<String, String> properties = Map.of();
             try (InputStream in = Files.newInputStream(pomPath)) {
-                DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-                factory.setNamespaceAware(false);
-                factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-                factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-                factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-                factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-                factory.setExpandEntityReferences(false);
-                factory.setXIncludeAware(false);
-                DocumentBuilder builder = factory.newDocumentBuilder();
-                builder.setEntityResolver((publicId, systemId) ->
-                        new org.xml.sax.InputSource(new java.io.StringReader("")));
+                DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
                 doc = builder.parse(in);
                 doc.getDocumentElement().normalize();
                 properties = extractProperties(doc);
@@ -578,20 +567,8 @@ public class ArchetypeDetector {
      */
     private String readDotnetTargetFramework(Path projectFile) {
         try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(false);
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setExpandEntityReferences(false);
-            factory.setXIncludeAware(false);
-            DocumentBuilder builder = factory.newDocumentBuilder();
+            DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
             builder.setErrorHandler(null);
-            builder.setEntityResolver((publicId, systemId) ->
-                    new org.xml.sax.InputSource(new java.io.StringReader("")));
             try (InputStream in = Files.newInputStream(projectFile)) {
                 Document doc = builder.parse(in);
                 doc.getDocumentElement().normalize();
@@ -990,20 +967,8 @@ public class ArchetypeDetector {
             if (!content.toLowerCase().contains("postgresql")) {
                 return;
             }
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            factory.setNamespaceAware(false);
-            factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
-            factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
-            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
-            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
-            factory.setExpandEntityReferences(false);
-            factory.setXIncludeAware(false);
-            DocumentBuilder builder = factory.newDocumentBuilder();
+            DocumentBuilder builder = XmlParserFactory.createSecureBuilder();
             builder.setErrorHandler(null);
-            builder.setEntityResolver((publicId, systemId) ->
-                    new org.xml.sax.InputSource(new java.io.StringReader("")));
             Document doc = builder.parse(moduleXml.toFile());
             doc.getDocumentElement().normalize();
 

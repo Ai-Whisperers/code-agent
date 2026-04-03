@@ -9,7 +9,8 @@ import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+
+import com.eneve.agent.util.XmlParserFactory;
 
 import org.jboss.logging.Logger;
 import org.w3c.dom.Document;
@@ -134,9 +135,7 @@ public class SpotBugsLinter implements LinterRunner {
     private List<LinterFinding> parseReport(Path reportFile, Path workspaceRoot) {
         List<LinterFinding> findings = new ArrayList<>();
         try {
-            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
-            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-            DocumentBuilder builder = factory.newDocumentBuilder();
+            DocumentBuilder builder = XmlParserFactory.createStrictBuilder();
             Document doc = builder.parse(reportFile.toFile());
 
             NodeList bugInstances = doc.getElementsByTagName("BugInstance");

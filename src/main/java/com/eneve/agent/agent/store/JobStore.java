@@ -593,6 +593,35 @@ public class JobStore {
     }
 
     /**
+     * Returns all REVIEW jobs that are currently active (PENDING, QUEUED, or RUNNING).
+     * Used during boot reconciliation to cancel jobs whose PRs were already merged.
+     */
+    public List<JobRecord> findActiveReviewJobs() {
+        String sql = """
+                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
+                       pr_author, workspace, repo_slug, priority, coverage_data,
+                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                       promotion_job_id, workspace_path
+                FROM jobs
+                WHERE job_type = 'REVIEW'
+                  AND status IN ('PENDING','QUEUED','RUNNING')
+                ORDER BY created_at ASC
+                """;
+        List<JobRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql);
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) {
+                results.add(mapRow(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findActiveReviewJobs failed: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /**
      * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
      * for the given Jira issue key. Used to prevent duplicate review jobs.
      */

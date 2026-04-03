@@ -48,7 +48,7 @@ public class GenerateTestsHandler implements JobHandler {
     public void handle(JobRecord job) {
         int generateTestsMaxIterations = Integer.parseInt(settings.get("generate-tests.max-loop-iterations", "500"));
         long generateTestsTimeoutMinutes = Long.parseLong(settings.get("generate-tests.job-timeout-minutes", "60"));
-        GenerateTestsRequest request = job.getGenerateTestsRequest();
+        GenerateTestsRequest request = (GenerateTestsRequest) job.getPayload();
         job.setStatus(JobStatus.RUNNING);
         jobStore.update(job);
 

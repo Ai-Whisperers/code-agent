@@ -181,6 +181,34 @@ public class PrCacheStore {
         return null;
     }
 
+    // ── Single-row lookup ─────────────────────────────────────────────────────
+
+    /**
+     * Returns the cached entry for a specific PR, or {@code null} if not found.
+     * Used during boot reconciliation to check whether a PR was already closed.
+     */
+    public OpenPrEntry findByPrId(String workspace, String repoSlug, String prId) {
+        String sql = """
+                SELECT workspace, repo_slug, pr_id, pr_url, title, source_branch, target_branch,
+                       author, created_on, updated_on, status, soc2
+                FROM open_pull_requests
+                WHERE workspace = ? AND repo_slug = ? AND pr_id = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, workspace);
+            ps.setString(2, repoSlug);
+            ps.setString(3, prId);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return mapRow(rs);
+            }
+        } catch (SQLException e) {
+            LOG.errorf("findByPrId(%s/%s#%s) failed: %s", workspace, repoSlug, prId, e.getMessage());
+        }
+        return null;
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private String buildSearchSql(boolean countOnly) {

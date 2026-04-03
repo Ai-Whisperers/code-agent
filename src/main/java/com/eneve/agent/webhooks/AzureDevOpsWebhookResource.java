@@ -1,10 +1,10 @@
 package com.eneve.agent.webhooks;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.model.HookEvalResult;
-import com.eneve.agent.scm.GitPlatformService;
 
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -14,7 +14,6 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
-import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.POST;
 import jakarta.ws.rs.Path;
@@ -33,9 +32,6 @@ import jakarta.ws.rs.core.Response;
 public class AzureDevOpsWebhookResource extends AbstractPrWebhookHandler {
 
     private static final Logger LOG = Logger.getLogger(AzureDevOpsWebhookResource.class);
-
-    @Inject GitPlatformService platformService;
-
 
     @POST
     @Path("/azuredevops/pull-request")
@@ -57,8 +53,11 @@ public class AzureDevOpsWebhookResource extends AbstractPrWebhookHandler {
             eventType = payload.path("eventType").asText("");
             LOG.infof("Azure DevOps webhook received: %s", eventType);
 
-            if (!eventType.equals("git.pullrequest.created")
-                    && !eventType.equals("git.pullrequest.updated")) {
+            boolean isCreateOrUpdate = eventType.equals("git.pullrequest.created")
+                    || eventType.equals("git.pullrequest.updated");
+            boolean isMerged = eventType.equals("git.pullrequest.merged");
+
+            if (!isCreateOrUpdate && !isMerged) {
                 audit("azuredevops", eventType, null, null, null, null, "ignored", List.of(), rawPayload);
                 return ok("ignored", "Unsupported event: " + eventType);
             }
@@ -90,6 +89,41 @@ public class AzureDevOpsWebhookResource extends AbstractPrWebhookHandler {
                 return ok("ignored", "Missing PR ID or repository in payload");
             }
 
+            if (isMerged) {
+                LOG.infof("Azure DevOps webhook: PR #%s merged (%s -> %s) on %s/%s — evaluating hooks and updating cache",
+                        prId, sourceBranch, destBranch, projectName, repoName);
+
+                // Legacy hook evaluation for backward compatibility
+                HookEvalResult legacyResult = hookEvaluator.evaluate(projectName, repoName, repoUrl, "merge", destBranch);
+
+                var mergeContext = Map.of(
+                        "prId", prId,
+                        "sourceBranch", sourceBranch,
+                        "targetBranch", destBranch,
+                        "prTitle", prTitle,
+                        "author", prAuthor,
+                        "platform", "azuredevops",
+                        "repoSlug", repoName
+                );
+                HookEvalResult newResult = hookEvaluator.evaluateByTrigger(
+                        "scm.pr_merged", projectName, repoName, repoUrl, mergeContext);
+
+                var totalJobIds = new ArrayList<>(legacyResult.jobIds());
+                totalJobIds.addAll(newResult.jobIds());
+                var allHookNames = new ArrayList<>(legacyResult.hookNames());
+                allHookNames.addAll(newResult.hookNames());
+
+                String prUrl = repoUrl.replace(".git", "") + "/pullrequest/" + prId;
+                String createdAt = resource.path("creationDate").asText("");
+                String closedAt = resource.path("closedDate").asText(createdAt);
+
+                return handleMergedPr("azuredevops", projectName, repoName,
+                        prId, prUrl, prTitle,
+                        sourceBranch, destBranch, prAuthor,
+                        createdAt, closedAt, rawPayload,
+                        "MERGED", totalJobIds, allHookNames);
+            }
+
             if (shouldSkipAuthor(prAuthor)) {
                 LOG.infof("Azure DevOps webhook: skipping PR #%s by '%s' (matches skip-authors)", prId, prAuthor);
                 audit("azuredevops", eventType, projectName, repoName, prId, prAuthor, "skipped", List.of(), rawPayload);
@@ -104,14 +138,8 @@ public class AzureDevOpsWebhookResource extends AbstractPrWebhookHandler {
                     prId, sourceBranch, destBranch, projectName, repoName,
                     headCommitSha != null ? headCommitSha.substring(0, Math.min(8, headCommitSha.length())) : "unknown");
 
-            // Evaluate hooks for PR created/updated/completed events
-            String triggerType;
-            switch (eventType) {
-                case "git.pullrequest.created" -> triggerType = "scm.pr_created";
-                case "git.pullrequest.updated" -> triggerType = "scm.pr_updated";
-                case "git.pullrequest.merged" -> triggerType = "scm.pr_merged";
-                default -> triggerType = "scm.pr_updated"; // fallback
-            }
+            // Evaluate hooks for PR created/updated events
+            String triggerType = eventType.equals("git.pullrequest.created") ? "scm.pr_created" : "scm.pr_updated";
 
             var context = Map.of(
                     "prId", prId,

@@ -4,9 +4,12 @@ import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.JobQueue;
 import com.eneve.agent.agent.model.WebhookAuditEntry;
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.agent.store.PrCacheStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.JobStatus;
+import com.eneve.agent.model.OpenPrEntry;
 import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -33,6 +36,7 @@ public abstract class AbstractPrWebhookHandler {
 
     @Inject protected JobQueue jobQueue;
     @Inject protected JobStore jobStore;
+    @Inject protected PrCacheStore prCacheStore;
     @Inject protected RepoSettingsStore repoSettingsStore;
     @Inject protected HookEvaluator hookEvaluator;
     @Inject protected WebhookAuditStore webhookAuditStore;
@@ -80,6 +84,67 @@ public abstract class AbstractPrWebhookHandler {
                 "jobId", jobId,
                 "prId", prId,
                 "jiraKey", jiraKey != null ? jiraKey : ""
+        )).build();
+    }
+
+    /**
+     * Common handler for a merged (or declined) PR event across all platforms.
+     * <ol>
+     *   <li>Upserts the PR cache row with the given {@code cacheStatus} (typically {@code "MERGED"}).</li>
+     *   <li>Cancels any active REVIEW jobs for the PR so they do not run against a closed PR.</li>
+     *   <li>Writes a webhook audit entry.</li>
+     * </ol>
+     *
+     * @param cacheStatus the status string to store in the cache, e.g. {@code "MERGED"} or {@code "DECLINED"}
+     * @param hookJobIds  job IDs already triggered by hook evaluation (included in the response)
+     * @param hookNames   hook names already evaluated (included in the audit)
+     */
+    protected Response handleMergedPr(
+            String platform, String workspace, String repoSlug,
+            String prId, String prUrl, String prTitle,
+            String sourceBranch, String targetBranch, String prAuthor,
+            String createdOn, String updatedOn, String rawPayload,
+            String cacheStatus, List<String> hookJobIds, List<String> hookNames) {
+
+        // 1. Update PR cache status
+        try {
+            prCacheStore.upsert(new OpenPrEntry(
+                    workspace, repoSlug, prId, prUrl, prTitle,
+                    sourceBranch, targetBranch, prAuthor,
+                    createdOn, updatedOn, null, cacheStatus, false));
+        } catch (Exception e) {
+            LOG.warnf("handleMergedPr: failed to upsert PR cache for %s/%s#%s: %s",
+                    workspace, repoSlug, prId, e.getMessage());
+        }
+
+        // 2. Cancel any active review jobs for this PR
+        int cancelled = 0;
+        try {
+            List<JobRecord> activeJobs = jobStore.findByPrId(prId);
+            for (JobRecord job : activeJobs) {
+                JobStatus s = job.getStatus();
+                if (s == JobStatus.PENDING || s == JobStatus.QUEUED) {
+                    if (jobQueue.cancelJob(job.getJobId())) {
+                        cancelled++;
+                        LOG.infof("handleMergedPr: cancelled job %s for %s PR %s/%s#%s",
+                                job.getJobId(), cacheStatus.toLowerCase(), workspace, repoSlug, prId);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            LOG.warnf("handleMergedPr: failed to cancel jobs for PR %s/%s#%s: %s",
+                    workspace, repoSlug, prId, e.getMessage());
+        }
+
+        audit(platform, platform + ".pr_" + cacheStatus.toLowerCase(),
+                workspace, repoSlug, prId, prAuthor,
+                cacheStatus.toLowerCase(), hookNames, rawPayload);
+
+        return Response.ok(Map.of(
+                "action", cacheStatus.toLowerCase(),
+                "hooksTriggered", hookJobIds.size(),
+                "jobIds", hookJobIds,
+                "jobsCancelled", cancelled
         )).build();
     }
 

@@ -5,7 +5,6 @@ import java.util.List;
 import java.util.Map;
 
 import com.eneve.agent.agent.model.HookEvalResult;
-import com.eneve.agent.agent.store.PrCacheStore;
 import com.eneve.agent.model.OpenPrEntry;
 import com.fasterxml.jackson.databind.JsonNode;
 
@@ -15,7 +14,6 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponses;
 import org.eclipse.microprofile.openapi.annotations.tags.Tag;
 import org.jboss.logging.Logger;
 
-import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
 import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.POST;
@@ -35,9 +33,6 @@ import jakarta.ws.rs.core.Response;
 public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
 
     private static final Logger LOG = Logger.getLogger(BitbucketWebhookResource.class);
-
-    @Inject
-    PrCacheStore prCacheStore;
 
 
 
@@ -97,25 +92,23 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
 
             if (isFulfilled || isRejected) {
                 String cacheStatus = isFulfilled ? "MERGED" : "DECLINED";
-                if (repoParts.length == 2) {
-                    upsertPrCache(workspace, repoSlug, prId, prUrl, prTitle,
-                            sourceBranch, destBranch, prAuthor, createdOn, updatedOn, cacheStatus);
+
+                if (repoParts.length != 2) {
+                    audit("bitbucket", event, null, null, prId, prAuthor, "ignored", List.of(), rawPayload);
+                    return ok("ignored", "Could not parse workspace/repo from " + repoFullName);
                 }
 
-                if (isRejected) {
-                    LOG.infof("Bitbucket webhook: PR #%s declined on %s — cache updated", prId, repoFullName);
-                    audit("bitbucket", event, workspace, repoSlug, prId, prAuthor, "declined", List.of(), rawPayload);
-                    return ok("declined", "PR #" + prId + " marked as DECLINED in cache");
-                }
+                LOG.infof("Bitbucket webhook: PR #%s %s (%s -> %s) on %s — updating cache and cancelling jobs",
+                        prId, cacheStatus.toLowerCase(), sourceBranch, destBranch, repoFullName);
 
-                LOG.infof("Bitbucket webhook: PR #%s merged (%s -> %s) on %s — evaluating hooks",
-                        prId, sourceBranch, destBranch, repoFullName);
-                if (repoParts.length == 2) {
+                List<String> hookJobIds = new ArrayList<>();
+                List<String> hookNames = new ArrayList<>();
+
+                if (isFulfilled) {
                     // Legacy hook evaluation for backward compatibility
                     HookEvalResult legacyResult = hookEvaluator.evaluate(
                             workspace, repoSlug, repoUrl, event, destBranch);
 
-                    // New generic hook evaluation with context
                     var context = Map.of(
                             "prId", prId,
                             "sourceBranch", sourceBranch,
@@ -128,21 +121,17 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
                     HookEvalResult newResult = hookEvaluator.evaluateByTrigger(
                             "scm.pr_merged", workspace, repoSlug, repoUrl, context);
 
-                    var totalJobIds = new ArrayList<>(legacyResult.jobIds());
-                    totalJobIds.addAll(newResult.jobIds());
-                    var allHookNames = new ArrayList<>(legacyResult.hookNames());
-                    allHookNames.addAll(newResult.hookNames());
-
-                    audit("bitbucket", event, workspace, repoSlug, prId, prAuthor,
-                            "hooks_evaluated", allHookNames, rawPayload);
-                    return Response.ok(Map.of(
-                            "action", "hooks_evaluated",
-                            "hooksTriggered", totalJobIds.size(),
-                            "jobIds", totalJobIds
-                    )).build();
+                    hookJobIds.addAll(legacyResult.jobIds());
+                    hookJobIds.addAll(newResult.jobIds());
+                    hookNames.addAll(legacyResult.hookNames());
+                    hookNames.addAll(newResult.hookNames());
                 }
-                audit("bitbucket", event, null, null, prId, prAuthor, "ignored", List.of(), rawPayload);
-                return ok("ignored", "Could not parse workspace/repo from " + repoFullName);
+
+                return handleMergedPr("bitbucket", workspace, repoSlug,
+                        prId, prUrl, prTitle,
+                        sourceBranch, destBranch, prAuthor,
+                        createdOn, updatedOn, rawPayload,
+                        cacheStatus, hookJobIds, hookNames);
             }
 
             if (repoParts.length == 2
@@ -187,8 +176,15 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
             }
 
             if (repoParts.length == 2) {
-                upsertPrCache(workspace, repoSlug, prId, prUrl, prTitle,
-                        sourceBranch, destBranch, prAuthor, createdOn, updatedOn, "OPEN");
+                try {
+                    prCacheStore.upsert(new OpenPrEntry(
+                            workspace, repoSlug, prId, prUrl, prTitle,
+                            sourceBranch, destBranch, prAuthor,
+                            createdOn, updatedOn, null, "OPEN", false));
+                } catch (Exception e) {
+                    LOG.warnf("Bitbucket webhook: failed to upsert PR cache for %s/%s#%s: %s",
+                            workspace, repoSlug, prId, e.getMessage());
+                }
             }
 
             audit("bitbucket", event, workspace, repoSlug, prId, prAuthor,
@@ -202,23 +198,5 @@ public class BitbucketWebhookResource extends AbstractPrWebhookHandler {
         }
     }
 
-
-
-
-
-
-    private void upsertPrCache(String workspace, String repoSlug, String prId,
-                               String prUrl, String title, String sourceBranch,
-                               String targetBranch, String author,
-                               String createdOn, String updatedOn, String status) {
-        try {
-            prCacheStore.upsert(new OpenPrEntry(
-                    workspace, repoSlug, prId, prUrl, title,
-                    sourceBranch, targetBranch, author,
-                    createdOn, updatedOn, null, status, false));
-        } catch (Exception e) {
-            LOG.warnf("Failed to upsert PR cache for %s/%s#%s: %s",
-                    workspace, repoSlug, prId, e.getMessage());
-        }
-    }
 }
+
