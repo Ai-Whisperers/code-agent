@@ -9,10 +9,16 @@ import software.amazon.awssdk.auth.credentials.AwsSessionCredentials;
 import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.regions.Region;
+import software.amazon.awssdk.services.cloudfront.CloudFrontClient;
 import software.amazon.awssdk.services.cloudwatch.CloudWatchClient;
 import software.amazon.awssdk.services.cloudwatchlogs.CloudWatchLogsClient;
+import software.amazon.awssdk.services.ec2.Ec2Client;
 import software.amazon.awssdk.services.ecs.EcsClient;
+import software.amazon.awssdk.services.elasticache.ElastiCacheClient;
+import software.amazon.awssdk.services.elasticloadbalancingv2.ElasticLoadBalancingV2Client;
+import software.amazon.awssdk.services.lambda.LambdaClient;
 import software.amazon.awssdk.services.rds.RdsClient;
+import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
 import software.amazon.awssdk.services.sts.model.AssumeRoleResponse;
@@ -50,6 +56,14 @@ import jakarta.inject.Inject;
  *   ecs:ListTasks, ecs:DescribeTasks, ecs:DescribeTaskDefinition
  *   cloudwatch:GetMetricStatistics, cloudwatch:GetMetricData
  *   rds:DescribeDBInstances, rds:DescribeDBClusters
+ *   ec2:DescribeVpcs, ec2:DescribeSubnets, ec2:DescribeInstances,
+ *   ec2:DescribeSecurityGroups, ec2:DescribeInternetGateways, ec2:DescribeNatGateways
+ *   elasticloadbalancing:DescribeLoadBalancers, elasticloadbalancing:DescribeTargetGroups,
+ *   elasticloadbalancing:DescribeListeners
+ *   elasticache:DescribeCacheClusters, elasticache:DescribeReplicationGroups
+  *   lambda:ListFunctions
+ *   s3:ListAllMyBuckets
+ *   cloudfront:ListDistributions
  * </pre>
  */
 @ApplicationScoped
@@ -93,6 +107,55 @@ public class AwsClientFactory {
         return RdsClient.builder()
                 .credentialsProvider(resolveCredentials(roleArn, region, account))
                 .region(toRegion(region))
+                .build();
+    }
+
+    public Ec2Client ec2Client(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return Ec2Client.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    public ElasticLoadBalancingV2Client elbV2Client(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return ElasticLoadBalancingV2Client.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    public ElastiCacheClient elastiCacheClient(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return ElastiCacheClient.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    public LambdaClient lambdaClient(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return LambdaClient.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    public S3Client s3Client(String roleArn, String region, CloudAccount account) {
+        checkEnabled();
+        return S3Client.builder()
+                .credentialsProvider(resolveCredentials(roleArn, region, account))
+                .region(toRegion(region))
+                .build();
+    }
+
+    /** CloudFront is a global service — always uses us-east-1 regardless of the configured region. */
+    public CloudFrontClient cloudFrontClient(String roleArn, CloudAccount account) {
+        checkEnabled();
+        return CloudFrontClient.builder()
+                .credentialsProvider(resolveCredentials(roleArn, "us-east-1", account))
+                .region(Region.US_EAST_1)
                 .build();
     }
 

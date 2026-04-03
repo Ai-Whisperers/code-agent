@@ -19,7 +19,11 @@ public enum JobType {
     /** Cherry-pick promotion job: creates promote/{jiraKey} from main, cherry-picks fix commits, raises PR → main. */
     PROMOTE,
     /** Autonomous self-analysis job: triggered after a job fails, analyses logs/DB, attempts a code fix, raises PR. */
-    SELF_ANALYSIS;
+    SELF_ANALYSIS,
+    /** Generates a Structurizr DSL architecture model for a repository and persists versioned C4 diagrams. */
+    GENERATE_ARCHITECTURE,
+    /** Discovers AWS ECS/RDS topology for a customer environment and persists versioned cloud architecture diagrams. */
+    GENERATE_CLOUD_ARCHITECTURE;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -41,7 +45,9 @@ public enum JobType {
             case QUALITY_REPORT   ->  35;
             case SYNC_CONFLUENCE  ->  30;
             case GENERATE_TESTS   ->  25;
-            case GENERATE_DOCS    ->  20;
+            case GENERATE_DOCS              ->  20;
+            case GENERATE_ARCHITECTURE      ->  20;
+            case GENERATE_CLOUD_ARCHITECTURE->  20;
             case REVIEW_EPIC      ->  15;
             case REVIEW_FEATURE   ->  15;
             case REVIEW_USERSTORY ->  15;

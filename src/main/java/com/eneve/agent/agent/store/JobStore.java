@@ -961,6 +961,10 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, PromoteRequest.class));
                 case SELF_ANALYSIS -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, SelfAnalysisRequest.class));
+                case GENERATE_ARCHITECTURE -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, GenerateArchitectureRequest.class));
+                case GENERATE_CLOUD_ARCHITECTURE -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, GenerateCloudArchitectureRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -985,6 +989,10 @@ public class JobStore {
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> job.getJiraReviewRequest();
             case PROMOTE -> job.getPromoteRequest();
             case SELF_ANALYSIS -> job.getPayload() instanceof SelfAnalysisRequest r ? r : null;
+            case GENERATE_ARCHITECTURE ->
+                    job.getPayload() instanceof GenerateArchitectureRequest r ? r : null;
+            case GENERATE_CLOUD_ARCHITECTURE ->
+                    job.getPayload() instanceof GenerateCloudArchitectureRequest r ? r : null;
             case CHAT -> null;
         };
         if (request == null) return "{}";

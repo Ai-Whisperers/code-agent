@@ -178,6 +178,13 @@
             <version>3.26.4</version>
         </dependency>
 
+        <!-- Structurizr DSL: parse/validate Structurizr DSL + export views to Mermaid (structurizr-export is a transitive dep) -->
+        <dependency>
+            <groupId>com.structurizr</groupId>
+            <artifactId>structurizr-dsl</artifactId>
+            <version>4.1.0</version>
+        </dependency>
+
         <!-- Jsoup for HTML-to-text conversion in the fetch_url tool -->
         <dependency>
             <groupId>org.jsoup</groupId>
@@ -228,6 +235,36 @@
         <dependency>
             <groupId>software.amazon.awssdk</groupId>
             <artifactId>ses</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: EC2 (VPCs, subnets, instances, security groups) for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>ec2</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: Elastic Load Balancing v2 (ALB/NLB) for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>elasticloadbalancingv2</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: ElastiCache for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>elasticache</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: Lambda for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>lambda</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: S3 for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>s3</artifactId>
+        </dependency>
+        <!-- AWS SDK v2: CloudFront (global CDN) for cloud architecture discovery -->
+        <dependency>
+            <groupId>software.amazon.awssdk</groupId>
+            <artifactId>cloudfront</artifactId>
         </dependency>
 
         <!-- pgvector JDBC support for semantic code search -->

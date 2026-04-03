@@ -338,6 +338,48 @@ public class JobRecord {
         this.priority = JobType.SELF_ANALYSIS.defaultPriority();
     }
 
+    public JobRecord(String jobId, GenerateArchitectureRequest request) {
+        this.jobId = jobId;
+        this.payload = request;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jiraReviewRequest = null;
+        this.promoteRequest = null;
+        this.jobType = JobType.GENERATE_ARCHITECTURE;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+        this.priority = JobType.GENERATE_ARCHITECTURE.defaultPriority();
+    }
+
+    public JobRecord(String jobId, GenerateCloudArchitectureRequest request) {
+        this.jobId = jobId;
+        this.payload = request;
+        this.request = null;
+        this.reviewRequest = null;
+        this.fixPrRequest = null;
+        this.replyRequest = null;
+        this.hookRequest = null;
+        this.generateTestsRequest = null;
+        this.generateDocsRequest = null;
+        this.syncConfluenceRequest = null;
+        this.metricsRequest = null;
+        this.qualityReportRequest = null;
+        this.jiraReviewRequest = null;
+        this.promoteRequest = null;
+        this.jobType = JobType.GENERATE_CLOUD_ARCHITECTURE;
+        this.createdAt = Instant.now();
+        this.status = JobStatus.PENDING;
+        this.priority = JobType.GENERATE_CLOUD_ARCHITECTURE.defaultPriority();
+    }
+
     public String getJobId() { return jobId; }
     public JobType getJobType() { return jobType; }
 
