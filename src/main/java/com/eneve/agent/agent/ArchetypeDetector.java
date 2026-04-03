@@ -120,20 +120,17 @@ public class ArchetypeDetector {
             try (InputStream in = Files.newInputStream(pomPath)) {
                 DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
                 factory.setNamespaceAware(false);
-                // Disable external entity processing (XXE) using the portable JAXP constant.
-                // The Xerces-specific disallow-doctype-decl feature is also attempted but
-                // wrapped in a separate try-catch so that unsupported parsers don't swallow
-                // detection entirely.
                 factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
                 factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
                 factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
-                try {
-                    factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
-                } catch (Exception ignored) {
-                    // Not all XML parser implementations support this Xerces-specific feature;
-                    // FEATURE_SECURE_PROCESSING above is sufficient for our purposes.
-                }
+                factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+                factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+                factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+                factory.setExpandEntityReferences(false);
+                factory.setXIncludeAware(false);
                 DocumentBuilder builder = factory.newDocumentBuilder();
+                builder.setEntityResolver((publicId, systemId) ->
+                        new org.xml.sax.InputSource(new java.io.StringReader("")));
                 doc = builder.parse(in);
                 doc.getDocumentElement().normalize();
                 properties = extractProperties(doc);
@@ -586,9 +583,15 @@ public class ArchetypeDetector {
             factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
             factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
             factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setExpandEntityReferences(false);
+            factory.setXIncludeAware(false);
             DocumentBuilder builder = factory.newDocumentBuilder();
-            // Suppress SAX error output for malformed project files
             builder.setErrorHandler(null);
+            builder.setEntityResolver((publicId, systemId) ->
+                    new org.xml.sax.InputSource(new java.io.StringReader("")));
             try (InputStream in = Files.newInputStream(projectFile)) {
                 Document doc = builder.parse(in);
                 doc.getDocumentElement().normalize();
@@ -992,8 +995,15 @@ public class ArchetypeDetector {
             factory.setFeature(XMLConstants.FEATURE_SECURE_PROCESSING, true);
             factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_DTD, "");
             factory.setAttribute(XMLConstants.ACCESS_EXTERNAL_SCHEMA, "");
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            factory.setFeature("http://apache.org/xml/features/nonvalidating/load-external-dtd", false);
+            factory.setExpandEntityReferences(false);
+            factory.setXIncludeAware(false);
             DocumentBuilder builder = factory.newDocumentBuilder();
             builder.setErrorHandler(null);
+            builder.setEntityResolver((publicId, systemId) ->
+                    new org.xml.sax.InputSource(new java.io.StringReader("")));
             Document doc = builder.parse(moduleXml.toFile());
             doc.getDocumentElement().normalize();
 

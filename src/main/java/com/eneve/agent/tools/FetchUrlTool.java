@@ -69,6 +69,9 @@ public class FetchUrlTool implements ToolExecutor {
 
         try {
             long timeoutSeconds = Long.parseLong(settings.get("tools.fetch-url.timeout-seconds", "15"));
+            // NORMAL only follows same-scheme or HTTPS upgrades; it refuses HTTP downgrades.
+            // The initial URL is already SSRF-validated above; internal IPs cannot obtain
+            // valid TLS certificates so HTTPS redirects to private ranges will fail at TLS.
             HttpClient client = HttpClient.newBuilder()
                     .followRedirects(HttpClient.Redirect.NORMAL)
                     .connectTimeout(Duration.ofSeconds(timeoutSeconds))

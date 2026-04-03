@@ -1,6 +1,7 @@
 package com.eneve.agent.agent.service;
 
 import com.eneve.agent.agent.model.WebDocSource;
+import com.eneve.agent.security.SsrfGuard;
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.tools.HtmlTextExtractor;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -156,6 +157,11 @@ public class WebDocsCrawlerService {
     private List<String> fetchSitemapUrls(String baseUrl, String allowedPrefix,
                                            HttpClient client, String userAgent, int timeoutMs) {
         String sitemapUrl = baseUrl.replaceAll("/+$", "") + "/sitemap.xml";
+        String ssrfError = SsrfGuard.validateSameHost(baseUrl, sitemapUrl);
+        if (ssrfError != null) {
+            LOG.debugf("WebDocsCrawler: sitemap.xml fetch blocked (SSRF): %s — %s", sitemapUrl, ssrfError);
+            return List.of();
+        }
         try {
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(sitemapUrl))
@@ -189,6 +195,11 @@ public class WebDocsCrawlerService {
             URI base = URI.create(baseUrl);
             String robotsUrl = base.getScheme() + "://" + base.getHost()
                     + (base.getPort() > 0 ? ":" + base.getPort() : "") + "/robots.txt";
+            String ssrfError = SsrfGuard.validateSameHost(baseUrl, robotsUrl);
+            if (ssrfError != null) {
+                LOG.debugf("WebDocsCrawler: robots.txt fetch blocked (SSRF): %s — %s", robotsUrl, ssrfError);
+                return Set.of();
+            }
             HttpRequest req = HttpRequest.newBuilder()
                     .uri(URI.create(robotsUrl))
                     .timeout(Duration.ofMillis(timeoutMs))

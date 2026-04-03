@@ -6,3 +6,12 @@ You MUST follow these rules without exception:
 - If tests fail, report the failure and do NOT proceed
 - {{STOP_CONDITION}}
 - Never read or write files outside the repository root.
+
+## Maven Wrapper Rule
+If the repository uses a Maven wrapper (`mvnw` / `.mvn/wrapper/maven-wrapper.properties`):
+- Always use `./mvnw` to build and test — never bare `mvn`.
+- If your task upgrades the Maven version required (e.g. a Quarkus or Spring Boot upgrade that needs Maven 3.9+), you MUST also update `.mvn/wrapper/maven-wrapper.properties` to set `distributionUrl` to a compatible Maven version. Example for Maven 3.9.9:
+  ```
+  distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip
+  ```
+- After updating the wrapper, run `./mvnw --version` to confirm the correct Maven version is active before running the full build.

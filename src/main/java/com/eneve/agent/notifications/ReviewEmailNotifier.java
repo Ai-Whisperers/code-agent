@@ -31,6 +31,7 @@ import java.util.Map;
  *
  * Config keys (via SettingsService / env vars):
  *   review.email.recipient  — to-address (REVIEW_EMAIL_RECIPIENT)
+ *   review.email.cc         — comma-separated CC addresses, optional (REVIEW_EMAIL_CC)
  *   review.email.from       — SES-verified from-address (REVIEW_EMAIL_FROM)
  *   review.email.aws.region — AWS region, default eu-west-1 (REVIEW_EMAIL_AWS_REGION)
  */
@@ -72,9 +73,20 @@ public class ReviewEmailNotifier {
             String regionStr = settingsService.get("review.email.aws.region", "eu-west-1");
             Region region = Region.of(regionStr);
 
+            String ccRaw = settingsService.get("review.email.cc", "");
+            List<String> ccAddresses = java.util.Arrays.stream(ccRaw.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isBlank())
+                    .toList();
+
+            Destination.Builder destinationBuilder = Destination.builder().toAddresses(recipient);
+            if (!ccAddresses.isEmpty()) {
+                destinationBuilder.ccAddresses(ccAddresses);
+            }
+
             try (SesClient ses = SesClient.builder().region(region).build()) {
                 SendEmailRequest emailRequest = SendEmailRequest.builder()
-                        .destination(Destination.builder().toAddresses(recipient).build())
+                        .destination(destinationBuilder.build())
                         .source(from)
                         .message(Message.builder()
                                 .subject(Content.builder().data(subject).charset("UTF-8").build())
@@ -85,8 +97,10 @@ public class ReviewEmailNotifier {
                         .build();
 
                 ses.sendEmail(emailRequest);
-                LOG.infof("Review digest email sent to %s for PR #%s (%s/%s)",
-                        recipient, request.prId(), coords.organization(), coords.repository());
+                LOG.infof("Review digest email sent to %s%s for PR #%s (%s/%s)",
+                        recipient,
+                        ccAddresses.isEmpty() ? "" : " (cc: " + String.join(", ", ccAddresses) + ")",
+                        request.prId(), coords.organization(), coords.repository());
             }
         } catch (Exception e) {
             LOG.errorf("Failed to send review digest email for PR #%s: %s", request.prId(), e.getMessage());

@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
+import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
@@ -18,6 +19,9 @@ public class RunCommandTool implements ToolExecutor {
 
     @Inject
     GuardrailConfig guardrails;
+
+    @Inject
+    SettingsService settings;
 
     @Override
     public String name() {
@@ -36,7 +40,12 @@ public class RunCommandTool implements ToolExecutor {
         }
 
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
+            String javaHome = settings.get("build.java-home", "");
+            String mavenHome = settings.get("build.maven-home", "");
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(
+                            javaHome.isBlank() ? null : javaHome,
+                            mavenHome.isBlank() ? null : mavenHome,
+                            "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
 

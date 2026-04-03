@@ -1,5 +1,6 @@
 package com.eneve.agent.mcp;
 
+import com.eneve.agent.security.SsrfGuard;
 import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -360,10 +361,17 @@ public class AtlassianOAuthService {
      *
      * @return bearer token string, or {@code null} on failure
      */
-    @SuppressWarnings("java:S5144") // baseUrl is validated against a known allowlist
     public String getXrayBearerToken(String baseUrl, String clientId, String clientSecret) {
-        // Only allow known Xray Cloud endpoints or admin-configured base URLs
-        String tokenUrl = XRAY_TOKEN_URLS.getOrDefault(baseUrl, baseUrl + "/api/v2/authenticate");
+        // Prefer the known-good allowlist entry; fall back only after SSRF validation
+        String tokenUrl = XRAY_TOKEN_URLS.get(baseUrl);
+        if (tokenUrl == null) {
+            String ssrfError = SsrfGuard.validatePublicUrl(baseUrl);
+            if (ssrfError != null) {
+                LOG.warnf("Xray token request blocked (SSRF): %s — %s", baseUrl, ssrfError);
+                return null;
+            }
+            tokenUrl = baseUrl + "/api/v2/authenticate";
+        }
         try {
             String body = mapper.writeValueAsString(Map.of(
                     "client_id",     clientId,

@@ -1,5 +1,6 @@
 package com.eneve.agent.xray;
 
+import com.eneve.agent.security.SsrfGuard;
 import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -154,6 +155,11 @@ public class XrayService {
      * Used by {@link com.eneve.agent.mcp.LinkedAccountService} before saving credentials.
      */
     public static boolean testConnection(String baseUrl, String clientId, String clientSecret) {
+        String ssrfError = SsrfGuard.validatePublicUrl(baseUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Xray testConnection blocked (SSRF): %s — %s", baseUrl, ssrfError);
+            return false;
+        }
         try {
             ObjectMapper om = new ObjectMapper();
             String body = om.writeValueAsString(Map.of(
@@ -177,6 +183,11 @@ public class XrayService {
     // ─── GraphQL executor ─────────────────────────────────────────────────────────
 
     private JsonNode graphql(String query, Map<String, Object> variables, XrayCredentials creds) {
+        String ssrfError = SsrfGuard.validateSameHost(creds.baseUrl(), creds.graphqlUrl());
+        if (ssrfError != null) {
+            LOG.warnf("Xray GraphQL request blocked (SSRF): %s — %s", creds.graphqlUrl(), ssrfError);
+            return null;
+        }
         String token = authenticate(creds);
         if (token == null) return null;
 

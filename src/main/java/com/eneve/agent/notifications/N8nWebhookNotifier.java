@@ -9,6 +9,7 @@ import java.time.Duration;
 import org.jboss.logging.Logger;
 
 import com.eneve.agent.model.RunResult;
+import com.eneve.agent.security.SsrfGuard;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -32,6 +33,12 @@ public class N8nWebhookNotifier {
     public void sendResult(String webhookUrl, RunResult result) {
         if (webhookUrl == null || webhookUrl.isBlank()) {
             LOG.debug("n8n webhook URL not provided, skipping");
+            return;
+        }
+
+        String ssrfError = SsrfGuard.validatePublicUrl(webhookUrl);
+        if (ssrfError != null) {
+            LOG.warnf("n8n webhook blocked (SSRF): %s — %s", webhookUrl, ssrfError);
             return;
         }
 

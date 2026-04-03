@@ -12,6 +12,7 @@ import java.util.Base64;
 import java.util.List;
 
 import com.eneve.agent.agent.MermaidPngRenderer;
+import com.eneve.agent.security.SsrfGuard;
 import com.eneve.agent.settings.SettingsService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -62,6 +63,11 @@ public class ConfluenceService {
      * Returns true if the connection is valid, false otherwise.
      */
     public static boolean testConnectionOAuth(String testBaseUrl, String accessToken) {
+        String ssrfError = SsrfGuard.validatePublicUrl(testBaseUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Confluence testConnectionOAuth blocked (SSRF): %s — %s", testBaseUrl, ssrfError);
+            return false;
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
@@ -79,6 +85,11 @@ public class ConfluenceService {
     }
 
     public static boolean testConnection(String testBaseUrl, String testUser, String testApiToken) {
+        String ssrfError = SsrfGuard.validatePublicUrl(testBaseUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Confluence testConnection blocked (SSRF): %s — %s", testBaseUrl, ssrfError);
+            return false;
+        }
         try {
             String credentials = testUser + ":" + testApiToken;
             String auth = "Basic " + Base64.getEncoder().encodeToString(credentials.getBytes(StandardCharsets.UTF_8));

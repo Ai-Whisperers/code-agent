@@ -1,5 +1,6 @@
 package com.eneve.agent.jira;
 
+import com.eneve.agent.security.SsrfGuard;
 import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -219,6 +220,11 @@ class JiraHttpClient {
 
     byte[] downloadAttachment(String contentUrl) {
         if (contentUrl == null || contentUrl.isBlank()) return null;
+        String ssrfError = SsrfGuard.validateSameHost(settingsService.get("jira.base.url", ""), contentUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Attachment download blocked (SSRF): %s — %s", contentUrl, ssrfError);
+            return null;
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))
@@ -239,6 +245,11 @@ class JiraHttpClient {
     }
 
     byte[] getBytes(String absoluteUrl, String operation) {
+        String ssrfError = SsrfGuard.validateSameHost(settingsService.get("jira.base.url", ""), absoluteUrl);
+        if (ssrfError != null) {
+            LOG.warnf("JIRA %s blocked (SSRF): %s — %s", operation, absoluteUrl, ssrfError);
+            return null;
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(60))
@@ -276,6 +287,11 @@ class JiraHttpClient {
     String getApiToken() { return settingsService.getSecret("jira.api.token"); }
 
     static boolean testConnection(String testBaseUrl, String testUser, String testApiToken) {
+        String ssrfError = SsrfGuard.validatePublicUrl(testBaseUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Jira testConnection blocked (SSRF): %s — %s", testBaseUrl, ssrfError);
+            return false;
+        }
         try {
             String auth = Base64.getEncoder()
                     .encodeToString((testUser + ":" + testApiToken).getBytes(StandardCharsets.UTF_8));
@@ -297,6 +313,11 @@ class JiraHttpClient {
 
     /** Tests a Jira connection using an OAuth Bearer access token. */
     static boolean testConnectionOAuth(String testBaseUrl, String accessToken) {
+        String ssrfError = SsrfGuard.validatePublicUrl(testBaseUrl);
+        if (ssrfError != null) {
+            LOG.warnf("Jira testConnectionOAuth blocked (SSRF): %s — %s", testBaseUrl, ssrfError);
+            return false;
+        }
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .timeout(Duration.ofSeconds(30))

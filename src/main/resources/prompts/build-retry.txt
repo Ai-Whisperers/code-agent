@@ -31,4 +31,10 @@ The diff above is the direct cause of the build failure. Focus on it:
 - Only touch `pom.xml` or `build.gradle` if the error is clearly a dependency version conflict.
 - After fixing, the build will be re-validated automatically. Do not run the build yourself.
 
+## Maven version errors
+If the failure contains `NoSuchMethodError` referencing Maven internals (e.g. `Mirror.isBlocked()`), or messages like `Unsupported class file major version`, the Maven wrapper is pinned to an incompatible version. Fix it by updating `.mvn/wrapper/maven-wrapper.properties`:
+- Set `distributionUrl` to a Maven version that satisfies the requirement (Maven 3.9+ for Quarkus 3.9+, Maven 3.8+ for most modern plugins).
+- Example: `distributionUrl=https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.9.9/apache-maven-3.9.9-bin.zip`
+- Commit the updated wrapper file alongside your other changes.
+
 Provide a one-sentence summary of the root cause and what you changed to fix it.
