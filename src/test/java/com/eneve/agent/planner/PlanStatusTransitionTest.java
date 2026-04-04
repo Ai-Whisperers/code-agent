@@ -146,7 +146,7 @@ class PlanStatusTransitionTest {
     private static ExecutionPlan plan(String planId, String status) {
         return new ExecutionPlan(
                 planId, status, "FREE_TEXT", null, "https://example.com/repo.git",
-                "main", "Test plan", new PlanData(List.of()),
+                null, "main", "Test plan", new PlanData(List.of()),
                 Instant.now(), Instant.now(), null, null, null, null, null, null, null,
                 false, "test-user");
     }

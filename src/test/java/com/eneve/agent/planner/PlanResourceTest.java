@@ -258,14 +258,14 @@ class PlanResourceTest {
 
     private static ExecutionPlan archivedPlan(String planId) {
         return new ExecutionPlan(planId, "COMPLETED", "FREE_TEXT", null,
-                "https://example.com/repo.git", "main", "Archived plan",
+                "https://example.com/repo.git", null, "main", "Archived plan",
                 new PlanData(List.of()), Instant.now(), Instant.now(), null,
                 null, null, null, null, null, null, true, "dev");
     }
 
     private static ExecutionPlan planWithCreator(String planId, String status, String createdBy) {
         return new ExecutionPlan(planId, status, "FREE_TEXT", null,
-                "https://example.com/repo.git", "main", "Test plan",
+                "https://example.com/repo.git", null, "main", "Test plan",
                 new PlanData(List.of()), Instant.now(), Instant.now(), null,
                 null, null, null, null, null, null, false, createdBy);
     }

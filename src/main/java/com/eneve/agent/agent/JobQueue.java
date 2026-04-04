@@ -306,7 +306,7 @@ public class JobQueue {
             case METRICS, QUALITY_REPORT, SYNC_CONFLUENCE,
                  GENERATE_TESTS, GENERATE_DOCS, SELF_ANALYSIS,
                  GENERATE_ARCHITECTURE, GENERATE_CLOUD_ARCHITECTURE,
-                 KNOWLEDGE_GRAPH, TECH_DEBT                                   -> backgroundSemaphore;
+                 KNOWLEDGE_GRAPH, TECH_DEBT, REWRITE                          -> backgroundSemaphore;
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY                -> reviewSemaphore;
         };
     }

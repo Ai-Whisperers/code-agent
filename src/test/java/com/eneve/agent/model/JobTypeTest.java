@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(21, values.length);
+        assertEquals(22, values.length);
         assertEquals(JobType.FIX,                        values[0]);
         assertEquals(JobType.REVIEW,                     values[1]);
         assertEquals(JobType.FIX_PR,                     values[2]);
@@ -32,6 +32,7 @@ class JobTypeTest {
         assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,values[18]);
         assertEquals(JobType.KNOWLEDGE_GRAPH,            values[19]);
         assertEquals(JobType.TECH_DEBT,                  values[20]);
+        assertEquals(JobType.REWRITE,                    values[21]);
     }
 
     @Test
@@ -57,6 +58,7 @@ class JobTypeTest {
         assertEquals("GENERATE_CLOUD_ARCHITECTURE",JobType.GENERATE_CLOUD_ARCHITECTURE.name());
         assertEquals("KNOWLEDGE_GRAPH",            JobType.KNOWLEDGE_GRAPH.name());
         assertEquals("TECH_DEBT",                  JobType.TECH_DEBT.name());
+        assertEquals("REWRITE",                    JobType.REWRITE.name());
     }
 
     @Test
@@ -82,6 +84,7 @@ class JobTypeTest {
         assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,JobType.valueOf("GENERATE_CLOUD_ARCHITECTURE"));
         assertEquals(JobType.KNOWLEDGE_GRAPH,            JobType.valueOf("KNOWLEDGE_GRAPH"));
         assertEquals(JobType.TECH_DEBT,                  JobType.valueOf("TECH_DEBT"));
+        assertEquals(JobType.REWRITE,                    JobType.valueOf("REWRITE"));
     }
 
     @Test
@@ -119,6 +122,7 @@ class JobTypeTest {
         assertEquals(18, JobType.GENERATE_CLOUD_ARCHITECTURE.ordinal());
         assertEquals(19, JobType.KNOWLEDGE_GRAPH.ordinal());
         assertEquals(20, JobType.TECH_DEBT.ordinal());
+        assertEquals(21, JobType.REWRITE.ordinal());
     }
 
     @Test
