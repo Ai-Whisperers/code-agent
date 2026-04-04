@@ -122,6 +122,10 @@ public class JobRecord {
         this(jobId, request, JobType.TECH_DEBT);
     }
 
+    public JobRecord(String jobId, RewriteRequest request) {
+        this(jobId, request, JobType.REWRITE);
+    }
+
     public String getJobId() { return jobId; }
     public JobType getJobType() { return jobType; }
 

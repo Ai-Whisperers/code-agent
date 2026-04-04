@@ -72,10 +72,24 @@ public class PlanGenerationResource {
         String sourceType = request.sourceType() != null ? request.sourceType() : "FREE_TEXT";
         String targetBranch = request.targetBranch() != null ? request.targetBranch() : "main";
 
-        LOG.infof("Creating plan: sourceType=%s, repoUrl=%s", sourceType, UrlUtils.stripCredentials(request.repoUrl()));
+        ExecutionPlan draft;
+        boolean isRewrite = request.sourceRepoUrl() != null && !request.sourceRepoUrl().isBlank();
 
-        ExecutionPlan draft = plannerService.generatePlan(
-                request.specText(), request.repoUrl(), targetBranch, sourceType, request.sourceRef());
+        if (isRewrite) {
+            LOG.infof("Creating rewrite plan: mode=%s, sourceRepoUrl=%s, targetRepoUrl=%s",
+                    request.rewriteMode(), UrlUtils.stripCredentials(request.sourceRepoUrl()),
+                    UrlUtils.stripCredentials(request.repoUrl()));
+            draft = plannerService.generateRewritePlan(
+                    request.specText(),
+                    request.sourceRepoUrl(), request.repoUrl(),
+                    request.sourceLanguage(), request.targetLanguage(),
+                    request.rewriteMode(), request.scopeHint(),
+                    targetBranch, sourceType, request.sourceRef());
+        } else {
+            LOG.infof("Creating plan: sourceType=%s, repoUrl=%s", sourceType, UrlUtils.stripCredentials(request.repoUrl()));
+            draft = plannerService.generatePlan(
+                    request.specText(), request.repoUrl(), targetBranch, sourceType, request.sourceRef());
+        }
 
         if (draft == null) {
             return Response.status(503).entity(Map.of("error", "Plan generation failed")).build();
@@ -84,7 +98,7 @@ public class PlanGenerationResource {
         String author = authHelper.resolveDisplayName();
         ExecutionPlan plan = new ExecutionPlan(
                 draft.planId(), draft.status(), draft.sourceType(), draft.sourceRef(),
-                draft.repoUrl(), draft.targetBranch(), draft.title(), draft.planData(),
+                draft.repoUrl(), draft.sourceRepoUrl(), draft.targetBranch(), draft.title(), draft.planData(),
                 draft.createdAt(), draft.updatedAt(), draft.approvedAt(), draft.summary(),
                 draft.errorMessage(), draft.prUrl(), draft.conversationId(),
                 draft.markdownContent(), draft.workspacePath(), false, author);
@@ -155,7 +169,7 @@ public class PlanGenerationResource {
         String author = authHelper.resolveDisplayName();
         ExecutionPlan plan = new ExecutionPlan(
                 draft.planId(), draft.status(), draft.sourceType(), draft.sourceRef(),
-                draft.repoUrl(), draft.targetBranch(), draft.title(), draft.planData(),
+                draft.repoUrl(), null, draft.targetBranch(), draft.title(), draft.planData(),
                 draft.createdAt(), draft.updatedAt(), draft.approvedAt(), draft.summary(),
                 draft.errorMessage(), draft.prUrl(), draft.conversationId(),
                 draft.markdownContent(), draft.workspacePath(), false, author);
@@ -209,7 +223,7 @@ public class PlanGenerationResource {
         String safeRepoUrl = UrlUtils.stripCredentials(request.repoUrl());
 
         ExecutionPlan plan = new ExecutionPlan(planId, PlanStatus.DRAFT.name(), "QUALITY", request.branch(),
-                safeRepoUrl, targetBranch, title, planData,
+                safeRepoUrl, null, targetBranch, title, planData,
                 Instant.now(), Instant.now(), null, null, null, null, null, null, null,
                 false, authHelper.resolveDisplayName());
 
@@ -337,8 +351,23 @@ public class PlanGenerationResource {
 
     // ─── Request/Response records ─────────────────────────────────────────────
 
-    public record CreatePlanRequest(String repoUrl, String targetBranch, String sourceType,
-                                    String sourceRef, String specText) {}
+    public record CreatePlanRequest(
+            String repoUrl,
+            String targetBranch,
+            String sourceType,
+            String sourceRef,
+            String specText,
+            @Schema(description = "Source repository URL for rewrite/migration plans (read-only). When present, triggers the rewrite planner.")
+            String sourceRepoUrl,
+            @Schema(description = "Source language/framework hint (e.g. 'php/laravel', 'typescript/angular')")
+            String sourceLanguage,
+            @Schema(description = "Target language/framework hint (e.g. 'dotnet/csharp', 'typescript/react')")
+            String targetLanguage,
+            @Schema(description = "Rewrite mode: full_rewrite, framework_migration, or extraction. Defaults to full_rewrite.")
+            String rewriteMode,
+            @Schema(description = "For extraction mode: description of the bounded context or module to extract")
+            String scopeHint
+    ) {}
 
     public record JiraSearchResult(String key, String summary, String status) {}
 

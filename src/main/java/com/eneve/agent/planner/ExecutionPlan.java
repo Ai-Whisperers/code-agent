@@ -13,6 +13,7 @@ public record ExecutionPlan(
         String sourceType,
         String sourceRef,
         String repoUrl,
+        String sourceRepoUrl,
         String targetBranch,
         String title,
         PlanData planData,

@@ -10,7 +10,10 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.time.Instant;
+import java.util.ArrayList;
 import java.util.HexFormat;
+import java.util.List;
 
 /**
  * Persists knowledge-source entries that were rejected by the Claude quality
@@ -147,6 +150,53 @@ public class KnowledgeQualityBlacklistStore {
             return -1;
         }
     }
+
+    /**
+     * Returns a page of blacklist entries ordered by {@code rejected_at} descending.
+     *
+     * @param limit  maximum rows to return
+     * @param offset zero-based row offset
+     */
+    public List<BlacklistEntry> list(int limit, int offset) {
+        String sql = """
+                SELECT id, source_type, source_id, reason, content_hash, rejected_at
+                FROM knowledge_quality_blacklist
+                ORDER BY rejected_at DESC
+                LIMIT ? OFFSET ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            ps.setInt(2, offset);
+            try (ResultSet rs = ps.executeQuery()) {
+                List<BlacklistEntry> entries = new ArrayList<>();
+                while (rs.next()) {
+                    entries.add(new BlacklistEntry(
+                            rs.getLong("id"),
+                            rs.getString("source_type"),
+                            rs.getString("source_id"),
+                            rs.getString("reason"),
+                            rs.getString("content_hash"),
+                            rs.getTimestamp("rejected_at").toInstant()
+                    ));
+                }
+                return entries;
+            }
+        } catch (SQLException e) {
+            LOG.warnf("Failed to list blacklist entries: %s", e.getMessage());
+            return List.of();
+        }
+    }
+
+    /** Immutable projection of a single blacklist row. */
+    public record BlacklistEntry(
+            long id,
+            String sourceType,
+            String sourceId,
+            String reason,
+            String contentHash,
+            Instant rejectedAt
+    ) {}
 
     // ──────────────────────────────────────────────────────────────────────
     // Utility

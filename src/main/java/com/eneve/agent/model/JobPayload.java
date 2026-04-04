@@ -20,5 +20,6 @@ public sealed interface JobPayload
                 QualityReportJobRequest, JiraReviewRequest,
                 PromoteRequest, SelfAnalysisRequest,
                 GenerateArchitectureRequest, GenerateCloudArchitectureRequest,
-                KnowledgeGraphRequest, TechDebtRequest {
+                KnowledgeGraphRequest, TechDebtRequest,
+                RewriteRequest {
 }

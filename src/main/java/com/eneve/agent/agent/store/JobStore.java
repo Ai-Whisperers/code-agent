@@ -483,6 +483,8 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, KnowledgeGraphRequest.class));
                 case TECH_DEBT -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, TechDebtRequest.class));
+                case REWRITE -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, RewriteRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {

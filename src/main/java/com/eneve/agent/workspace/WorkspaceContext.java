@@ -445,6 +445,126 @@ public class WorkspaceContext implements AutoCloseable {
         return total;
     }
 
+    // ─── Subdir-scoped git operations (for multi-repo workspaces) ───────────────
+
+    /**
+     * Stage and commit all changes inside a cloned subdirectory repo.
+     * Only touches the git repository rooted at {@code clonedRepos.get(repoSlug)}.
+     * Returns true if a commit was made, false if the working tree was clean.
+     *
+     * @throws IllegalArgumentException if {@code repoSlug} has not been cloned
+     */
+    public boolean commitSubdir(String repoSlug, String message) throws IOException, InterruptedException {
+        Path repoDir = requireSubdir(repoSlug);
+        runGitInDir(repoDir, 5, "add", "-A");
+        String status = runGitOutputInDir(repoDir, 1, "status", "--porcelain");
+        if (status.isBlank()) {
+            LOG.infof("commitSubdir(%s): nothing to commit — working tree clean", repoSlug);
+            return false;
+        }
+        runGitInDir(repoDir, 5, "commit", "-m", message);
+        LOG.infof("commitSubdir(%s): committed changes", repoSlug);
+        return true;
+    }
+
+    /**
+     * Push a branch in a cloned subdirectory repo.
+     * Only touches the git repository rooted at {@code clonedRepos.get(repoSlug)}.
+     *
+     * @throws IllegalArgumentException if {@code repoSlug} has not been cloned
+     */
+    public void pushSubdir(String repoSlug, String branchName, long timeoutMinutes)
+            throws IOException, InterruptedException {
+        Path repoDir = requireSubdir(repoSlug);
+        runGitInDir(repoDir, timeoutMinutes, "push", "origin", branchName);
+        LOG.infof("pushSubdir(%s): pushed branch %s", repoSlug, branchName);
+    }
+
+    /**
+     * Count files changed in the most recent commit of a cloned subdirectory repo.
+     *
+     * @throws IllegalArgumentException if {@code repoSlug} has not been cloned
+     */
+    public int countFilesChangedInSubdir(String repoSlug) throws IOException, InterruptedException {
+        Path repoDir = requireSubdir(repoSlug);
+        String output = runGitOutputInDir(repoDir, 2, "diff", "--name-only", "HEAD~1");
+        return (int) output.lines().filter(l -> !l.isBlank()).count();
+    }
+
+    /**
+     * Count lines changed (insertions + deletions) in the most recent commit of a cloned subdirectory repo.
+     *
+     * @throws IllegalArgumentException if {@code repoSlug} has not been cloned
+     */
+    public int countLinesChangedInSubdir(String repoSlug) throws IOException, InterruptedException {
+        Path repoDir = requireSubdir(repoSlug);
+        String output = runGitOutputInDir(repoDir, 2, "diff", "--shortstat", "HEAD~1");
+        int total = 0;
+        for (String part : output.split(",")) {
+            String trimmed = part.trim();
+            if (trimmed.contains("insertion") || trimmed.contains("deletion")) {
+                String[] tokens = trimmed.split("\\s+");
+                if (tokens.length > 0) {
+                    try {
+                        total += Integer.parseInt(tokens[0]);
+                    } catch (NumberFormatException ignored) { }
+                }
+            }
+        }
+        return total;
+    }
+
+    private Path requireSubdir(String repoSlug) {
+        Path repoDir = clonedRepos.get(repoSlug);
+        if (repoDir == null) {
+            throw new IllegalArgumentException("Repository slug not cloned in this workspace: " + repoSlug);
+        }
+        return repoDir;
+    }
+
+    private void runGitInDir(Path dir, long timeoutMinutes, String... args)
+            throws IOException, InterruptedException {
+        String[] cmd = new String[args.length + 1];
+        cmd[0] = "git";
+        System.arraycopy(args, 0, cmd, 1, args.length);
+
+        ProcessBuilder pb = new ProcessBuilder(cmd)
+                .directory(dir.toFile())
+                .redirectErrorStream(true);
+        Process proc = pb.start();
+        String output = new String(proc.getInputStream().readAllBytes());
+        boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+        if (!finished) {
+            proc.destroyForcibly();
+            throw new IOException("Git command timed out: " + String.join(" ", cmd));
+        }
+        if (proc.exitValue() != 0) {
+            throw new IOException("Git command failed (exit " + proc.exitValue() + "): " + output);
+        }
+    }
+
+    private String runGitOutputInDir(Path dir, long timeoutMinutes, String... args)
+            throws IOException, InterruptedException {
+        String[] cmd = new String[args.length + 1];
+        cmd[0] = "git";
+        System.arraycopy(args, 0, cmd, 1, args.length);
+
+        ProcessBuilder pb = new ProcessBuilder(cmd)
+                .directory(dir.toFile())
+                .redirectErrorStream(true);
+        Process proc = pb.start();
+        String output = new String(proc.getInputStream().readAllBytes());
+        boolean finished = proc.waitFor(timeoutMinutes, TimeUnit.MINUTES);
+        if (!finished) {
+            proc.destroyForcibly();
+            throw new IOException("Git command timed out: " + String.join(" ", cmd));
+        }
+        if (proc.exitValue() != 0) {
+            throw new IOException("Git command failed (exit " + proc.exitValue() + "): " + output);
+        }
+        return output;
+    }
+
     /**
      * Resolve a relative path and verify it stays within the workspace root.
      * Throws SecurityException on traversal attempt.

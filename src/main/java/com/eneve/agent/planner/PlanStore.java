@@ -33,7 +33,7 @@ public class PlanStore {
     @Inject ObjectMapper mapper;
 
     private static final String SELECT_COLS = """
-            plan_id, status, source_type, source_ref, repo_url, target_branch,
+            plan_id, status, source_type, source_ref, repo_url, source_repo_url, target_branch,
             title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
             conversation_id, markdown_content, workspace_path, archived, created_by
             """;
@@ -47,10 +47,10 @@ public class PlanStore {
     public void create(ExecutionPlan plan) {
         String sql = """
                 INSERT INTO execution_plans
-                    (plan_id, status, source_type, source_ref, repo_url, target_branch,
+                    (plan_id, status, source_type, source_ref, repo_url, source_repo_url, target_branch,
                      title, plan_data, created_at, updated_at, approved_at, summary, error_message, pr_url,
                      conversation_id, markdown_content, workspace_path, archived, created_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -59,20 +59,21 @@ public class PlanStore {
             ps.setString(3, plan.sourceType());
             setNullableString(ps, 4, plan.sourceRef());
             ps.setString(5, UrlUtils.stripCredentials(plan.repoUrl()));
-            ps.setString(6, plan.targetBranch() != null ? plan.targetBranch() : "main");
-            setNullableString(ps, 7, plan.title());
-            ps.setString(8, toJson(plan.planData()));
-            ps.setTimestamp(9, timestampOf(plan.createdAt()));
-            ps.setTimestamp(10, timestampOf(plan.updatedAt()));
-            ps.setTimestamp(11, timestampOf(plan.approvedAt()));
-            setNullableString(ps, 12, plan.summary());
-            setNullableString(ps, 13, plan.errorMessage());
-            setNullableString(ps, 14, plan.prUrl());
-            setNullableString(ps, 15, plan.conversationId());
-            setNullableString(ps, 16, plan.markdownContent());
-            setNullableString(ps, 17, plan.workspacePath());
-            ps.setBoolean(18, plan.archived());
-            setNullableString(ps, 19, plan.createdBy());
+            setNullableString(ps, 6, plan.sourceRepoUrl() != null ? UrlUtils.stripCredentials(plan.sourceRepoUrl()) : null);
+            ps.setString(7, plan.targetBranch() != null ? plan.targetBranch() : "main");
+            setNullableString(ps, 8, plan.title());
+            ps.setString(9, toJson(plan.planData()));
+            ps.setTimestamp(10, timestampOf(plan.createdAt()));
+            ps.setTimestamp(11, timestampOf(plan.updatedAt()));
+            ps.setTimestamp(12, timestampOf(plan.approvedAt()));
+            setNullableString(ps, 13, plan.summary());
+            setNullableString(ps, 14, plan.errorMessage());
+            setNullableString(ps, 15, plan.prUrl());
+            setNullableString(ps, 16, plan.conversationId());
+            setNullableString(ps, 17, plan.markdownContent());
+            setNullableString(ps, 18, plan.workspacePath());
+            ps.setBoolean(19, plan.archived());
+            setNullableString(ps, 20, plan.createdBy());
             ps.executeUpdate();
             LOG.debugf("Created execution plan %s (status=%s)", plan.planId(), plan.status());
         } catch (SQLException e) {
@@ -409,6 +410,7 @@ public class PlanStore {
                 rs.getString("source_type"),
                 rs.getString("source_ref"),
                 rs.getString("repo_url"),
+                rs.getString("source_repo_url"),
                 rs.getString("target_branch"),
                 rs.getString("title"),
                 planData,

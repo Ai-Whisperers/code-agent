@@ -27,7 +27,11 @@ public enum JobType {
     /** Analyses git history across repos to score engineer expertise per file/service and surface bus-factor risks. */
     KNOWLEDGE_GRAPH,
     /** Combines complexity, coverage, churn, and staleness signals into a per-file technical debt score. */
-    TECH_DEBT;
+    TECH_DEBT,
+    /** Rewrites or extracts code from a source repository into a target repository.
+     *  Supports full cross-language rewrites (e.g. PHP→C#), framework migrations (e.g. Angular→React),
+     *  and partial extractions (e.g. monolith→microservice). */
+    REWRITE;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -58,6 +62,7 @@ public enum JobType {
             case REVIEW_FEATURE   ->  15;
             case REVIEW_USERSTORY ->  15;
             case SELF_ANALYSIS    ->  10;
+            case REWRITE          ->  55;
         };
     }
 }

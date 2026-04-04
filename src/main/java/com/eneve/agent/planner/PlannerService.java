@@ -81,7 +81,83 @@ public class PlannerService {
                 sourceType != null ? sourceType : "FREE_TEXT",
                 sourceRef,
                 safeRepoUrl,
+                null, // sourceRepoUrl — set by generateRewritePlan for REWRITE plans
                 targetBranch != null ? targetBranch : "main",
+                title,
+                new PlanData(List.of()),
+                now,
+                now,
+                null,
+                null,
+                null,
+                null,
+                null,
+                markdownContent,
+                null,
+                false,
+                null // createdBy set by PlanResource after generation
+        );
+    }
+
+    /**
+     * Generate an execution plan for a cross-language rewrite, framework migration, or code extraction.
+     *
+     * @param specText        the full specification describing the rewrite goal
+     * @param sourceRepoUrl   the source repository URL (read-only reference)
+     * @param targetRepoUrl   the target repository URL (where the rewritten code will live)
+     * @param sourceLanguage  source language/framework hint (e.g. "php/laravel")
+     * @param targetLanguage  target language/framework hint (e.g. "dotnet/csharp")
+     * @param rewriteMode     "full_rewrite", "framework_migration", or "extraction" (defaults to full_rewrite)
+     * @param scopeHint       for extraction mode: description of the bounded context to extract
+     * @param targetBranch    the base branch in the target repo (e.g. "main")
+     * @param sourceType      JIRA, FREE_TEXT, CHAT, or URL
+     * @param sourceRef       JIRA key, conversation ID, or null
+     * @return a DRAFT ExecutionPlan with markdown content, or null on failure
+     */
+    public ExecutionPlan generateRewritePlan(String specText,
+                                             String sourceRepoUrl, String targetRepoUrl,
+                                             String sourceLanguage, String targetLanguage,
+                                             String rewriteMode, String scopeHint,
+                                             String targetBranch, String sourceType, String sourceRef) {
+        if (specText == null || specText.isBlank()) {
+            LOG.warn("PlannerService: empty spec text, cannot generate rewrite plan");
+            return null;
+        }
+
+        String safeSourceRepoUrl = UrlUtils.stripCredentials(sourceRepoUrl);
+        String safeTargetRepoUrl = UrlUtils.stripCredentials(targetRepoUrl);
+        String effectiveMode = (rewriteMode != null && !rewriteMode.isBlank()) ? rewriteMode : "full_rewrite";
+        String effectiveScopeHint = (scopeHint != null) ? scopeHint : "";
+        String effectiveTargetBranch = (targetBranch != null && !targetBranch.isBlank()) ? targetBranch : "main";
+
+        String prompt = promptTemplates.resolve("rewrite-planner", Map.of(
+                "SOURCE_REPO_URL", safeSourceRepoUrl != null ? safeSourceRepoUrl : "(unspecified)",
+                "TARGET_REPO_URL", safeTargetRepoUrl != null ? safeTargetRepoUrl : "(unspecified)",
+                "SOURCE_LANGUAGE", sourceLanguage != null ? sourceLanguage : "(unspecified)",
+                "TARGET_LANGUAGE", targetLanguage != null ? targetLanguage : "(unspecified)",
+                "REWRITE_MODE", effectiveMode,
+                "SCOPE_HINT", effectiveScopeHint,
+                "TARGET_BRANCH", effectiveTargetBranch,
+                "SPEC", specText
+        ));
+
+        String planId = "plan-" + UUID.randomUUID();
+        String markdownContent = callClaude(prompt, planId);
+        if (markdownContent == null) {
+            return null;
+        }
+
+        String title = deriveTitle(specText, sourceRef);
+        Instant now = Instant.now();
+
+        return new ExecutionPlan(
+                planId,
+                PlanStatus.DRAFT.name(),
+                sourceType != null ? sourceType : "FREE_TEXT",
+                sourceRef,
+                safeTargetRepoUrl,
+                safeSourceRepoUrl,
+                effectiveTargetBranch,
                 title,
                 new PlanData(List.of()),
                 now,

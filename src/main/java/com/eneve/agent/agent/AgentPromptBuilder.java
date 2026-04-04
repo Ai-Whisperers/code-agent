@@ -27,6 +27,7 @@ import com.eneve.agent.model.FixPrRequest;
 import com.eneve.agent.model.GenerateDocsRequest;
 import com.eneve.agent.model.GenerateTestsRequest;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.model.RewriteRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.rules.CursorRulesLoader;
 import com.eneve.agent.tools.GuardrailConfig;
@@ -342,6 +343,82 @@ public class AgentPromptBuilder {
 
         return rulesLoader.buildSystemPrompt(sharedRules, Collections.emptyList(),
                 null, guardrailText, instructions);
+    }
+
+    /**
+     * Builds the system prompt for a REWRITE job step.
+     *
+     * <p>The agent will have two subdirectories in its workspace:
+     * <ul>
+     *   <li>{@code source/} — read-only clone of the source repository</li>
+     *   <li>{@code target/} — read-write clone of the target repository</li>
+     * </ul>
+     *
+     * @param request   the rewrite job request
+     * @param workspace the shared plan workspace (root contains source/ and target/ subdirs)
+     */
+    public String buildRewritePrompt(RewriteRequest request, WorkspaceContext workspace) {
+        Path targetRoot = workspace.getRepoPath("target");
+
+        String guardrailText = resolveWritableGuardrailsForRewrite(
+                targetRoot != null ? targetRoot : workspace.getRoot());
+
+        String instructions = """
+                You are rewriting code from a %s source repository into a %s target repository.
+
+                Workspace layout:
+                - `source/` — READ-ONLY. Contains the original source code. You may read any file here.
+                - `target/` — READ-WRITE. This is where you write the rewritten code. Never modify files under `source/`.
+
+                Rewrite mode: %s
+                %s
+
+                Task for this step:
+                %s
+
+                Apply SOLID design principles throughout:
+                - Single Responsibility Principle: each class/module has one reason to change
+                - Open/Closed Principle: extend behaviour without modifying existing code
+                - Liskov Substitution Principle: subtypes must be substitutable for their base types
+                - Interface Segregation Principle: prefer small, focused interfaces
+                - Dependency Inversion Principle: depend on abstractions, not concretions
+
+                Use idiomatic %s patterns and conventions. Do not port anti-patterns from the source.
+
+                When you are done with this step, commit all changes in `target/` only.
+                Do NOT commit or modify anything in `source/`.
+                """.formatted(
+                request.sourceLanguage() != null ? request.sourceLanguage() : "source",
+                request.targetLanguage() != null ? request.targetLanguage() : "target",
+                request.rewriteModeOrDefault(),
+                buildScopeHintSection(request),
+                request.prompt() != null ? request.prompt() : "Complete the rewrite step as described in the plan.",
+                request.targetLanguage() != null ? request.targetLanguage() : "target language"
+        );
+
+        List<String> sharedRules = rulesLoader.loadFromRulesRepo(null, Collections.emptyList());
+        List<String> repoRules = targetRoot != null
+                ? rulesLoader.loadFromTargetRepo(targetRoot)
+                : Collections.emptyList();
+
+        return rulesLoader.buildSystemPrompt(sharedRules, repoRules, null, guardrailText, instructions);
+    }
+
+    private String buildScopeHintSection(RewriteRequest request) {
+        String hint = request.scopeHintOrEmpty();
+        if (hint.isBlank()) return "";
+        return "Scope: " + hint + "\n";
+    }
+
+    private String resolveWritableGuardrailsForRewrite(Path targetRoot) {
+        return promptTemplates.resolve("guardrails.writable", Map.of(
+                "BLOCKED_PATHS", String.join(", ", guardrails.getBlockedPaths()),
+                "ALLOWED_COMMANDS", String.join(", ", guardrails.getAllowedCommands()),
+                "MAX_FILES", String.valueOf(guardrails.getMaxFilesChanged()),
+                "MAX_LINES", String.valueOf(guardrails.getMaxLinesChanged()),
+                "STOP_CONDITION", "Stop as soon as the step task is complete. Only write to target/. Never modify source/.",
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(targetRoot)
+        ));
     }
 
     // ─── Private helpers ────────────────────────────────────────────────

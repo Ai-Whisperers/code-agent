@@ -19,6 +19,7 @@ import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.MetricsJobRequest;
 import com.eneve.agent.model.RepoCoordinates;
 import com.eneve.agent.model.ReviewPrRequest;
+import com.eneve.agent.model.RewriteRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.SyncConfluenceRequest;
 import com.eneve.agent.scm.GitPlatformService;
@@ -373,6 +374,14 @@ public class PlanOrchestratorService {
                 // in markCompleted() once every phase has finished.
                 updatedParams.put("skipPrCreation", "true");
                 effectiveStep = step.withUpdates(null, null, null, updatedParams);
+            } else if ("REWRITE".equalsIgnoreCase(step.jobType())) {
+                Map<String, String> updatedParams = new java.util.LinkedHashMap<>(
+                        step.params() != null ? step.params() : Map.of());
+                updatedParams.put("branchName", sharedBranch);
+                // All plan REWRITE steps skip PR creation — the orchestrator creates the PR
+                // in markCompleted() once every phase has finished.
+                updatedParams.put("skipPrCreation", "true");
+                effectiveStep = step.withUpdates(null, null, null, updatedParams);
             } else if ("GENERATE_DOCS".equalsIgnoreCase(step.jobType())
                     || "GENERATE_TESTS".equalsIgnoreCase(step.jobType())) {
                 Map<String, String> updatedParams = new java.util.LinkedHashMap<>(
@@ -671,6 +680,28 @@ public class PlanOrchestratorService {
                         ccThreshold,
                         maxIter,
                         plan.planId()
+                ));
+            }
+            case "REWRITE" -> {
+                String branchName = param(step, "branchName",
+                        "agent/plan/" + plan.planId().substring(0, 8) + "-rewrite");
+                boolean skipPr = "true".equalsIgnoreCase(param(step, "skipPrCreation", null));
+                String sourceLanguage = param(step, "sourceLanguage", null);
+                String targetLanguage = param(step, "targetLanguage", null);
+                String rewriteMode = param(step, "rewriteMode", null);
+                String scopeHint = param(step, "scopeHint", null);
+                yield new JobRecord(jobId, new RewriteRequest(
+                        plan.sourceRepoUrl(),          // sourceRepoUrl from plan
+                        plan.repoUrl(),                // targetRepoUrl = plan's primary repo
+                        branchName,
+                        plan.targetBranch(),
+                        sourceLanguage,
+                        targetLanguage,
+                        rewriteMode,
+                        scopeHint,
+                        nullIfBlank(step.prompt()),
+                        null,                          // planId set below via job.setPlanId()
+                        skipPr ? Boolean.TRUE : null
                 ));
             }
             default -> {

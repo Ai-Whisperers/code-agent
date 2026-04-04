@@ -6,6 +6,7 @@ import java.util.Map;
 
 import com.eneve.agent.agent.service.KnowledgeIndexerService;
 import com.eneve.agent.agent.store.IntegrationFilterStore;
+import com.eneve.agent.agent.store.KnowledgeQualityBlacklistStore;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
@@ -44,6 +45,9 @@ public class KnowledgeResource {
 
     @Inject
     IntegrationFilterStore integrationFilterStore;
+
+    @Inject
+    KnowledgeQualityBlacklistStore blacklistStore;
 
     // ── Indexing endpoints ────────────────────────────────────────────────
 
@@ -345,6 +349,39 @@ public class KnowledgeResource {
         } catch (KnowledgeService.StaticFileNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         }
+    }
+
+    // ── Quality blacklist ─────────────────────────────────────────────────
+
+    @GET
+    @Path("/blacklist")
+    @Operation(operationId = "listKnowledgeBlacklist", summary = "List quality-filter blacklist entries",
+               description = "Returns paginated entries that were rejected by the Claude quality filter.")
+    @APIResponse(responseCode = "200", description = "Paginated blacklist entries")
+    public Response listBlacklist(
+            @Parameter(description = "Page size (default 20, max 100)")
+            @QueryParam("limit") @DefaultValue("20") int limit,
+            @Parameter(description = "Zero-based offset")
+            @QueryParam("offset") @DefaultValue("0") int offset) {
+        int safeLimit = Math.min(Math.max(limit, 1), 100);
+        var entries = blacklistStore.list(safeLimit, offset);
+        long total   = blacklistStore.count();
+        return Response.ok(Map.of("items", entries, "total", total, "limit", safeLimit, "offset", offset)).build();
+    }
+
+    @DELETE
+    @Path("/blacklist/{sourceType}/{sourceId}")
+    @Operation(operationId = "removeKnowledgeBlacklistEntry",
+               summary = "Remove a blacklist entry",
+               description = "Lifts the blacklist entry so the source will be re-evaluated on the next indexing run.")
+    @APIResponses({
+            @APIResponse(responseCode = "204", description = "Entry removed (or did not exist)"),
+    })
+    public Response removeBlacklistEntry(
+            @Parameter(required = true) @PathParam("sourceType") String sourceType,
+            @Parameter(required = true) @PathParam("sourceId")   String sourceId) {
+        blacklistStore.remove(sourceType, sourceId);
+        return Response.noContent().build();
     }
 
     // ── Request body records ──────────────────────────────────────────────

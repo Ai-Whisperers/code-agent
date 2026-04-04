@@ -292,7 +292,7 @@ public class UpgradeService {
         PlanData planData = markdownToPlanData(plan.markdownContent(), specText, branchName);
         plan = new ExecutionPlan(
                 plan.planId(), plan.status(), plan.sourceType(), plan.sourceRef(),
-                plan.repoUrl(), plan.targetBranch(), plan.title(),
+                plan.repoUrl(), null, plan.targetBranch(), plan.title(),
                 planData,
                 plan.createdAt(), plan.updatedAt(),
                 null, null, null, null, null,
