@@ -461,7 +461,9 @@ public class AgentPromptBuilder {
         if (Files.exists(workspaceRoot.resolve("package.json"))) {
             return NodeProjectHelper.suggestedTestCommand(workspaceRoot);
         }
-        if (DotnetWorkspaceProbe.hasDotnetAtRoot(workspaceRoot)) {
+        if (DotnetWorkspaceProbe.hasDotnetAtRoot(workspaceRoot)
+                || !DotnetWorkspaceProbe.findSlnFiles(workspaceRoot).isEmpty()
+                || !DotnetWorkspaceProbe.findCsprojFiles(workspaceRoot).isEmpty()) {
             return DotnetWorkspaceProbe.resolveDotnetTestCommand(workspaceRoot);
         }
         if (Files.exists(workspaceRoot.resolve("composer.json"))) {
