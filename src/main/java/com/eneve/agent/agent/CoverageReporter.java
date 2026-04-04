@@ -11,6 +11,7 @@ import javax.xml.parsers.DocumentBuilder;
 
 import com.eneve.agent.util.XmlParserFactory;
 
+import com.eneve.agent.util.JdkResolver;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
@@ -144,7 +145,18 @@ public class CoverageReporter {
 
         LOG.infof("CoverageReporter: running coverage (%s JaCoCo)",
                 jacocoPresent ? "configured" : "injected into pom.xml");
-        return runMavenJacoco(workspace, timeoutMinutes, OnBuildFailure.LOG_AND_RETURN_NULL);
+        CoverageSnapshot result = runMavenJacoco(workspace, timeoutMinutes, OnBuildFailure.LOG_AND_RETURN_NULL);
+        if (result != null) return result;
+
+        // If the run returned null it may be due to a JDK incompatibility.
+        // Try again with the JDK version declared in pom.xml.
+        String alternateJavaHome = JdkResolver.resolveForWorkspace(workspace.getRoot());
+        if (alternateJavaHome != null && !alternateJavaHome.equals(System.getenv("JAVA_HOME"))) {
+            LOG.infof("CoverageReporter: retrying coverage with alternate JDK: %s", alternateJavaHome);
+            return runMavenJacocoWithJavaHome(workspace, timeoutMinutes, alternateJavaHome,
+                    OnBuildFailure.LOG_AND_RETURN_NULL);
+        }
+        return null;
     }
 
     /**
@@ -199,10 +211,19 @@ public class CoverageReporter {
      */
     private CoverageSnapshot runMavenJacoco(WorkspaceContext workspace, long timeoutMinutes,
                                              OnBuildFailure onFailure) {
+        return runMavenJacocoWithJavaHome(workspace, timeoutMinutes, null, onFailure);
+    }
+
+    /**
+     * Like {@link #runMavenJacoco} but overrides {@code JAVA_HOME} for the child process.
+     * Pass {@code null} to use the agent's default JDK.
+     */
+    private CoverageSnapshot runMavenJacocoWithJavaHome(WorkspaceContext workspace, long timeoutMinutes,
+                                                         String javaHome, OnBuildFailure onFailure) {
         String effectiveMavenHome = resolveMavenHome();
         String command = buildJacocoCommand(workspace, effectiveMavenHome);
         try {
-            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(null, effectiveMavenHome, "sh", "-c", command)
+            ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(javaHome, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
                     .redirectErrorStream(true);
             Process proc = pb.start();

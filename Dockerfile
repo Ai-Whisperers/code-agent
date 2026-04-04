@@ -102,6 +102,20 @@ RUN set -e && \
     /tmp/dotnet-install.sh --channel 9.0 --install-dir /usr/share/dotnet && \
     ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet && \
     rm /tmp/dotnet-install.sh && \
+    # Adoptium Temurin JDK 8 and 17 — used by CoverageReporter/BuildValidator when a
+    # project requires an older Java version than the agent's default JDK 21.
+    # JDK 21 is already provided by the base image at $JAVA_HOME.
+    # Temurin installs into /usr/lib/jvm/temurin-8 and /usr/lib/jvm/temurin-17.
+    ADOPTIUM_KEY_SHA512=f7384c63913a38591a7d1c84937d3f58023f97d092de4dd3fa1436f2370e0d9e00fec84e67920801c26dc52d8462f29afbcd055a25f23b990ee5aca079663784 && \
+    curl -fsSL https://packages.adoptium.net/artifactory/api/gpg/key/public \
+        -o /tmp/adoptium.gpg.key && \
+    echo "${ADOPTIUM_KEY_SHA512}  /tmp/adoptium.gpg.key" | sha512sum -c - && \
+    cat /tmp/adoptium.gpg.key | gpg --dearmor -o /etc/apt/trusted.gpg.d/adoptium.gpg && \
+    rm /tmp/adoptium.gpg.key && \
+    echo "deb https://packages.adoptium.net/artifactory/deb $(awk -F= '/^VERSION_CODENAME/{print$2}' /etc/os-release) main" \
+        > /etc/apt/sources.list.d/adoptium.list && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends temurin-8-jdk temurin-17-jdk && \
     # Cleanup
     apt-get purge -y gnupg && apt-get autoremove -y && \
     rm -rf /var/lib/apt/lists/*
@@ -154,6 +168,11 @@ RUN chmod +x /entrypoint.sh && \
     chown -R appuser:appuser /app /opt/maven-settings
 
 ENV JAVA_OPTS="-Djava.util.logging.manager=org.jboss.logmanager.LogManager"
+# Explicit paths for the alternate JDKs installed above.
+# JdkResolver uses these as a fast-path before scanning /usr/lib/jvm/.
+ENV JAVA_8_HOME=/usr/lib/jvm/temurin-8
+ENV JAVA_17_HOME=/usr/lib/jvm/temurin-17
+ENV JAVA_21_HOME=/opt/java/openjdk
 
 USER appuser
 

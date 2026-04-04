@@ -1,6 +1,7 @@
 package com.eneve.agent.agent;
 
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.util.JdkResolver;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -23,8 +24,12 @@ public class BuildValidator {
 
     public void validate(WorkspaceContext workspace) throws Exception {
         long timeoutMinutes = Long.parseLong(settings.get("run-fix.job-timeout-minutes", "30"));
-        String effectiveJavaHome = settings.get("build.java-home", "").isBlank() ? null : settings.get("build.java-home", "");
+        String configuredJavaHome = settings.get("build.java-home", "");
         String effectiveMavenHome = settings.get("build.maven-home", "").isBlank() ? null : settings.get("build.maven-home", "");
+        // If build.java-home is not explicitly set, try to resolve the JDK required by the project.
+        String effectiveJavaHome = configuredJavaHome.isBlank()
+                ? JdkResolver.resolveForWorkspace(workspace.getRoot())
+                : configuredJavaHome;
         String command = detectTestCommand(workspace.getRoot(), effectiveMavenHome);
         if (command == null) {
             LOG.info("No recognized test command found, skipping build validation");
