@@ -66,6 +66,8 @@ public class AgentTriggerQualityReportTool implements ToolExecutor {
                     repoSlug
             );
             JobRecord job = new JobRecord(jobId, request);
+            job.setWorkspace(workspaceName);
+            job.setRepoSlug(repoSlug);
             jobStore.put(job);
 
             if (!jobQueue.submit(job)) {

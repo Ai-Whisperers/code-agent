@@ -71,6 +71,8 @@ public class QualityReportScheduler {
                 QualityReportJobRequest request = new QualityReportJobRequest(
                         repoUrl, branch, repo.workspace(), repo.repoSlug());
                 JobRecord job = new JobRecord(jobId, request);
+                job.setWorkspace(repo.workspace());
+                job.setRepoSlug(repo.repoSlug());
                 jobStore.put(job);
 
                 if (!jobQueue.submit(job)) {

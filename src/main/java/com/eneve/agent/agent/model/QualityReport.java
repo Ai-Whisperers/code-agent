@@ -24,7 +24,9 @@ public record QualityReport(
         AikidoSection aikido,
         ComplexitySection complexity,
         ReviewSection reviewQuality,
-        TestPresenceSection testPresence
+        TestPresenceSection testPresence,
+        String archetype,
+        String archetypeVersion
 ) {
 
     // ─── Nested section records ───────────────────────────────────────────

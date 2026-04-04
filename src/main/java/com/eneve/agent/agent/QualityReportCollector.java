@@ -9,6 +9,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.eneve.agent.agent.ArchetypeDetector;
+import com.eneve.agent.agent.ArchetypeDetector.ArchetypeInfo;
 import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.model.QualityReport.*;
 import java.util.stream.Collectors;
@@ -42,6 +44,7 @@ public class QualityReportCollector {
 
     private static final Logger LOG = Logger.getLogger(QualityReportCollector.class);
 
+    @Inject ArchetypeDetector archetypeDetector;
     @Inject TestPresenceChecker testPresenceChecker;
     @Inject LinterService linterService;
     @Inject AikidoService aikidoService;
@@ -109,6 +112,19 @@ public class QualityReportCollector {
             double score = QualityReport.computeScore(coverageSection, testPresenceSection, linterSection,
                     aikidoSection, complexitySection, reviewSection);
 
+            String detectedArchetype = null;
+            String detectedArchetypeVersion = null;
+            try {
+                ArchetypeInfo archetypeInfo = archetypeDetector.detect(workspace.getRoot());
+                if (archetypeInfo != null) {
+                    detectedArchetype = archetypeInfo.archetype();
+                    detectedArchetypeVersion = archetypeInfo.version();
+                }
+            } catch (Exception e) {
+                LOG.warnf("QualityReportCollector: archetype detection failed for %s/%s: %s",
+                        workspaceName, repoSlug, e.getMessage());
+            }
+
             return new QualityReport(
                     UUID.randomUUID().toString(),
                     workspaceName,
@@ -121,7 +137,9 @@ public class QualityReportCollector {
                     aikidoSection,
                     complexitySection,
                     reviewSection,
-                    testPresenceSection
+                    testPresenceSection,
+                    detectedArchetype,
+                    detectedArchetypeVersion
             );
         }
     }

@@ -107,6 +107,8 @@ public class QualityReportService {
         QualityReportJobRequest jobRequest = new QualityReportJobRequest(
                 resolvedRepoUrl, branch, workspace, repoSlug);
         JobRecord job = new JobRecord(jobId, jobRequest);
+        job.setWorkspace(workspace);
+        job.setRepoSlug(repoSlug);
         jobStore.put(job);
 
         if (!jobQueue.submit(job)) {

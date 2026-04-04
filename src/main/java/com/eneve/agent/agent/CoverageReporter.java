@@ -221,7 +221,8 @@ public class CoverageReporter {
     private CoverageSnapshot runMavenJacocoWithJavaHome(WorkspaceContext workspace, long timeoutMinutes,
                                                          String javaHome, OnBuildFailure onFailure) {
         String effectiveMavenHome = resolveMavenHome();
-        String command = buildJacocoCommand(workspace, effectiveMavenHome);
+        String command = buildJacocoCommand(workspace, effectiveMavenHome, isJacocoPresent(workspace));
+        LOG.infof("CoverageReporter: running command: %s", command);
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilderWithMaven(javaHome, effectiveMavenHome, "sh", "-c", command)
                     .directory(workspace.getRoot().toFile())
@@ -248,14 +249,13 @@ public class CoverageReporter {
                             workspace.getRoot().getFileName());
                     return null;
                 }
-                int tailLen = onFailure == OnBuildFailure.THROW ? 3000 : 2000;
-                String tail = output.length() > tailLen ? output.substring(output.length() - tailLen) : output;
+                String errorLines = extractErrorLines(output);
                 if (onFailure == OnBuildFailure.THROW) {
                     throw new RuntimeException("Build error during coverage measurement (exit "
-                            + proc.exitValue() + "):\n" + tail);
+                            + proc.exitValue() + "):\n" + errorLines);
                 }
-                LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d): %s",
-                        proc.exitValue(), tail);
+                LOG.warnf("CoverageReporter: coverage run failed (build error, exit %d, total output %d chars):\n%s",
+                        proc.exitValue(), output.length(), errorLines);
                 return null;
             }
 
@@ -295,34 +295,125 @@ public class CoverageReporter {
     }
 
     /**
-     * Builds the {@code mvn jacoco:prepare-agent test jacoco:report} shell command.
-     * Uses the fully-qualified goal form so Maven does not need to resolve the "jacoco"
-     * prefix from plugin groups — works even when the plugin is not yet in the local repo.
-     * {@code -Dmaven.test.failure.ignore=true} lets Maven reach jacoco:report even when
-     * environment-sensitive integration tests fail in the sandbox.
+     * Builds the Maven JaCoCo coverage command.
+     *
+     * <p>When JaCoCo is already declared in the POM ({@code jacocoAlreadyInPom=true}), the
+     * POM's own {@code prepare-agent} execution fires automatically during the {@code test}
+     * lifecycle. Invoking {@code prepare-agent} again on the CLI would attach a <em>second</em>
+     * JaCoCo agent to the forked test JVM — two agents writing to the same {@code jacoco.exec}
+     * file cause a JVM crash (exit 134 / SIGABRT). In this case we only need to run
+     * {@code test} (the POM handles agent injection) and then {@code jacoco:report} explicitly
+     * to ensure the XML report is generated regardless of which report phase is configured.
+     *
+     * <p>When JaCoCo was injected by us ({@code jacocoAlreadyInPom=false}), we must invoke
+     * {@code prepare-agent} explicitly because the injected plugin has no bound lifecycle
+     * execution for that goal.
      */
-    private String buildJacocoCommand(WorkspaceContext workspace, String effectiveMavenHome) {
+    private String buildJacocoCommand(WorkspaceContext workspace, String effectiveMavenHome,
+                                      boolean jacocoAlreadyInPom) {
         String jacocoVersion = settings.get(JACOCO_VERSION_SETTING, JACOCO_VERSION_DEFAULT);
         String jacocoGoal = "org.jacoco:jacoco-maven-plugin:" + jacocoVersion;
+        String excludes = buildQuarkusTestExcludes(workspace.getRoot());
+        String goals = jacocoAlreadyInPom
+                // POM already binds prepare-agent — just run tests then generate the report.
+                ? "test " + jacocoGoal + ":report"
+                // We injected JaCoCo — must invoke prepare-agent explicitly before tests.
+                : jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report";
         return ProcessHelper.mvn(workspace.getRoot(), effectiveMavenHome)
-                + " " + jacocoGoal + ":prepare-agent test " + jacocoGoal + ":report"
-                + " -q -Dmaven.test.failure.ignore=true";
+                + " " + goals
+                // --no-transfer-progress suppresses download noise without hiding error output.
+                // Intentionally NOT using -q (quiet): quiet mode suppresses application startup
+                // errors (logged at INFO) making it impossible to detect and classify failures.
+                + " --no-transfer-progress -Dmaven.test.failure.ignore=true"
+                + excludes;
     }
 
     /**
-     * Returns true when the Maven output indicates a permanent JDK/compiler version
-     * incompatibility — i.e. the project cannot be compiled by the JDK running the agent.
-     * These failures are not transient and should not produce a WARN on every run.
+     * Scans the workspace for test classes annotated with {@code @QuarkusTest} and returns
+     * a Surefire {@code -Dexcludes} argument that skips them.
+     *
+     * <p>Quarkus integration tests boot the full application and require live infrastructure
+     * (database, message broker, etc.) that is not available in the quality-report sandbox.
+     * Excluding them lets the plain unit tests run and contribute to coverage without the
+     * build crashing on application startup.
+     *
+     * <p>Returns an empty string when no {@code @QuarkusTest} classes are found (non-Quarkus
+     * projects are unaffected).
+     */
+    private static String buildQuarkusTestExcludes(Path projectRoot) {
+        Path testSrc = projectRoot.resolve("src/test/java");
+        if (!Files.exists(testSrc)) return "";
+        try {
+            String patterns = Files.walk(testSrc)
+                    .filter(p -> p.toString().endsWith(".java"))
+                    .filter(p -> {
+                        try {
+                            return Files.readString(p).contains("@QuarkusTest");
+                        } catch (IOException e) {
+                            return false;
+                        }
+                    })
+                    .map(p -> {
+                        // Convert absolute path to a **/<ClassName>.class glob for Surefire
+                        String name = p.getFileName().toString().replace(".java", ".class");
+                        return "**/" + name;
+                    })
+                    .collect(java.util.stream.Collectors.joining(","));
+
+            if (patterns.isEmpty()) return "";
+            LOG.infof("CoverageReporter: excluding @QuarkusTest classes from coverage run: %s", patterns);
+            return " -Dexcludes='" + patterns + "'";
+        } catch (IOException e) {
+            LOG.debugf("CoverageReporter: could not scan for @QuarkusTest classes: %s", e.getMessage());
+            return "";
+        }
+    }
+
+    /**
+     * Extracts all {@code [ERROR]} and {@code [WARNING]} lines from Maven output, plus the
+     * last 20 lines for stack-trace context. This gives a compact, signal-rich view of the
+     * failure regardless of total output size — far more useful than a head/tail character
+     * slice which may miss the actual root-cause message buried in the middle.
+     */
+    private static String extractErrorLines(String output) {
+        if (output == null) return "(no output)";
+        String[] lines = output.split("\n");
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            if (line.startsWith("[ERROR]") || line.startsWith("[WARNING]")) {
+                sb.append(line).append('\n');
+            }
+        }
+        // Always append the last 20 lines for Maven lifecycle context
+        int start = Math.max(0, lines.length - 20);
+        sb.append("--- last ").append(lines.length - start).append(" lines ---\n");
+        for (int i = start; i < lines.length; i++) {
+            sb.append(lines[i]).append('\n');
+        }
+        return sb.toString();
+    }
+
+    /**
+     * Returns true when the Maven output indicates a permanent, non-transient build failure
+     * that will recur on every run in the sandbox — JDK/compiler incompatibilities or
+     * Quarkus application startup failures caused by missing infrastructure (DB, broker).
+     * These are logged at DEBUG rather than WARN to avoid flooding logs on every quality run.
      */
     private static boolean isJdkIncompatibilityError(String output) {
         if (output == null) return false;
-        return output.contains("NoSuchFieldError")
+        // JDK / compiler version mismatches — match only error-context phrases, not POM content.
+        // "release version" and "source release" appear in javac error messages.
+        // "--release N" as a bare compiler flag error (not inside a POM <release> tag).
+        if (output.contains("NoSuchFieldError")
                 || output.contains("NoSuchMethodError")
                 || output.contains("UnsupportedClassVersionError")
                 || output.contains("Fatal error compiling")
-                || output.contains("release version")
-                || output.contains("source release")
-                || output.contains("--release");
+                || output.contains("release version ")
+                || output.contains("source release ")
+                || output.contains("error: --release")) {
+            return true;
+        }
+        return false;
     }
 
     // ─── POM manipulation ────────────────────────────────────────────────
