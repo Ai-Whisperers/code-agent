@@ -62,6 +62,10 @@ public class ArchetypeDetector {
         ArchetypeInfo maven = mavenDetector.detect(projectRoot);
         if (maven != null) return maven;
 
+        // WildFly Dockerfile check for non-Maven projects (e.g. standalone Docker-only repos).
+        ArchetypeInfo wildFlyDocker = dockerfileDetector.detectWildFly(projectRoot);
+        if (wildFlyDocker != null) return wildFlyDocker;
+
         // Non-Maven detectors tried in priority order.
         List<com.eneve.agent.agent.detector.Detector> nonMavenDetectors = List.of(
                 new DotnetDetector(objectMapper),

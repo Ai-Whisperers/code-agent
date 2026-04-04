@@ -6,11 +6,13 @@ import java.util.Map;
 import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.agent.store.ConversationContextStore;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.TeamStore;
 import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.model.CustomerConfig;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
-import com.eneve.agent.model.TeamMember;
+import com.eneve.agent.model.Team;
+import com.eneve.agent.model.TeamMemberEntry;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -39,6 +41,9 @@ public class LookupCustomerTool implements ToolExecutor {
 
     @Inject
     ConversationContextStore contextStore;
+
+    @Inject
+    TeamStore teamStore;
 
     @Override
     public String name() {
@@ -234,13 +239,20 @@ public class LookupCustomerTool implements ToolExecutor {
                 if (p.jira() != null && p.jira().projects() != null && !p.jira().projects().isEmpty()) {
                     sb.append("  - Jira: ").append(p.jira().projects().values()).append("\n");
                 }
-                if (p.teams() != null && !p.teams().isEmpty()) {
-                    p.teams().forEach((role, members) -> {
-                        sb.append("  - ").append(role).append(": ");
-                        members.forEach(m -> sb.append(m.name()).append(", "));
-                        sb.deleteCharAt(sb.length() - 2);
-                        sb.append("\n");
-                    });
+                List<Team> teams = teamStore.listTeamsForProduct(p.productId());
+                for (Team t : teams) {
+                    sb.append("  - Team: **").append(t.name()).append("**");
+                    if (t.members() != null && !t.members().isEmpty()) {
+                        sb.append(" — ");
+                        t.members().forEach(m -> {
+                            String name = (m.firstName() != null ? m.firstName() + " " : "")
+                                    + (m.lastName() != null ? m.lastName() : "");
+                            sb.append(name.isBlank() ? m.username() : name.trim())
+                              .append(" (").append(m.role()).append("), ");
+                        });
+                        sb.setLength(sb.length() - 2);
+                    }
+                    sb.append("\n");
                 }
             }
             sb.append("\n");
@@ -277,14 +289,20 @@ public class LookupCustomerTool implements ToolExecutor {
         StringBuilder sb = new StringBuilder();
         sb.append("## Product: ").append(p.displayName()).append(" (`").append(p.productId()).append("`)\n");
         sb.append("This product is not linked to a customer — no AWS environment context is available.\n\n");
-        if (p.teams() != null && !p.teams().isEmpty()) {
-            sb.append("### Team\n");
-            for (Map.Entry<String, List<TeamMember>> entry : p.teams().entrySet()) {
-                sb.append("**").append(entry.getKey()).append("**:\n");
-                for (TeamMember m : entry.getValue()) {
-                    sb.append("  - ").append(m.name());
-                    if (m.email() != null) sb.append(" <").append(m.email()).append(">");
-                    sb.append("\n");
+        List<Team> teams = teamStore.listTeamsForProduct(p.productId());
+        if (!teams.isEmpty()) {
+            sb.append("### Teams\n");
+            for (Team t : teams) {
+                sb.append("**").append(t.name()).append("**\n");
+                if (t.members() != null) {
+                    for (TeamMemberEntry m : t.members()) {
+                        String name = (m.firstName() != null ? m.firstName() + " " : "")
+                                + (m.lastName() != null ? m.lastName() : "");
+                        sb.append("  - [").append(m.role()).append("] ")
+                          .append(name.isBlank() ? m.username() : name.trim());
+                        if (m.email() != null) sb.append(" <").append(m.email()).append(">");
+                        sb.append("\n");
+                    }
                 }
             }
         }

@@ -7,12 +7,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import com.eneve.agent.agent.store.TeamStore;
 import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.settings.SettingsService;
 
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.Consumes;
+import jakarta.ws.rs.DELETE;
 import jakarta.ws.rs.GET;
 import jakarta.ws.rs.PUT;
 import jakarta.ws.rs.Path;
@@ -58,6 +60,9 @@ public class AdminUserResource {
 
     @Inject
     AuditService auditService;
+
+    @Inject
+    TeamStore teamStore;
 
     // ── DTOs ──────────────────────────────────────────────────────────────────────
 
@@ -132,6 +137,35 @@ public class AdminUserResource {
             LOG.errorf("Failed to update enabled state for user %s: %s", userId, e.getMessage());
             return Response.serverError()
                     .entity(Map.of("error", "Failed to update user: " + e.getMessage()))
+                    .build();
+        }
+    }
+
+    @DELETE
+    @Path("/{id}/teams")
+    public Response removeFromAllTeams(@PathParam("id") String userId) {
+        try (Keycloak kc = buildClient()) {
+            RealmResource realm = kc.realm(targetRealm());
+            UserRepresentation rep = realm.users().get(userId).toRepresentation();
+            String username = rep != null && rep.getUsername() != null ? rep.getUsername() : "";
+
+            int removed = teamStore.removeUserFromAllTeams(userId);
+
+            auditService.log("USERS", "USER_LEFT_COMPANY", "user", userId,
+                    Map.of("username", username, "teamsRemoved", String.valueOf(removed)));
+
+            LOG.infof("User %s removed from all teams (%d memberships)", userId, removed);
+            return Response.ok(Map.of("removed", true, "userId", userId, "membershipsDeleted", removed)).build();
+        } catch (IllegalStateException e) {
+            return Response.status(503).entity(Map.of("error", e.getMessage())).build();
+        } catch (jakarta.ws.rs.NotFoundException e) {
+            // User not in Keycloak — still remove from teams
+            int removed = teamStore.removeUserFromAllTeams(userId);
+            return Response.ok(Map.of("removed", true, "userId", userId, "membershipsDeleted", removed)).build();
+        } catch (Exception e) {
+            LOG.errorf("Failed to remove user %s from all teams: %s", userId, e.getMessage());
+            return Response.serverError()
+                    .entity(Map.of("error", "Failed to remove user from teams: " + e.getMessage()))
                     .build();
         }
     }

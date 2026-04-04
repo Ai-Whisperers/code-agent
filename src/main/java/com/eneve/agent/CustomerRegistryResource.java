@@ -10,7 +10,6 @@ import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.GitConfig;
 import com.eneve.agent.model.JiraProjectConfig;
 import com.eneve.agent.model.ProductConfig;
-import com.eneve.agent.model.TeamMember;
 
 import org.eclipse.microprofile.openapi.annotations.Operation;
 import org.eclipse.microprofile.openapi.annotations.media.Content;
@@ -148,7 +147,7 @@ public class CustomerRegistryResource {
         ProductConfig config = new ProductConfig(
                 productId, null, request.displayName(),
                 request.git(), request.jira(), request.confluence(),
-                request.teams(), request.metadata(),
+                request.metadata(),
                 null, null
         );
         store.upsertProduct(config);
@@ -228,30 +227,6 @@ public class CustomerRegistryResource {
     }
 
     @PUT
-    @Path("/products/{productId}/teams")
-    @Operation(operationId = "updateProductTeams", summary = "Update the teams configuration for a product")
-    @RequestBody(required = true, content = @Content(schema = @Schema(implementation = UpdateTeamsRequest.class)))
-    @APIResponses({
-            @APIResponse(responseCode = "200", description = "Teams updated"),
-            @APIResponse(responseCode = "404", description = "Product not found")
-    })
-    public Response updateTeams(
-            @Parameter(required = true) @PathParam("productId") String productId,
-            UpdateTeamsRequest request) {
-        return store.getProduct(productId).map(existing -> {
-            ProductConfig updated = new ProductConfig(
-                    existing.productId(), existing.customerId(), existing.displayName(),
-                    existing.git(), existing.jira(), existing.confluence(),
-                    request.teams(),
-                    existing.metadata(),
-                    null, null
-            );
-            store.upsertProduct(updated);
-            return Response.ok(store.getProduct(productId).orElse(updated)).build();
-        }).orElse(Response.status(404).entity(Map.of("error", "Product not found: " + productId)).build());
-    }
-
-    @PUT
     @Path("/customers/{customerId}/environments")
     @Operation(operationId = "updateCustomerEnvironments", summary = "Update the environments for a customer")
     @RequestBody(required = true, content = @Content(schema = @Schema(implementation = UpdateEnvironmentsRequest.class)))
@@ -291,12 +266,7 @@ public class CustomerRegistryResource {
             GitConfig git,
             JiraProjectConfig jira,
             ConfluenceProductConfig confluence,
-            Map<String, List<TeamMember>> teams,
             Map<String, Object> metadata
-    ) {}
-
-    public record UpdateTeamsRequest(
-            @Schema(required = true) Map<String, List<TeamMember>> teams
     ) {}
 
     public record UpdateEnvironmentsRequest(

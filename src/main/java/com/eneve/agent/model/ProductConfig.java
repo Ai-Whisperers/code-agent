@@ -1,12 +1,11 @@
 package com.eneve.agent.model;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.Map;
 
 import org.eclipse.microprofile.openapi.annotations.media.Schema;
 
-@Schema(description = "Product configuration including teams and tool integrations")
+@Schema(description = "Product configuration and tool integrations")
 public record ProductConfig(
         @Schema(required = true, description = "Unique product identifier (slug)", example = "myproduct-platform")
         String productId,
@@ -25,9 +24,6 @@ public record ProductConfig(
 
         @Schema(description = "Confluence space configuration")
         ConfluenceProductConfig confluence,
-
-        @Schema(description = "Team members by role. Role keys: productOwner, engineering, devops, operations, qa, security, supportQueue")
-        Map<String, List<TeamMember>> teams,
 
         @Schema(description = "Free-form metadata for custom fields")
         Map<String, Object> metadata,

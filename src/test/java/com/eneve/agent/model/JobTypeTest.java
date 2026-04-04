@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(19, values.length);
+        assertEquals(21, values.length);
         assertEquals(JobType.FIX,                        values[0]);
         assertEquals(JobType.REVIEW,                     values[1]);
         assertEquals(JobType.FIX_PR,                     values[2]);
@@ -30,6 +30,8 @@ class JobTypeTest {
         assertEquals(JobType.SELF_ANALYSIS,              values[16]);
         assertEquals(JobType.GENERATE_ARCHITECTURE,      values[17]);
         assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,values[18]);
+        assertEquals(JobType.KNOWLEDGE_GRAPH,            values[19]);
+        assertEquals(JobType.TECH_DEBT,                  values[20]);
     }
 
     @Test
@@ -53,6 +55,8 @@ class JobTypeTest {
         assertEquals("SELF_ANALYSIS",              JobType.SELF_ANALYSIS.name());
         assertEquals("GENERATE_ARCHITECTURE",      JobType.GENERATE_ARCHITECTURE.name());
         assertEquals("GENERATE_CLOUD_ARCHITECTURE",JobType.GENERATE_CLOUD_ARCHITECTURE.name());
+        assertEquals("KNOWLEDGE_GRAPH",            JobType.KNOWLEDGE_GRAPH.name());
+        assertEquals("TECH_DEBT",                  JobType.TECH_DEBT.name());
     }
 
     @Test
@@ -76,6 +80,8 @@ class JobTypeTest {
         assertEquals(JobType.SELF_ANALYSIS,              JobType.valueOf("SELF_ANALYSIS"));
         assertEquals(JobType.GENERATE_ARCHITECTURE,      JobType.valueOf("GENERATE_ARCHITECTURE"));
         assertEquals(JobType.GENERATE_CLOUD_ARCHITECTURE,JobType.valueOf("GENERATE_CLOUD_ARCHITECTURE"));
+        assertEquals(JobType.KNOWLEDGE_GRAPH,            JobType.valueOf("KNOWLEDGE_GRAPH"));
+        assertEquals(JobType.TECH_DEBT,                  JobType.valueOf("TECH_DEBT"));
     }
 
     @Test
@@ -111,6 +117,8 @@ class JobTypeTest {
         assertEquals(16, JobType.SELF_ANALYSIS.ordinal());
         assertEquals(17, JobType.GENERATE_ARCHITECTURE.ordinal());
         assertEquals(18, JobType.GENERATE_CLOUD_ARCHITECTURE.ordinal());
+        assertEquals(19, JobType.KNOWLEDGE_GRAPH.ordinal());
+        assertEquals(20, JobType.TECH_DEBT.ordinal());
     }
 
     @Test

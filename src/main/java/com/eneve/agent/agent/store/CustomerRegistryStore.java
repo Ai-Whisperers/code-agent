@@ -19,7 +19,8 @@ import java.util.Optional;
  * PostgreSQL-backed store for the customer and product registry.
  * Customers and products use a hybrid schema: relational columns for
  * primary keys and well-known fields, JSONB columns for flexible nested
- * structures (environments, teams, git/jira/confluence config).
+ * structures (environments, git/jira/confluence config).
+ * Team membership is managed separately via {@link TeamStore}.
  */
 @ApplicationScoped
 public class CustomerRegistryStore {
@@ -146,7 +147,7 @@ public class CustomerRegistryStore {
     public List<ProductConfig> listAllProducts() {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 ORDER BY p.display_name
@@ -168,7 +169,7 @@ public class CustomerRegistryStore {
     public List<ProductConfig> listProducts(String customerId) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE cp.customer_id = ?
@@ -192,7 +193,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> getProduct(String productId) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE p.product_id = ?
@@ -215,14 +216,13 @@ public class CustomerRegistryStore {
     public void upsertProduct(ProductConfig product) {
         String sql = """
                 INSERT INTO products (product_id, display_name, git, jira, confluence,
-                                      teams, metadata, created_at, updated_at)
-                VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
+                                      metadata, created_at, updated_at)
+                VALUES (?, ?, ?::jsonb, ?::jsonb, ?::jsonb, ?::jsonb, now(), now())
                 ON CONFLICT (product_id) DO UPDATE
                     SET display_name = EXCLUDED.display_name,
                         git          = EXCLUDED.git,
                         jira         = EXCLUDED.jira,
                         confluence   = EXCLUDED.confluence,
-                        teams        = EXCLUDED.teams,
                         metadata     = EXCLUDED.metadata,
                         updated_at   = now()
                 """;
@@ -233,8 +233,7 @@ public class CustomerRegistryStore {
             ps.setString(3, toJson(product.git()));
             ps.setString(4, toJson(product.jira()));
             ps.setString(5, toJson(product.confluence()));
-            ps.setString(6, toJson(product.teams() != null ? product.teams() : Map.of()));
-            ps.setString(7, toJson(product.metadata() != null ? product.metadata() : Map.of()));
+            ps.setString(6, toJson(product.metadata() != null ? product.metadata() : Map.of()));
             ps.executeUpdate();
             LOG.debugf("Upserted product %s", product.productId());
         } catch (SQLException e) {
@@ -297,7 +296,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> findByJiraProject(String projectKey) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE p.jira -> 'projects' @> ?::jsonb
@@ -324,7 +323,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> findByConfluenceSpace(String spaceKey) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 WHERE p.confluence ->> 'spaceKey' = ?
@@ -350,7 +349,7 @@ public class CustomerRegistryStore {
     public Optional<ProductConfig> findByRepoSlug(String workspace, String repoSlug) {
         String sql = """
                 SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
-                       p.teams, p.metadata, p.created_at, p.updated_at
+                       p.metadata, p.created_at, p.updated_at
                 FROM products p
                 LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 JOIN repo_settings rs ON rs.product_id = p.product_id
@@ -400,7 +399,6 @@ public class CustomerRegistryStore {
                 fromJson(rs.getString("git"), new TypeReference<GitConfig>() {}),
                 fromJson(rs.getString("jira"), new TypeReference<JiraProjectConfig>() {}),
                 fromJson(rs.getString("confluence"), new TypeReference<ConfluenceProductConfig>() {}),
-                fromJson(rs.getString("teams"), new TypeReference<Map<String, List<TeamMember>>>() {}),
                 fromJson(rs.getString("metadata"), new TypeReference<Map<String, Object>>() {}),
                 toInstant(rs.getTimestamp("created_at")),
                 toInstant(rs.getTimestamp("updated_at"))

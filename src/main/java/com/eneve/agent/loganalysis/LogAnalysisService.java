@@ -257,9 +257,11 @@ public class LogAnalysisService {
         }
 
         String decision = triage.genuine() ? "GENUINE" : "NOISE";
+        List<String> effectiveGroups = cfg.effectiveLogGroupNames();
+        String logGroupNameForStore = effectiveGroups.isEmpty() ? "" : effectiveGroups.get(0);
         findingsStore.upsertAfterTriage(
                 group.fingerprint(), customerId, envName,
-                cfg.logGroupName(),
+                logGroupNameForStore,
                 group.parsed().exceptionClass(),
                 group.topFramesText(),
                 group.sampleMessage(),

@@ -9,13 +9,15 @@ import com.eneve.agent.agent.model.ChatEvent;
 import com.eneve.agent.agent.store.ConversationContextStore;
 import com.eneve.agent.agent.store.ConversationRepository;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.TeamStore;
 import com.eneve.agent.attachment.AttachmentService;
 import com.eneve.agent.attachment.ChatAttachment;
 import com.eneve.agent.model.ChatRequest;
 import com.eneve.agent.model.ConversationContext;
 import com.eneve.agent.model.EnvironmentConfig;
 import com.eneve.agent.model.ProductConfig;
-import com.eneve.agent.model.TeamMember;
+import com.eneve.agent.model.Team;
+import com.eneve.agent.model.TeamMemberEntry;
 import com.eneve.agent.planner.ExecutionPlan;
 import com.eneve.agent.planner.PlanStore;
 import com.eneve.agent.planner.PlannerService;
@@ -56,6 +58,7 @@ public class ChatService {
     @Inject ConversationRepository conversationRepository;
     @Inject ConversationContextStore conversationContextStore;
     @Inject CustomerRegistryStore registryStore;
+    @Inject TeamStore teamStore;
     @Inject PromptTemplateService promptTemplateService;
     @Inject PlannerService plannerService;
     @Inject PlanStore planStore;
@@ -458,14 +461,29 @@ public class ChatService {
         sb.append("You are assisting with **").append(product.displayName())
           .append("** (product ID: `").append(product.productId()).append("`).\n\n");
 
-        if (product.teams() != null && !product.teams().isEmpty()) {
-            sb.append("### Team\n");
-            for (Map.Entry<String, List<TeamMember>> entry : product.teams().entrySet()) {
-                sb.append("**").append(entry.getKey()).append("**: ");
-                sb.append(entry.getValue().stream()
-                        .map(m -> m.name() + (m.email() != null ? " <" + m.email() + ">" : ""))
-                        .reduce((a, b) -> a + ", " + b).orElse("(none)"));
-                sb.append("\n");
+        List<Team> teams = teamStore.listTeamsForProduct(product.productId());
+        if (!teams.isEmpty()) {
+            sb.append("### Teams\n");
+            for (Team team : teams) {
+                sb.append("**").append(team.name()).append("**\n");
+                if (team.members() != null && !team.members().isEmpty()) {
+                    Map<String, List<TeamMemberEntry>> byRole = new LinkedHashMap<>();
+                    for (TeamMemberEntry m : team.members()) {
+                        byRole.computeIfAbsent(m.role(), k -> new ArrayList<>()).add(m);
+                    }
+                    byRole.forEach((role, members) -> {
+                        sb.append("- ").append(role).append(": ");
+                        sb.append(members.stream()
+                                .map(m -> {
+                                    String name = (m.firstName() != null ? m.firstName() + " " : "")
+                                            + (m.lastName() != null ? m.lastName() : "");
+                                    name = name.isBlank() ? m.username() : name.trim();
+                                    return name + (m.email() != null ? " <" + m.email() + ">" : "");
+                                })
+                                .reduce((a, b) -> a + ", " + b).orElse("(none)"));
+                        sb.append("\n");
+                    });
+                }
             }
             sb.append("\n");
         }
