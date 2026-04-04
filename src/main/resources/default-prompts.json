@@ -226,6 +226,21 @@
       "SAMPLE_MESSAGE"
     ]
   },
+  "log-analysis-deep": {
+    "description": "Deep root-cause analysis prompt: produces a structured markdown report with root cause, impact, fix recommendations, and prevention guidance for a production exception",
+    "placeholders": [
+      "EXCEPTION_CLASS",
+      "CUSTOMER_ID",
+      "ENVIRONMENT_NAME",
+      "OCCURRENCE_COUNT",
+      "FIRST_SEEN_AT",
+      "LAST_SEEN_AT",
+      "SEVERITY",
+      "AI_REASON",
+      "TOP_FRAMES",
+      "SAMPLE_MESSAGE"
+    ]
+  },
   "generate-architecture": {
     "description": "Generates a Structurizr DSL C4 architecture model by exploring the repository and writing docs/architecture.dsl",
     "placeholders": [

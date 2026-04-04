@@ -78,6 +78,25 @@ class JiraHttpClient {
         }
     }
 
+    /** Same as {@link #postForBody} but returns the raw response so callers can inspect the status code. */
+    HttpResponse<String> postForResponse(String path, String body, String operation) {
+        try {
+            String baseUrl = settingsService.get("jira.base.url", "");
+            HttpRequest request = HttpRequest.newBuilder()
+                    .timeout(Duration.ofSeconds(30))
+                    .uri(SsrfGuard.safeSameHostUri(baseUrl, baseUrl + path))
+                    .header("Authorization", "Basic " + basicAuth())
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "application/json")
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build();
+            return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+        } catch (Exception e) {
+            LOG.errorf("JIRA %s error: %s", operation, e.getMessage());
+            return null;
+        }
+    }
+
     void post(String path, String body, String operation) {
         try {
             String baseUrl = settingsService.get("jira.base.url", "");

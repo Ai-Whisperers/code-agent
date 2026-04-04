@@ -21,5 +21,9 @@ public record LogAnalysisFinding(
         String aiDecision,
         String severity,
         String aiReason,
-        String status
+        String status,
+        String deepAnalysis,
+        Instant analysedAt,
+        String jiraKey,
+        Instant monitoringSince
 ) {}

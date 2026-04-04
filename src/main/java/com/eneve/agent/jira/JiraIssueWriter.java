@@ -1,10 +1,12 @@
 package com.eneve.agent.jira;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
+import java.net.http.HttpResponse;
 import java.time.LocalDate;
 import java.util.Collections;
 import java.util.List;
@@ -39,7 +41,28 @@ class JiraIssueWriter {
     String createIssueSystem(String projectKey, String summary,
                              String description, String issueType, String parentKey,
                              List<String> labels, LocalDate dueDate, String priority) {
-        var fields = mapper.createObjectNode();
+        ObjectNode fields = buildFields(projectKey, summary, description, issueType, parentKey, labels, dueDate);
+
+        if (priority != null && !priority.isBlank()) {
+            fields.putObject("priority").put("name", priority);
+        }
+
+        String result = postIssue(fields, projectKey);
+        if (result != null) return result;
+
+        // Retry without priority if Jira rejected the priority field format
+        if (priority != null && !priority.isBlank()) {
+            LOG.infof("createIssueSystem: retrying without priority field for project %s", projectKey);
+            fields.remove("priority");
+            result = postIssue(fields, projectKey);
+        }
+        return result;
+    }
+
+    private ObjectNode buildFields(String projectKey, String summary, String description,
+                                   String issueType, String parentKey,
+                                   List<String> labels, LocalDate dueDate) {
+        ObjectNode fields = mapper.createObjectNode();
         fields.put("summary", summary);
         fields.putObject("project").put("key", projectKey);
         fields.putObject("issuetype").put("name", issueType);
@@ -55,11 +78,11 @@ class JiraIssueWriter {
         if (dueDate != null) {
             fields.put("duedate", dueDate.toString());
         }
-        if (priority != null && !priority.isBlank()) {
-            fields.putObject("priority").put("name", priority);
-        }
+        return fields;
+    }
 
-        var body = mapper.createObjectNode();
+    private String postIssue(ObjectNode fields, String projectKey) {
+        ObjectNode body = mapper.createObjectNode();
         body.set("fields", fields);
 
         String jsonBody;
@@ -70,15 +93,23 @@ class JiraIssueWriter {
             return null;
         }
 
-        String response = http.postForBody("/rest/api/3/issue", jsonBody, "create issue " + projectKey);
+        HttpResponse<String> response = http.postForResponse("/rest/api/3/issue", jsonBody, "create issue " + projectKey);
         if (response == null) return null;
 
-        try {
-            return mapper.readTree(response).path("key").asText(null);
-        } catch (Exception e) {
-            LOG.warnf("createIssueSystem: failed to parse response: %s", e.getMessage());
-            return null;
+        if (response.statusCode() >= 200 && response.statusCode() < 300) {
+            LOG.infof("JIRA create issue %s succeeded (HTTP %d)", projectKey, response.statusCode());
+            try {
+                return mapper.readTree(response.body()).path("key").asText(null);
+            } catch (Exception e) {
+                LOG.warnf("createIssueSystem: failed to parse response: %s", e.getMessage());
+                return null;
+            }
         }
+
+        LOG.warnf("JIRA create issue %s failed (HTTP %d): %s", projectKey, response.statusCode(), response.body());
+
+        // Return null to signal failure; caller decides whether to retry
+        return null;
     }
 
     void updateIssueSystem(String issueKey, String summary, String description) {

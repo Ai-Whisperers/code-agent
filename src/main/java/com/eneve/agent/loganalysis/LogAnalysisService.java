@@ -100,8 +100,34 @@ public class LogAnalysisService {
         }
 
         findingsStore.pruneOlderThan(RETENTION_DAYS);
+        closeExpiredMonitoringFindings();
         LOG.infof("LogAnalysisService: complete — %d genuine finding(s) surfaced across %d environment(s)",
                 totalFindings, targets.size());
+    }
+
+    /**
+     * Closes MONITORING findings that have been quiet for the configured number of days.
+     * Called at the end of each {@link #analyzeAll()} cycle.
+     */
+    public void closeExpiredMonitoringFindings() {
+        int days;
+        try { days = Integer.parseInt(settings.get("log-analysis.monitoring-days", "7")); }
+        catch (NumberFormatException e) { days = 7; }
+        findingsStore.closeExpiredMonitoring(days);
+    }
+
+    /**
+     * Transitions a finding to MONITORING status after its fix has been merged.
+     *
+     * @param findingId the finding primary key
+     * @return true if the status was updated
+     */
+    public boolean setMonitoring(long findingId) {
+        boolean updated = findingsStore.setMonitoring(findingId);
+        if (updated) {
+            LOG.infof("LogAnalysisService: finding %d moved to MONITORING", findingId);
+        }
+        return updated;
     }
 
     // ── Per-environment analysis ──────────────────────────────────────────────
@@ -395,6 +421,88 @@ public class LogAnalysisService {
                 Frames: {{TOP_FRAMES}}
                 Message: {{SAMPLE_MESSAGE}}
                 """;
+    }
+
+    // ── Deep analysis (on-demand, Claude Sonnet) ──────────────────────────────
+
+    /**
+     * Runs a deep Claude Sonnet analysis on the given finding and persists the result.
+     *
+     * @param findingId the primary key of the finding to analyse
+     * @return the generated analysis markdown, or {@code null} on failure
+     * @throws IllegalArgumentException if the finding does not exist
+     */
+    public String performDeepAnalysis(long findingId) {
+        LogAnalysisFinding finding = findingsStore.findById(findingId)
+                .orElseThrow(() -> new IllegalArgumentException("Finding not found: " + findingId));
+
+        String modelName = settings.get("anthropic.model", "claude-sonnet-4-5");
+        String prompt = buildDeepAnalysisPrompt(finding);
+
+        MessageCreateParams params = MessageCreateParams.builder()
+                .model(Model.of(modelName))
+                .maxTokens(2048)
+                .messages(List.of(
+                        MessageParam.builder()
+                                .role(MessageParam.Role.USER)
+                                .content(prompt)
+                                .build()
+                ))
+                .build();
+
+        long startNs = System.nanoTime();
+        Message response;
+        try {
+            response = callWithRetry(params);
+        } catch (Exception e) {
+            long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+            aiCallStore.save(new AiCallRecord(
+                    null, null, "LOG_ANALYSIS_DEEP", modelName, null,
+                    0, 0, 0, 0, null, null, durationMs,
+                    true, e.getMessage(), Instant.now(), prompt, null));
+            LOG.warnf("LogAnalysisService: deep analysis call failed for finding %d: %s", findingId, e.getMessage());
+            return null;
+        }
+        long durationMs = (System.nanoTime() - startNs) / 1_000_000;
+
+        String analysisText = null;
+        for (ContentBlock block : response.content()) {
+            if (block.isText()) {
+                analysisText = block.asText().text().trim();
+                break;
+            }
+        }
+
+        Usage usage = response.usage();
+        String stopReason = response.stopReason().map(Object::toString).orElse(null);
+        aiCallStore.save(new AiCallRecord(
+                null, null, "LOG_ANALYSIS_DEEP", modelName, null,
+                usage.inputTokens(), usage.outputTokens(),
+                usage.cacheCreationInputTokens().orElse(0L),
+                usage.cacheReadInputTokens().orElse(0L),
+                stopReason, null, durationMs,
+                false, null, Instant.now(), prompt, analysisText));
+
+        if (analysisText != null && !analysisText.isBlank()) {
+            findingsStore.saveDeepAnalysis(findingId, analysisText);
+            LOG.infof("LogAnalysisService: deep analysis saved for finding %d (%d chars)", findingId, analysisText.length());
+        }
+        return analysisText;
+    }
+
+    private String buildDeepAnalysisPrompt(LogAnalysisFinding f) {
+        Map<String, String> placeholders = new HashMap<>();
+        placeholders.put("EXCEPTION_CLASS",  f.exceptionClass() != null ? f.exceptionClass() : "(unknown)");
+        placeholders.put("CUSTOMER_ID",      f.customerId());
+        placeholders.put("ENVIRONMENT_NAME", f.environmentName());
+        placeholders.put("OCCURRENCE_COUNT", String.valueOf(f.occurrenceCount()));
+        placeholders.put("FIRST_SEEN_AT",    f.firstSeenAt() != null ? f.firstSeenAt().toString() : "unknown");
+        placeholders.put("LAST_SEEN_AT",     f.lastSeenAt()  != null ? f.lastSeenAt().toString()  : "unknown");
+        placeholders.put("SEVERITY",         f.severity()    != null ? f.severity()    : "unknown");
+        placeholders.put("AI_REASON",        f.aiReason()    != null ? f.aiReason()    : "(none)");
+        placeholders.put("TOP_FRAMES",       f.topFrames()   != null ? f.topFrames()   : "(no frames)");
+        placeholders.put("SAMPLE_MESSAGE",   truncate(f.sampleMessage() != null ? f.sampleMessage() : "(none)", 1000));
+        return promptTemplates.resolve("log-analysis-deep", placeholders);
     }
 
     // ── Environment resolution ────────────────────────────────────────────────

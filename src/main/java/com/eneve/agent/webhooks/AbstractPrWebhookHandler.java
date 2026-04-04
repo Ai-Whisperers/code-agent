@@ -7,6 +7,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.PrCacheStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.agent.store.WebhookAuditStore;
+import com.eneve.agent.loganalysis.LogAnalysisFindingsStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.OpenPrEntry;
@@ -42,6 +43,7 @@ public abstract class AbstractPrWebhookHandler {
     @Inject protected WebhookAuditStore webhookAuditStore;
     @Inject protected SettingsService settingsService;
     @Inject protected ObjectMapper objectMapper;
+    @Inject protected LogAnalysisFindingsStore logAnalysisFindingsStore;
 
     // ─── Shared helpers ───────────────────────────────────────────────────
 
@@ -117,7 +119,21 @@ public abstract class AbstractPrWebhookHandler {
                     workspace, repoSlug, prId, e.getMessage());
         }
 
-        // 2. Cancel any active review jobs for this PR (scoped to this repo to avoid cross-repo collisions)
+        // 2. If the PR title contains a Jira key linked to a log-analysis finding, move it to MONITORING
+        if ("MERGED".equals(cacheStatus)) {
+            String jiraKey = extractJiraKey(prTitle);
+            if (jiraKey != null) {
+                logAnalysisFindingsStore.findByJiraKey(jiraKey).ifPresent(finding -> {
+                    boolean updated = logAnalysisFindingsStore.setMonitoring(finding.id());
+                    if (updated) {
+                        LOG.infof("handleMergedPr: finding %d (%s) moved to MONITORING after merge of %s/%s#%s",
+                                finding.id(), jiraKey, workspace, repoSlug, prId);
+                    }
+                });
+            }
+        }
+
+        // 3. Cancel any active review jobs for this PR (scoped to this repo to avoid cross-repo collisions)
         int cancelled = 0;
         try {
             List<JobRecord> activeJobs = jobStore.findByPrId(prId, workspace, repoSlug);
@@ -136,6 +152,7 @@ public abstract class AbstractPrWebhookHandler {
                     workspace, repoSlug, prId, e.getMessage());
         }
 
+        // 4. Audit
         audit(platform, platform + ".pr_" + cacheStatus.toLowerCase(),
                 workspace, repoSlug, prId, prAuthor,
                 cacheStatus.toLowerCase(), hookNames, rawPayload);

@@ -27,19 +27,21 @@ public class LogAnalysisFindingsStore {
 
     // ── Dedup / suppress ──────────────────────────────────────────────────────
 
+    private static final String SELECT_ALL_COLUMNS = """
+            SELECT id, fingerprint, customer_id, environment_name, log_group_name,
+                   exception_class, top_frames, sample_message,
+                   first_seen_at, last_seen_at, occurrence_count, suppress_until,
+                   ai_decision, severity, ai_reason, status, deep_analysis, analysed_at, jira_key,
+                   monitoring_since
+            FROM log_analysis_findings
+            """;
+
     /**
      * Returns the current finding for the given fingerprint+env, if one exists.
      * Used by Gate 1: if the row exists and {@code suppress_until > now()}, skip AI triage.
      */
     public Optional<LogAnalysisFinding> find(String fingerprint, String customerId, String environmentName) {
-        String sql = """
-                SELECT id, fingerprint, customer_id, environment_name, log_group_name,
-                       exception_class, top_frames, sample_message,
-                       first_seen_at, last_seen_at, occurrence_count, suppress_until,
-                       ai_decision, severity, ai_reason, status
-                FROM log_analysis_findings
-                WHERE fingerprint = ? AND customer_id = ? AND environment_name = ?
-                """;
+        String sql = SELECT_ALL_COLUMNS + "WHERE fingerprint = ? AND customer_id = ? AND environment_name = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
             ps.setString(1, fingerprint);
@@ -125,18 +127,11 @@ public class LogAnalysisFindingsStore {
     // ── UI queries ────────────────────────────────────────────────────────────
 
     /**
-     * Lists GENUINE, OPEN findings for the UI, ordered by first_seen_at descending.
+     * Lists GENUINE findings that are OPEN or MONITORING for the UI, ordered by first_seen_at descending.
      * Optionally filtered by customerId and/or severity.
      */
     public List<LogAnalysisFinding> listGenuineFindings(String customerId, String severity, int limit, int offset) {
-        StringBuilder sql = new StringBuilder("""
-                SELECT id, fingerprint, customer_id, environment_name, log_group_name,
-                       exception_class, top_frames, sample_message,
-                       first_seen_at, last_seen_at, occurrence_count, suppress_until,
-                       ai_decision, severity, ai_reason, status
-                FROM log_analysis_findings
-                WHERE ai_decision = 'GENUINE' AND status = 'OPEN'
-                """);
+        StringBuilder sql = new StringBuilder(SELECT_ALL_COLUMNS + "WHERE ai_decision = 'GENUINE' AND status IN ('OPEN','MONITORING')\n");
         List<Object> params = new ArrayList<>();
 
         if (customerId != null && !customerId.isBlank()) {
@@ -177,7 +172,8 @@ public class LogAnalysisFindingsStore {
                     COUNT(*) FILTER (WHERE ai_decision = 'GENUINE' AND status = 'OPEN')                                          AS open_total,
                     COUNT(*) FILTER (WHERE ai_decision = 'GENUINE' AND status = 'OPEN' AND severity = 'high')                    AS open_high,
                     COUNT(*) FILTER (WHERE ai_decision = 'GENUINE' AND status = 'OPEN' AND first_seen_at >= now() - interval '24 hours') AS new_today,
-                    COUNT(*) FILTER (WHERE status = 'DISMISSED' AND last_seen_at >= now() - interval '7 days')                   AS dismissed_this_week
+                    COUNT(*) FILTER (WHERE status = 'DISMISSED' AND last_seen_at >= now() - interval '7 days')                   AS dismissed_this_week,
+                    COUNT(*) FILTER (WHERE status = 'MONITORING')                                                                AS monitoring_total
                 FROM log_analysis_findings
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -188,13 +184,111 @@ public class LogAnalysisFindingsStore {
                         rs.getInt("open_total"),
                         rs.getInt("open_high"),
                         rs.getInt("new_today"),
-                        rs.getInt("dismissed_this_week")
+                        rs.getInt("dismissed_this_week"),
+                        rs.getInt("monitoring_total")
                 );
             }
         } catch (SQLException e) {
             LOG.errorf("Failed to get finding stats: %s", e.getMessage());
         }
-        return new FindingStats(0, 0, 0, 0);
+        return new FindingStats(0, 0, 0, 0, 0);
+    }
+
+    /**
+     * Lists FALSE_POSITIVE findings for the UI, ordered by last_seen_at descending.
+     * Optionally filtered by customerId and/or severity.
+     */
+    public List<LogAnalysisFinding> listFalsePositiveFindings(String customerId, String severity, int limit, int offset) {
+        StringBuilder sql = new StringBuilder(SELECT_ALL_COLUMNS + "WHERE ai_decision = 'FALSE_POSITIVE'\n");
+        List<Object> params = new ArrayList<>();
+
+        if (customerId != null && !customerId.isBlank()) {
+            sql.append(" AND customer_id = ?");
+            params.add(customerId);
+        }
+        if (severity != null && !severity.isBlank()) {
+            sql.append(" AND severity = ?");
+            params.add(severity);
+        }
+        sql.append(" ORDER BY last_seen_at DESC LIMIT ? OFFSET ?");
+        params.add(limit);
+        params.add(offset);
+
+        List<LogAnalysisFinding> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql.toString())) {
+            for (int i = 0; i < params.size(); i++) {
+                ps.setObject(i + 1, params.get(i));
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(map(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list false positive findings: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    /**
+     * Fetches a single finding by primary key.
+     */
+    public Optional<LogAnalysisFinding> findById(long id) {
+        String sql = SELECT_ALL_COLUMNS + "WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) {
+                    return Optional.of(map(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to find finding by id %d: %s", id, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Persists the Jira ticket key linked to a finding.
+     *
+     * @return true if the row was found and updated
+     */
+    public boolean saveJiraKey(long id, String jiraKey) {
+        String sql = "UPDATE log_analysis_findings SET jira_key = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jiraKey);
+            ps.setLong(2, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to save jira key for finding %d: %s", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Persists the deep-analysis text for a finding and marks it as analysed.
+     *
+     * @return true if the row was found and updated
+     */
+    public boolean saveDeepAnalysis(long id, String deepAnalysis) {
+        String sql = """
+                UPDATE log_analysis_findings
+                SET deep_analysis = ?,
+                    analysed_at   = now()
+                WHERE id = ?
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, deepAnalysis);
+            ps.setLong(2, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to save deep analysis for finding %d: %s", id, e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -212,6 +306,96 @@ public class LogAnalysisFindingsStore {
             LOG.errorf("Failed to dismiss finding %d: %s", id, e.getMessage());
             return false;
         }
+    }
+
+    /**
+     * Transitions a finding to MONITORING status (fix merged, watching for recurrence).
+     * Only transitions from OPEN; idempotent if already MONITORING.
+     *
+     * @return true if the row was updated
+     */
+    public boolean setMonitoring(long id) {
+        String sql = """
+                UPDATE log_analysis_findings
+                SET status = 'MONITORING', monitoring_since = now()
+                WHERE id = ? AND status IN ('OPEN','MONITORING')
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setLong(1, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to set finding %d to MONITORING: %s", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Looks up a finding by its linked Jira key.
+     */
+    public Optional<LogAnalysisFinding> findByJiraKey(String jiraKey) {
+        String sql = SELECT_ALL_COLUMNS + "WHERE jira_key = ? LIMIT 1";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jiraKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return Optional.of(map(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to find finding by jira key %s: %s", jiraKey, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Closes all MONITORING findings whose {@code monitoring_since} is older than {@code days} days.
+     *
+     * @return number of rows closed
+     */
+    public int closeExpiredMonitoring(int days) {
+        String sql = """
+                UPDATE log_analysis_findings
+                SET status = 'CLOSED'
+                WHERE status = 'MONITORING'
+                  AND monitoring_since < now() - (? || ' days')::interval
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, days);
+            int updated = ps.executeUpdate();
+            if (updated > 0) {
+                LOG.infof("LogAnalysisFindingsStore: closed %d findings after %d-day monitoring window", updated, days);
+            }
+            return updated;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to close expired monitoring findings: %s", e.getMessage());
+            return 0;
+        }
+    }
+
+    /**
+     * Lists the top open/high-severity findings for the dashboard attention section.
+     * Returns up to {@code limit} GENUINE findings with status OPEN, ordered by severity then first_seen_at.
+     */
+    public List<LogAnalysisFinding> listAttentionFindings(int limit) {
+        String sql = SELECT_ALL_COLUMNS + """
+                WHERE ai_decision = 'GENUINE' AND status = 'OPEN'
+                ORDER BY
+                    CASE severity WHEN 'high' THEN 0 WHEN 'medium' THEN 1 ELSE 2 END,
+                    first_seen_at ASC
+                LIMIT ?
+                """;
+        List<LogAnalysisFinding> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, limit);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) results.add(map(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to list attention findings: %s", e.getMessage());
+        }
+        return results;
     }
 
     // ── Retention ─────────────────────────────────────────────────────────────
@@ -256,7 +440,11 @@ public class LogAnalysisFindingsStore {
                 rs.getString("ai_decision"),
                 rs.getString("severity"),
                 rs.getString("ai_reason"),
-                rs.getString("status")
+                rs.getString("status"),
+                rs.getString("deep_analysis"),
+                toInstant(rs.getTimestamp("analysed_at")),
+                rs.getString("jira_key"),
+                toInstant(rs.getTimestamp("monitoring_since"))
         );
     }
 
@@ -270,6 +458,7 @@ public class LogAnalysisFindingsStore {
             int openTotal,
             int openHigh,
             int newToday,
-            int dismissedThisWeek
+            int dismissedThisWeek,
+            int monitoringTotal
     ) {}
 }
