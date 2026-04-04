@@ -3,13 +3,13 @@ package com.eneve.agent.mcp;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.workspace.WorkspaceContext;
 import com.eneve.agent.xray.XrayService;
+import com.eneve.agent.xray.XrayTestRunStatus;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.util.Map;
 import java.util.Optional;
-import java.util.Set;
 
 /**
  * MCP tool: Update the status of a single test run within an Xray test execution.
@@ -19,8 +19,7 @@ public class XrayUpdateTestRunStatusTool implements ToolExecutor {
 
     private static final Logger LOG = Logger.getLogger(XrayUpdateTestRunStatusTool.class);
 
-    private static final Set<String> VALID_STATUSES = Set.of(
-            "TODO", "EXECUTING", "PASS", "FAIL", "ABORTED", "BLOCKED");
+    private static final java.util.Set<String> VALID_STATUSES = XrayTestRunStatus.NAMES;
 
     @Inject
     LinkedAccountService linkedAccountService;

@@ -11,8 +11,6 @@ import org.jboss.logging.Logger;
 import java.sql.*;
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * PostgreSQL-backed store for job records, with an in-memory cache for fast access
  * to active jobs. Replaces the previous in-memory ConcurrentHashMap and the
@@ -31,6 +29,9 @@ public class JobStore {
 
     private static final int CACHE_MAX_SIZE = 5_000;
 
+    // Lazily initialised after dataSource is available (post-construct).
+    private JobQueryHelper queryHelper;
+
     /** Bounded LRU cache for fast access to recently seen / active jobs. */
     private final Map<String, JobRecord> cache = Collections.synchronizedMap(
             new LinkedHashMap<>(CACHE_MAX_SIZE, 0.75f, true) {
@@ -39,6 +40,11 @@ public class JobStore {
                     return size() > CACHE_MAX_SIZE;
                 }
             });
+
+    @jakarta.annotation.PostConstruct
+    void init() {
+        queryHelper = new JobQueryHelper(dataSource, this::mapRow);
+    }
 
     /**
      * Persist a new job to the database and add it to the cache.
@@ -223,273 +229,51 @@ public class JobStore {
         return loadFromTable("job_history", jobId);
     }
 
-    /**
-     * Returns all jobs with the given status, ordered by created_at ascending.
-     * Used for startup recovery.
-     */
-    public List<JobRecord> findByStatus(JobStatus status) {
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs WHERE status = ? ORDER BY created_at ASC
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, status.name());
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    JobRecord job = mapRow(rs);
-                    if (job != null) {
-                        results.add(job);
-                    }
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Failed to query jobs by status %s: %s", status, e.getMessage());
-        }
-        return results;
-    }
+    // ── Query methods — delegated to JobQueryHelper ───────────────────────────
 
-    /**
-     * Returns true if there is at least one active job (PENDING, QUEUED, RUNNING, or
-     * AWAITING_APPROVAL) for the given JIRA key.
-     */
+    /** Returns all jobs with the given status, ordered by created_at ascending. Used for startup recovery. */
+    public List<JobRecord> findByStatus(JobStatus status) { return queryHelper.findByStatus(status); }
+
     /**
      * Returns true if there is at least one active job (PENDING, QUEUED, RUNNING, or
      * AWAITING_APPROVAL) for the given Aikido issue group ID.
-     * Used by AikidoTriageService to prevent duplicate fix jobs for the same vulnerability.
      */
-    public boolean hasActiveJobForAikidoGroupId(String groupId) {
-        String sql = """
-                SELECT 1 FROM jobs
-                WHERE aikido_issue_id = ?
-                  AND status IN ('PENDING','QUEUED','RUNNING','AWAITING_APPROVAL')
-                LIMIT 1
-                """;
-        return existsQuery(sql, groupId);
-    }
+    public boolean hasActiveJobForAikidoGroupId(String groupId) { return queryHelper.hasActiveJobForAikidoGroupId(groupId); }
 
-    /**
-     * Returns true if there is already an active (PENDING/QUEUED/RUNNING) SELF_ANALYSIS job
-     * targeting the given failed job ID. Used by {@code SelfAnalysisTrigger} to prevent
-     * duplicate submissions when the same failure event fires more than once.
-     */
-    public boolean hasActiveSelfAnalysisForJob(String failedJobId) {
-        String sql = """
-                SELECT 1 FROM jobs
-                WHERE job_type = 'SELF_ANALYSIS'
-                  AND status IN ('PENDING','QUEUED','RUNNING')
-                  AND request_payload->>'failedJobId' = ?
-                LIMIT 1
-                """;
-        return existsQuery(sql, failedJobId);
-    }
+    /** Returns true if there is already an active SELF_ANALYSIS job targeting the given failed job ID. */
+    public boolean hasActiveSelfAnalysisForJob(String failedJobId) { return queryHelper.hasActiveSelfAnalysisForJob(failedJobId); }
 
-    /**
-     * Returns true if a successful (SUCCESS or AWAITING_APPROVAL) SELF_ANALYSIS job for the
-     * given failed job ID was archived within the last {@code cooldownHours} hours.
-     * Used by {@code SelfAnalysisTrigger} to enforce the cooldown window.
-     */
+    /** Returns true if a successful SELF_ANALYSIS job for the given failed job ID was archived within the cooldown window. */
     public boolean hasRecentSuccessfulSelfAnalysisForJob(String failedJobId, int cooldownHours) {
-        String sql = """
-                SELECT 1 FROM job_history
-                WHERE job_type = 'SELF_ANALYSIS'
-                  AND status IN ('SUCCESS','AWAITING_APPROVAL')
-                  AND archived_at > now() - (? || ' hours')::interval
-                  AND request_payload->>'failedJobId' = ?
-                LIMIT 1
-                """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, String.valueOf(cooldownHours));
-            ps.setString(2, failedJobId);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        } catch (SQLException e) {
-            LOG.errorf("hasRecentSuccessfulSelfAnalysisForJob query failed: %s", e.getMessage());
-            return false;
-        }
+        return queryHelper.hasRecentSuccessfulSelfAnalysisForJob(failedJobId, cooldownHours);
     }
 
     /**
-     * Returns the most recent job (by created_at DESC) linked to the given Aikido issue group ID,
-     * searching both the active jobs table and job_history. Returns {@code null} if none found.
-     * Used by the security issues view to show linked job status.
-     */
-    /**
-     * Finds the most recent job for an Aikido issue group, optionally scoped to a specific
-     * repository slug. When {@code repoSlug} is non-null the query prefers an exact
-     * repo_slug match; if no repo-scoped job exists it falls back to any job for that group.
-     * This prevents a job created for repo A from appearing as the linked job for repo B
-     * when both repos share the same Aikido vulnerability group ID.
+     * Finds the most recent job for an Aikido issue group, optionally scoped to a specific repository slug.
      */
     public JobRecord findLatestJobForAikidoGroupId(String groupId, String repoSlug) {
-        // Prefer repo-scoped match; fall back to any match for the group
-        if (repoSlug != null && !repoSlug.isBlank()) {
-            JobRecord scoped = findLatestJobForAikidoGroupAndRepo(groupId, repoSlug);
-            if (scoped != null) return scoped;
-        }
-        return findLatestJobForAikidoGroupAndRepo(groupId, null);
+        return queryHelper.findLatestJobForAikidoGroupId(groupId, repoSlug);
     }
 
     /** @deprecated Use {@link #findLatestJobForAikidoGroupId(String, String)} with a repoSlug. */
     @Deprecated
     public JobRecord findLatestJobForAikidoGroupId(String groupId) {
-        return findLatestJobForAikidoGroupId(groupId, null);
-    }
-
-    private JobRecord findLatestJobForAikidoGroupAndRepo(String groupId, String repoSlug) {
-        boolean scoped = repoSlug != null && !repoSlug.isBlank();
-        String repoFilter = scoped ? " AND repo_slug = ?" : "";
-        String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
-                + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + " pr_author, workspace, repo_slug, priority, coverage_data,"
-                + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + " promotion_job_id, workspace_path"
-                + " FROM ("
-                + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
-                + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + "          pr_author, workspace, repo_slug, priority, coverage_data,"
-                + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + "          promotion_job_id, workspace_path"
-                + "   FROM jobs WHERE aikido_issue_id = ?" + repoFilter
-                + "   UNION ALL"
-                + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
-                + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
-                + "          pr_author, workspace, repo_slug, priority, coverage_data,"
-                + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + "          promotion_job_id, workspace_path"
-                + "   FROM job_history WHERE aikido_issue_id = ?" + repoFilter
-                + " ) combined"
-                + " ORDER BY created_at DESC LIMIT 1";
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            int idx = 1;
-            ps.setString(idx++, groupId);
-            if (scoped) ps.setString(idx++, repoSlug);
-            ps.setString(idx++, groupId);
-            if (scoped) ps.setString(idx, repoSlug);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) return mapRow(rs);
-            }
-        } catch (SQLException e) {
-            LOG.errorf("findLatestJobForAikidoGroupAndRepo(%s, %s) failed: %s", groupId, repoSlug, e.getMessage());
-        }
-        return null;
+        return queryHelper.findLatestJobForAikidoGroupId(groupId);
     }
 
     /**
-     * Looks up the workspace_path recorded on the most recent FAILED job for the given
-     * branch name. Searches both {@code job_history} (archived jobs) and the active
-     * {@code jobs} table (jobs that failed but haven't been archived yet when the retry starts).
-     * Returns {@code null} if no such job exists or it has no preserved path.
+     * Looks up the workspace_path recorded on the most recent FAILED job for the given branch name.
      * Used by RunFixHandler to reuse an already-cloned workspace instead of cloning again.
      */
-    public String findPreservedWorkspacePath(String branchName) {
-        if (branchName == null || branchName.isBlank()) return null;
-        // Search job_history first (most common case — job is archived before retry)
-        String historySql = """
-                SELECT workspace_path FROM job_history
-                WHERE fix_branch_name = ?
-                  AND status = 'FAILED'
-                  AND workspace_path IS NOT NULL
-                ORDER BY archived_at DESC
-                LIMIT 1
-                """;
-        // Also check the active jobs table in case the job failed but hasn't been archived yet
-        String activeSql = """
-                SELECT workspace_path FROM jobs
-                WHERE fix_branch_name = ?
-                  AND status = 'FAILED'
-                  AND workspace_path IS NOT NULL
-                ORDER BY updated_at DESC
-                LIMIT 1
-                """;
-        try (Connection conn = dataSource.getConnection()) {
-            try (PreparedStatement ps = conn.prepareStatement(historySql)) {
-                ps.setString(1, branchName);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        String path = rs.getString("workspace_path");
-                        if (path != null && !path.isBlank()) return path;
-                    }
-                }
-            }
-            try (PreparedStatement ps = conn.prepareStatement(activeSql)) {
-                ps.setString(1, branchName);
-                try (ResultSet rs = ps.executeQuery()) {
-                    if (rs.next()) {
-                        String path = rs.getString("workspace_path");
-                        if (path != null && !path.isBlank()) return path;
-                    }
-                }
-            }
-        } catch (SQLException e) {
-            LOG.warnf("findPreservedWorkspacePath(%s) failed: %s", branchName, e.getMessage());
-        }
-        return null;
-    }
+    public String findPreservedWorkspacePath(String branchName) { return queryHelper.findPreservedWorkspacePath(branchName); }
 
-    public boolean hasActiveJobForJiraKey(String jiraKey) {
-        String sql = """
-                SELECT 1 FROM jobs
-                WHERE jira_key = ?
-                  AND status IN ('PENDING','QUEUED','RUNNING','AWAITING_APPROVAL')
-                LIMIT 1
-                """;
-        return existsQuery(sql, jiraKey);
-    }
+    public boolean hasActiveJobForJiraKey(String jiraKey) { return queryHelper.hasActiveJobForJiraKey(jiraKey); }
 
-    /**
-     * Returns true if this JIRA key has ever been processed (any status, either table).
-     * Replaces the old file-backed processed-keys ledger.
-     */
-    public boolean hasEverBeenProcessed(String jiraKey) {
-        String sql = """
-                SELECT 1 FROM jobs WHERE jira_key = ?
-                UNION ALL
-                SELECT 1 FROM job_history WHERE jira_key = ?
-                LIMIT 1
-                """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, jiraKey);
-            ps.setString(2, jiraKey);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Existence query failed: %s", e.getMessage());
-            return false;
-        }
-    }
+    /** Returns true if this JIRA key has ever been processed (any status, either table). */
+    public boolean hasEverBeenProcessed(String jiraKey) { return queryHelper.hasEverBeenProcessed(jiraKey); }
 
-    /**
-     * Returns all distinct JIRA keys that have ever been processed (both tables).
-     */
-    public Set<String> getProcessedKeys() {
-        String sql = """
-                SELECT DISTINCT jira_key FROM jobs         WHERE jira_key IS NOT NULL
-                UNION
-                SELECT DISTINCT jira_key FROM job_history  WHERE jira_key IS NOT NULL
-                """;
-        Set<String> keys = ConcurrentHashMap.newKeySet();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                keys.add(rs.getString("jira_key"));
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Failed to query processed keys: %s", e.getMessage());
-        }
-        return keys;
-    }
+    /** Returns all distinct JIRA keys that have ever been processed (both tables). */
+    public Set<String> getProcessedKeys() { return queryHelper.getProcessedKeys(); }
 
     /**
      * Search jobs across both the active {@code jobs} table and {@code job_history},
@@ -499,396 +283,50 @@ public class JobStore {
      * @param jobType filter by a specific job type, or {@code null} for all types
      * @param limit   maximum number of results (capped at 200)
      * @param offset  zero-based row offset for pagination
-     * @return list of lightweight response objects ordered by {@code created_at DESC}
      */
     public List<JobStatusResponse> search(JobStatus status, JobType jobType, int limit, int offset) {
-        int safeLimit = Math.min(Math.max(1, limit), 200);
-        int safeOffset = Math.max(0, offset);
-
-        StringBuilder where = new StringBuilder();
-        List<String> params = new ArrayList<>();
-
-        if (status != null) {
-            where.append(" AND status = ?");
-            params.add(status.name());
-        }
-        if (jobType != null) {
-            where.append(" AND job_type = ?");
-            params.add(jobType.name());
-        }
-
-        String cte = """
-                SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
-                FROM jobs WHERE 1=1
-                """ + where + """
-
-                UNION ALL
-                SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
-                FROM job_history WHERE 1=1
-                """ + where;
-
-        String sql = "SELECT * FROM (" + cte + ") combined ORDER BY created_at DESC LIMIT ? OFFSET ?";
-
-        List<JobStatusResponse> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-
-            int idx = 1;
-            for (String p : params) { ps.setString(idx++, p); }
-            for (String p : params) { ps.setString(idx++, p); }
-            ps.setInt(idx++, safeLimit);
-            ps.setInt(idx, safeOffset);
-
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    JobType type;
-                    try {
-                        type = JobType.valueOf(rs.getString("job_type"));
-                    } catch (IllegalArgumentException e) {
-                        continue;
-                    }
-                    JobStatus jobStatus;
-                    try {
-                        jobStatus = JobStatus.valueOf(rs.getString("status"));
-                    } catch (IllegalArgumentException e) {
-                        jobStatus = JobStatus.FAILED;
-                    }
-                    results.add(JobStatusResponse.fromSearch(
-                            rs.getString("job_id"),
-                            type,
-                            jobStatus,
-                            rs.getTimestamp("created_at").toInstant(),
-                            rs.getString("summary"),
-                            rs.getString("error_message"),
-                            rs.getString("pr_url"),
-                            rs.getInt("files_changed"),
-                            rs.getInt("lines_changed"),
-                            rs.getInt("priority"),
-                            rs.getString("jira_key")
-                    ));
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Failed to search jobs: %s", e.getMessage());
-        }
-        return results;
+        return queryHelper.search(status, jobType, limit, offset);
     }
 
     /**
-     * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
-     * for the given PR ID scoped to a specific workspace and repository.
-     * Scoping prevents cross-repo false positives when two repos share the same
-     * numeric PR ID (e.g. PR #1 in org/foo vs PR #1 in org/bar).
+     * Returns true when an active review job exists for the given PR ID scoped to a specific workspace and repository.
      */
     public boolean hasActiveReviewJobForPr(String prId, String workspace, String repoSlug) {
-        String sql = """
-                SELECT 1 FROM jobs
-                WHERE job_type = 'REVIEW'
-                  AND status IN ('PENDING','QUEUED','RUNNING')
-                  AND pr_id = ?
-                  AND workspace = ?
-                  AND repo_slug = ?
-                LIMIT 1
-                """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, prId);
-            ps.setString(2, workspace);
-            ps.setString(3, repoSlug);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        } catch (SQLException e) {
-            LOG.errorf("hasActiveReviewJobForPr query failed: %s", e.getMessage());
-            return false;
-        }
+        return queryHelper.hasActiveReviewJobForPr(prId, workspace, repoSlug);
     }
 
-    /**
-     * Returns all REVIEW jobs that are currently active (PENDING, QUEUED, or RUNNING).
-     * Used during boot reconciliation to cancel jobs whose PRs were already merged.
-     */
-    public List<JobRecord> findActiveReviewJobs() {
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs
-                WHERE job_type = 'REVIEW'
-                  AND status IN ('PENDING','QUEUED','RUNNING')
-                ORDER BY created_at ASC
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql);
-             ResultSet rs = ps.executeQuery()) {
-            while (rs.next()) {
-                results.add(mapRow(rs));
-            }
-        } catch (SQLException e) {
-            LOG.errorf("findActiveReviewJobs failed: %s", e.getMessage());
-        }
-        return results;
-    }
+    /** Returns all REVIEW jobs that are currently active. Used during boot reconciliation. */
+    public List<JobRecord> findActiveReviewJobs() { return queryHelper.findActiveReviewJobs(); }
 
-    /**
-     * Returns true when an active (PENDING, QUEUED, or RUNNING) review job exists
-     * for the given Jira issue key. Used to prevent duplicate review jobs.
-     */
-    public boolean hasActiveReviewJob(String issueKey) {
-        String sql = """
-                SELECT 1 FROM jobs
-                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
-                  AND status IN ('PENDING','QUEUED','RUNNING')
-                  AND request_payload->>'issueKey' = ?
-                LIMIT 1
-                """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, issueKey);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        } catch (SQLException e) {
-            LOG.warnf("Failed to check active review job for %s: %s", issueKey, e.getMessage());
-            return false;
-        }
-    }
+    /** Returns true when an active review job exists for the given Jira issue key. */
+    public boolean hasActiveReviewJob(String issueKey) { return queryHelper.hasActiveReviewJob(issueKey); }
 
-    /**
-     * Returns up to {@code limit} QUEUED roadmap review jobs ordered by priority DESC,
-     * created_at ASC, excluding any job IDs already in the in-memory dispatch queue.
-     * Used by the refill scheduler in JobQueue.
-     */
+    /** Returns up to {@code limit} QUEUED roadmap review jobs, excluding IDs already in the dispatch queue. */
     public List<JobRecord> findQueuedReviewJobs(Set<String> excludeJobIds, int limit) {
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs
-                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
-                  AND status = 'QUEUED'
-                ORDER BY priority DESC, created_at ASC
-                LIMIT ?
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        long safeLimitLong = (long) limit + excludeJobIds.size();
-        int safeLimit = safeLimitLong > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) safeLimitLong;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, safeLimit);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next() && results.size() < limit) {
-                    String jobId = rs.getString("job_id");
-                    if (excludeJobIds.contains(jobId)) continue;
-                    JobRecord job = mapRow(rs);
-                    if (job != null) {
-                        results.add(job);
-                    }
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Failed to query queued review jobs: %s", e.getMessage());
-        }
-        return results;
+        return queryHelper.findQueuedReviewJobs(excludeJobIds, limit);
     }
 
-    /**
-     * Counts QUEUED or RUNNING roadmap review jobs associated with the given roadmap ID.
-     * Used by the /roadmap/{id}/active-review-count endpoint.
-     */
-    public long countActiveReviewJobsForRoadmap(String roadmapId) {
-        String sql = """
-                SELECT COUNT(*) FROM jobs
-                WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
-                  AND status IN ('PENDING','QUEUED','RUNNING')
-                  AND request_payload->>'roadmapId' = ?
-                """;
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, roadmapId);
-            try (ResultSet rs = ps.executeQuery()) {
-                if (rs.next()) return rs.getLong(1);
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Failed to count active review jobs for roadmap %s: %s", roadmapId, e.getMessage());
-        }
-        return 0;
-    }
+    /** Counts QUEUED or RUNNING roadmap review jobs associated with the given roadmap ID. */
+    public long countActiveReviewJobsForRoadmap(String roadmapId) { return queryHelper.countActiveReviewJobsForRoadmap(roadmapId); }
 
     /**
-     * Returns all jobs associated with a given pull request ID scoped to a specific
-     * workspace and repository, ordered by {@code created_at DESC}.
-     * Searches both active and history tables.
+     * Returns all jobs for a given PR ID scoped to a specific workspace and repository.
      * Use this overload from webhook handlers to avoid cross-repo collisions.
      */
     public List<JobRecord> findByPrId(String prId, String workspace, String repoSlug) {
-        if (prId == null || prId.isBlank()) return List.of();
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
-                UNION ALL
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM job_history WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
-                ORDER BY created_at DESC
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, prId);
-            ps.setString(2, workspace);
-            ps.setString(3, repoSlug);
-            ps.setString(4, prId);
-            ps.setString(5, workspace);
-            ps.setString(6, repoSlug);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    JobRecord job = mapRow(rs);
-                    if (job != null) results.add(job);
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("findByPrId(%s, %s, %s) failed: %s", prId, workspace, repoSlug, e.getMessage());
-        }
-        return results;
+        return queryHelper.findByPrId(prId, workspace, repoSlug);
     }
 
     /**
-     * Returns all jobs associated with a given pull request ID, ordered by
-     * {@code created_at DESC}. Searches both active and history tables.
-     *
-     * <p>Falls back to a {@code LIKE} match on {@code pr_url} when {@code prId}
-     * is a numeric string, to handle jobs where only {@code prUrl} was stored.
-     *
      * @deprecated Prefer {@link #findByPrId(String, String, String)} to avoid cross-repo collisions.
      */
     @Deprecated
-    public List<JobRecord> findByPrId(String prId) {
-        if (prId == null || prId.isBlank()) return List.of();
-
-        String sqlExact = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs WHERE pr_id = ?
-                UNION ALL
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM job_history WHERE pr_id = ?
-                ORDER BY created_at DESC
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sqlExact)) {
-            ps.setString(1, prId);
-            ps.setString(2, prId);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    JobRecord job = mapRow(rs);
-                    if (job != null) results.add(job);
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("findByPrId(%s) failed: %s", prId, e.getMessage());
-        }
-
-        // Fallback: pr_url LIKE match (for older jobs where pr_id wasn't stored)
-        if (results.isEmpty()) {
-            String sqlLike = """
-                    SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                           summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                           pr_author, workspace, repo_slug, priority, coverage_data,
-                           aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id, workspace_path
-                    FROM jobs WHERE pr_url LIKE ?
-                    UNION ALL
-                    SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                           summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                           pr_author, workspace, repo_slug, priority, coverage_data,
-                           aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id, workspace_path
-                    FROM job_history WHERE pr_url LIKE ?
-                    ORDER BY created_at DESC
-                    """;
-            String pattern = "%/" + prId;
-            try (Connection conn = dataSource.getConnection();
-                 PreparedStatement ps = conn.prepareStatement(sqlLike)) {
-                ps.setString(1, pattern);
-                ps.setString(2, pattern);
-                try (ResultSet rs = ps.executeQuery()) {
-                    while (rs.next()) {
-                        JobRecord job = mapRow(rs);
-                        if (job != null) results.add(job);
-                    }
-                }
-            } catch (SQLException e) {
-                LOG.errorf("findByPrId fallback LIKE(%s) failed: %s", prId, e.getMessage());
-            }
-        }
-
-        return results;
-    }
+    public List<JobRecord> findByPrId(String prId) { return queryHelper.findByPrId(prId); }
 
     /**
-     * Returns all jobs (active + history) that have a non-null {@code jira_issue_type},
-     * ordered newest first. The caller is responsible for filtering to the specific
-     * bug types configured for SOC II compliance.
+     * Returns all jobs (active + history) that have a non-null {@code jira_issue_type}, ordered newest first.
      */
-    public List<JobRecord> findJobsWithJiraIssueType(int limit) {
-        int safeLimit = Math.min(Math.max(1, limit), 500);
-        String sql = """
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM jobs
-                WHERE jira_key IS NOT NULL
-                UNION ALL
-                SELECT job_id, job_type, status, request_payload, created_at, updated_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed,
-                       pr_author, workspace, repo_slug, priority, coverage_data,
-                       aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
-                FROM job_history
-                WHERE jira_key IS NOT NULL
-                ORDER BY created_at DESC
-                LIMIT ?
-                """;
-        List<JobRecord> results = new ArrayList<>();
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, safeLimit);
-            try (ResultSet rs = ps.executeQuery()) {
-                while (rs.next()) {
-                    JobRecord job = mapRow(rs);
-                    if (job != null) results.add(job);
-                }
-            }
-        } catch (SQLException e) {
-            LOG.errorf("findJobsWithJiraIssueType failed: %s", e.getMessage());
-        }
-        return results;
-    }
+    public List<JobRecord> findJobsWithJiraIssueType(int limit) { return queryHelper.findJobsWithJiraIssueType(limit); }
 
     /**
      * Returns {@code true} when the job is linked to a Jira issue type that appears in
@@ -919,9 +357,7 @@ public class JobStore {
         update(job);
     }
 
-    // -------------------------------------------------------------------------
-    // Private helpers
-    // -------------------------------------------------------------------------
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
@@ -946,19 +382,6 @@ public class JobStore {
             LOG.errorf("Failed to load job %s from %s: %s", jobId, table, e.getMessage());
         }
         return Optional.empty();
-    }
-
-    private boolean existsQuery(String sql, String param) {
-        try (Connection conn = dataSource.getConnection();
-             PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setString(1, param);
-            try (ResultSet rs = ps.executeQuery()) {
-                return rs.next();
-            }
-        } catch (SQLException e) {
-            LOG.errorf("Existence query failed: %s", e.getMessage());
-            return false;
-        }
     }
 
     private JobRecord mapRow(ResultSet rs) throws SQLException {
@@ -1070,33 +493,10 @@ public class JobStore {
     }
 
     private String serializeRequest(JobRecord job) {
-        Object request = switch (job.getJobType()) {
-            case FIX -> job.getRequest();
-            case REVIEW -> job.getReviewRequest();
-            case FIX_PR -> job.getFixPrRequest();
-            case REPLY, FIX_COMMENT -> job.getReplyRequest();
-            case HOOK -> job.getHookRequest();
-            case GENERATE_TESTS -> job.getGenerateTestsRequest();
-            case GENERATE_DOCS -> job.getGenerateDocsRequest();
-            case SYNC_CONFLUENCE -> job.getSyncConfluenceRequest();
-            case METRICS -> job.getMetricsRequest();
-            case QUALITY_REPORT -> job.getQualityReportRequest();
-            case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY -> job.getJiraReviewRequest();
-            case PROMOTE -> job.getPromoteRequest();
-            case SELF_ANALYSIS -> job.getPayload() instanceof SelfAnalysisRequest r ? r : null;
-            case GENERATE_ARCHITECTURE ->
-                    job.getPayload() instanceof GenerateArchitectureRequest r ? r : null;
-            case GENERATE_CLOUD_ARCHITECTURE ->
-                    job.getPayload() instanceof GenerateCloudArchitectureRequest r ? r : null;
-            case KNOWLEDGE_GRAPH ->
-                    job.getPayload() instanceof KnowledgeGraphRequest r ? r : null;
-            case TECH_DEBT ->
-                    job.getPayload() instanceof TechDebtRequest r ? r : null;
-            case CHAT -> null;
-        };
-        if (request == null) return "{}";
+        JobPayload payload = job.getPayload();
+        if (payload == null) return "{}";
         try {
-            return objectMapper.writeValueAsString(request);
+            return objectMapper.writeValueAsString(payload);
         } catch (Exception e) {
             LOG.warnf("Failed to serialize request for job %s: %s", job.getJobId(), e.getMessage());
             return "{}";
@@ -1104,12 +504,14 @@ public class JobStore {
     }
 
     private static String extractJiraKey(JobRecord job) {
-        if (job.getRequest() != null) return job.getRequest().jiraKey();
-        if (job.getReviewRequest() != null) return job.getReviewRequest().jiraKey();
-        if (job.getFixPrRequest() != null) return job.getFixPrRequest().jiraKey();
-        if (job.getJiraReviewRequest() != null) return job.getJiraReviewRequest().issueKey();
-        if (job.getPromoteRequest() != null) return job.getPromoteRequest().jiraKey();
-        return null;
+        return switch (job.getPayload()) {
+            case RunFixRequest r      -> r.jiraKey();
+            case ReviewPrRequest r    -> r.jiraKey();
+            case FixPrRequest r       -> r.jiraKey();
+            case JiraReviewRequest r  -> r.issueKey();
+            case PromoteRequest r     -> r.jiraKey();
+            default                   -> null;
+        };
     }
 
     private String serializeCoverageData(JobRecord job) {

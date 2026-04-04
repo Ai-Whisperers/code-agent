@@ -2,8 +2,8 @@ package com.eneve.agent.agent.tools;
 
 import com.anthropic.core.JsonValue;
 import com.anthropic.models.messages.Tool;
+import com.eneve.agent.xray.XrayTestRunStatus;
 
-import java.util.List;
 import java.util.Map;
 
 public final class XrayToolSchemas {
@@ -133,7 +133,7 @@ public final class XrayToolSchemas {
                                 )))
                                 .putAdditionalProperty("status", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "enum", List.of("TODO", "EXECUTING", "PASS", "FAIL", "ABORTED", "BLOCKED"),
+                                        "enum", XrayTestRunStatus.NAME_LIST,
                                         "description", "New status for the test run"
                                 )))
                                 .build())

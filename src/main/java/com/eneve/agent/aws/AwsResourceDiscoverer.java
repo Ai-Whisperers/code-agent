@@ -18,7 +18,6 @@ import software.amazon.awssdk.services.ec2.model.DescribeSubnetsRequest;
 import software.amazon.awssdk.services.ec2.model.DescribeVpcsRequest;
 import software.amazon.awssdk.services.ec2.model.Instance;
 import software.amazon.awssdk.services.ec2.model.NetworkInterface;
-import software.amazon.awssdk.services.ec2.model.Tag;
 import software.amazon.awssdk.services.ecs.EcsClient;
 import software.amazon.awssdk.services.ecs.model.DescribeServicesRequest;
 import software.amazon.awssdk.services.ecs.model.DescribeTaskDefinitionRequest;
@@ -93,7 +92,7 @@ public class AwsResourceDiscoverer {
                     .collect(Collectors.toList());
 
             for (Instance inst : d.instances) {
-                String name = tagValue(inst.tags(), "Name");
+                String name = AwsSdkUtils.tagValue(inst.tags(), "Name");
                 String key  = name.isBlank() ? inst.instanceId() : name;
                 if (inst.subnetId() != null && !inst.subnetId().isBlank()) {
                     d.resourceSubnetMap.put(key, inst.subnetId());
@@ -138,7 +137,7 @@ public class AwsResourceDiscoverer {
         try (EcsClient ecs = clientFactory.ecsClient(roleArn, region, cloudAccount)) {
             List<String> clusterArns = listAllClusterArns(ecs);
             for (String clusterArn : clusterArns) {
-                String clusterName = arnToName(clusterArn);
+                String clusterName = AwsSdkUtils.arnToName(clusterArn);
                 List<EcsServiceInfo> services = new ArrayList<>();
                 List<String> serviceArns = listAllServiceArns(ecs, clusterArn);
                 if (!serviceArns.isEmpty()) {
@@ -420,15 +419,4 @@ public class AwsResourceDiscoverer {
         return "";
     }
 
-    /** @deprecated Use {@link AwsSdkUtils#tagValue(List, String)} directly. */
-    @Deprecated
-    static String tagValue(List<Tag> tags, String key) {
-        return AwsSdkUtils.tagValue(tags, key);
-    }
-
-    /** @deprecated Use {@link AwsSdkUtils#arnToName(String)} directly. */
-    @Deprecated
-    static String arnToName(String arn) {
-        return AwsSdkUtils.arnToName(arn);
-    }
 }

@@ -1,5 +1,7 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.detector.PhpDetector;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -11,7 +13,14 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class ArchetypeDetectorTest {
 
-    private final ArchetypeDetector detector = new ArchetypeDetector();
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ArchetypeDetector detector;
+    private final PhpDetector phpDetector = new PhpDetector(objectMapper);
+
+    ArchetypeDetectorTest() {
+        detector = new ArchetypeDetector();
+        detector.objectMapper = objectMapper;
+    }
 
     @TempDir
     Path tempDir;
@@ -748,6 +757,56 @@ class ArchetypeDetectorTest {
     }
 
     @Test
+    void pomPackagingWithJavaSourceIsClassifiedAsJar() throws IOException {
+        // A project that incorrectly declares <packaging>pom</packaging> but has Java source
+        // under src/main/java should be classified as "jar", not "pom".
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>misconfigured-service</artifactId>
+                    <version>1.2.3</version>
+                    <packaging>pom</packaging>
+                </project>
+                """);
+        Path javaDir = tempDir.resolve("src/main/java/com/example");
+        Files.createDirectories(javaDir);
+        Files.writeString(javaDir.resolve("App.java"), "package com.example; public class App {}");
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("jar", info.archetype(), "pom packaging must be overridden when src/main/java is present");
+        assertEquals("1.2.3", info.version());
+    }
+
+    @Test
+    void pomPackagingWithoutJavaSourceStaysPom() throws IOException {
+        // A true multi-module parent or BOM with no source must remain "pom".
+        writePom("""
+                <?xml version="1.0" encoding="UTF-8"?>
+                <project>
+                    <modelVersion>4.0.0</modelVersion>
+                    <groupId>com.example</groupId>
+                    <artifactId>parent-pom</artifactId>
+                    <version>4.0.0</version>
+                    <packaging>pom</packaging>
+                    <modules>
+                        <module>service-a</module>
+                        <module>service-b</module>
+                    </modules>
+                </project>
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("pom", info.archetype(), "Multi-module parent with no Java source must stay pom");
+        assertEquals("4.0.0", info.version());
+    }
+
+    @Test
     void jarNotDetectedForQuarkusProject() throws IOException {
         // Quarkus should take priority over the generic Maven jar fallback
         Path root = writePom("""
@@ -1130,7 +1189,7 @@ class ArchetypeDetectorTest {
                 }
                 """);
 
-        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        ArchetypeDetector.ArchetypeInfo info = phpDetector.detect(tempDir);
 
         assertNotNull(info, "Expected Laravel to be detected");
         assertEquals("laravel", info.archetype());
@@ -1148,7 +1207,7 @@ class ArchetypeDetectorTest {
                 }
                 """);
 
-        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        ArchetypeDetector.ArchetypeInfo info = phpDetector.detect(tempDir);
 
         assertNotNull(info, "Expected Symfony to be detected");
         assertEquals("symfony", info.archetype());
@@ -1166,7 +1225,7 @@ class ArchetypeDetectorTest {
                 }
                 """);
 
-        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        ArchetypeDetector.ArchetypeInfo info = phpDetector.detect(tempDir);
 
         assertNotNull(info, "Expected generic PHP to be detected");
         assertEquals("php", info.archetype());
@@ -1182,7 +1241,7 @@ class ArchetypeDetectorTest {
                 }
                 """);
 
-        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        ArchetypeDetector.ArchetypeInfo info = phpDetector.detect(tempDir);
 
         assertNotNull(info, "Expected generic PHP to be detected when composer.json present");
         assertEquals("php", info.archetype());
@@ -1191,7 +1250,7 @@ class ArchetypeDetectorTest {
 
     @Test
     void phpFrameworkDetectionReturnsNullWhenNoComposerJson() {
-        ArchetypeDetector.ArchetypeInfo info = detector.detectPhpFramework(tempDir);
+        ArchetypeDetector.ArchetypeInfo info = phpDetector.detect(tempDir);
         assertNull(info, "Should return null when composer.json is absent");
     }
 

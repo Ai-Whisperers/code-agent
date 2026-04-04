@@ -525,18 +525,32 @@ public class CloudArchitectureDslBuilder {
         sb.append("    }\n");
     }
 
+    // ── DSL style definitions ─────────────────────────────────────────────────────
+    // Centralised here so colours and shapes can be updated in one place.
+
+    private static final String STYLE_PERSON       = "            element \"Person\" {\n                shape Person\n            }\n";
+    private static final String STYLE_DATABASE      = "            element \"Database\" {\n                shape Cylinder\n            }\n";
+    private static final String STYLE_CACHE         = "            element \"Cache\" {\n                shape Cylinder\n                background #FF6B6B\n                color #ffffff\n            }\n";
+    private static final String STYLE_ECS           = "            element \"ECS\" {\n                background #2196F3\n                color #ffffff\n            }\n";
+    private static final String STYLE_EC2           = "            element \"EC2\" {\n                background #FF9800\n                color #ffffff\n            }\n";
+    private static final String STYLE_LAMBDA        = "            element \"Lambda\" {\n                background #9C27B0\n                color #ffffff\n                shape Component\n            }\n";
+    private static final String STYLE_CDN           = "            element \"CDN\" {\n                background #00BCD4\n                color #ffffff\n                shape Hexagon\n            }\n";
+    private static final String STYLE_LOAD_BALANCER = "            element \"LoadBalancer\" {\n                background #4CAF50\n                color #ffffff\n                shape Hexagon\n            }\n";
+    private static final String STYLE_STORAGE       = "            element \"Storage\" {\n                shape Cylinder\n                background #795548\n                color #ffffff\n            }\n";
+    private static final String STYLE_EXTERNAL      = "            element \"External\" {\n                background #999999\n                color #ffffff\n            }\n";
+
     private void appendStyles(StringBuilder sb) {
         sb.append("        styles {\n");
-        sb.append("            element \"Person\" {\n                shape Person\n            }\n");
-        sb.append("            element \"Database\" {\n                shape Cylinder\n            }\n");
-        sb.append("            element \"Cache\" {\n                shape Cylinder\n                background #FF6B6B\n                color #ffffff\n            }\n");
-        sb.append("            element \"ECS\" {\n                background #2196F3\n                color #ffffff\n            }\n");
-        sb.append("            element \"EC2\" {\n                background #FF9800\n                color #ffffff\n            }\n");
-        sb.append("            element \"Lambda\" {\n                background #9C27B0\n                color #ffffff\n                shape Component\n            }\n");
-        sb.append("            element \"CDN\" {\n                background #00BCD4\n                color #ffffff\n                shape Hexagon\n            }\n");
-        sb.append("            element \"LoadBalancer\" {\n                background #4CAF50\n                color #ffffff\n                shape Hexagon\n            }\n");
-        sb.append("            element \"Storage\" {\n                shape Cylinder\n                background #795548\n                color #ffffff\n            }\n");
-        sb.append("            element \"External\" {\n                background #999999\n                color #ffffff\n            }\n");
+        sb.append(STYLE_PERSON);
+        sb.append(STYLE_DATABASE);
+        sb.append(STYLE_CACHE);
+        sb.append(STYLE_ECS);
+        sb.append(STYLE_EC2);
+        sb.append(STYLE_LAMBDA);
+        sb.append(STYLE_CDN);
+        sb.append(STYLE_LOAD_BALANCER);
+        sb.append(STYLE_STORAGE);
+        sb.append(STYLE_EXTERNAL);
         sb.append("        }\n\n");
     }
 

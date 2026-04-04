@@ -4,28 +4,8 @@ import java.time.Instant;
 
 public class JobRecord {
 
-    // ── Single unified payload (preferred) ───────────────────────────────────
-    private final JobPayload payload;
-
-    // ── PROMOTE job request (cherry-pick promotion to main) ──────────────────
-    private final PromoteRequest promoteRequest;
-
-    // ── SOC II / SLA fields (populated at submission time from Jira) ─────────
-    // Kept volatile so they can be set after construction without synchronization.
-
-
     private final String jobId;
-    private final RunFixRequest request;
-    private final ReviewPrRequest reviewRequest;
-    private final FixPrRequest fixPrRequest;
-    private final ReplyCommentRequest replyRequest;
-    private final HookJobRequest hookRequest;
-    private final GenerateTestsRequest generateTestsRequest;
-    private final GenerateDocsRequest generateDocsRequest;
-    private final SyncConfluenceRequest syncConfluenceRequest;
-    private final MetricsJobRequest metricsRequest;
-    private final QualityReportJobRequest qualityReportRequest;
-    private final JiraReviewRequest jiraReviewRequest;
+    private final JobPayload payload;
     private final JobType jobType;
     private final Instant createdAt;
     private volatile JobStatus status;
@@ -61,67 +41,25 @@ public class JobRecord {
     private volatile String scytaleEvidenceRef;
     private volatile Instant scytaleUploadedAt;
 
-    public JobRecord(String jobId, RunFixRequest request) {
+    private JobRecord(String jobId, JobPayload payload, JobType jobType) {
         this.jobId = jobId;
-        this.payload = request;
-        this.request = request;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.FIX;
+        this.payload = payload;
+        this.jobType = jobType;
         this.createdAt = Instant.now();
         this.status = JobStatus.PENDING;
-        this.priority = JobType.FIX.defaultPriority();
+        this.priority = jobType.defaultPriority();
+    }
+
+    public JobRecord(String jobId, RunFixRequest request) {
+        this(jobId, request, JobType.FIX);
     }
 
     public JobRecord(String jobId, ReviewPrRequest reviewRequest) {
-        this.jobId = jobId;
-        this.payload = reviewRequest;
-        this.request = null;
-        this.reviewRequest = reviewRequest;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.REVIEW;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.REVIEW.defaultPriority();
+        this(jobId, reviewRequest, JobType.REVIEW);
     }
 
     public JobRecord(String jobId, FixPrRequest fixPrRequest) {
-        this.jobId = jobId;
-        this.payload = fixPrRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = fixPrRequest;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.FIX_PR;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.FIX_PR.defaultPriority();
+        this(jobId, fixPrRequest, JobType.FIX_PR);
     }
 
     public JobRecord(String jobId, ReplyCommentRequest replyRequest) {
@@ -129,297 +67,59 @@ public class JobRecord {
     }
 
     public JobRecord(String jobId, ReplyCommentRequest replyRequest, JobType jobType) {
-        this.jobId = jobId;
-        this.payload = replyRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = replyRequest;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = jobType;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = jobType.defaultPriority();
+        this(jobId, (JobPayload) replyRequest, jobType);
     }
 
     public JobRecord(String jobId, HookJobRequest hookRequest) {
-        this.jobId = jobId;
-        this.payload = hookRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = hookRequest;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.HOOK;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.HOOK.defaultPriority();
+        this(jobId, hookRequest, JobType.HOOK);
     }
 
     public JobRecord(String jobId, GenerateTestsRequest generateTestsRequest) {
-        this.jobId = jobId;
-        this.payload = generateTestsRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = generateTestsRequest;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.GENERATE_TESTS;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.GENERATE_TESTS.defaultPriority();
+        this(jobId, generateTestsRequest, JobType.GENERATE_TESTS);
     }
 
     public JobRecord(String jobId, GenerateDocsRequest generateDocsRequest) {
-        this.jobId = jobId;
-        this.payload = generateDocsRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = generateDocsRequest;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.GENERATE_DOCS;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.GENERATE_DOCS.defaultPriority();
+        this(jobId, generateDocsRequest, JobType.GENERATE_DOCS);
     }
 
     public JobRecord(String jobId, SyncConfluenceRequest syncConfluenceRequest) {
-        this.jobId = jobId;
-        this.payload = syncConfluenceRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = syncConfluenceRequest;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.SYNC_CONFLUENCE;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.SYNC_CONFLUENCE.defaultPriority();
+        this(jobId, syncConfluenceRequest, JobType.SYNC_CONFLUENCE);
     }
 
     public JobRecord(String jobId, MetricsJobRequest metricsRequest) {
-        this.jobId = jobId;
-        this.payload = metricsRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = metricsRequest;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.METRICS;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.METRICS.defaultPriority();
+        this(jobId, metricsRequest, JobType.METRICS);
     }
 
     public JobRecord(String jobId, QualityReportJobRequest qualityReportRequest) {
-        this.jobId = jobId;
-        this.payload = qualityReportRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = qualityReportRequest;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.QUALITY_REPORT;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.QUALITY_REPORT.defaultPriority();
+        this(jobId, qualityReportRequest, JobType.QUALITY_REPORT);
     }
 
     public JobRecord(String jobId, JiraReviewRequest jiraReviewRequest, JobType jobType) {
-        this.jobId = jobId;
-        this.payload = jiraReviewRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = jiraReviewRequest;
-        this.promoteRequest = null;
-        this.jobType = jobType;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = jobType.defaultPriority();
+        this(jobId, (JobPayload) jiraReviewRequest, jobType);
     }
 
     public JobRecord(String jobId, PromoteRequest promoteRequest) {
-        this.jobId = jobId;
-        this.payload = promoteRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = promoteRequest;
-        this.jobType = JobType.PROMOTE;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.PROMOTE.defaultPriority();
+        this(jobId, promoteRequest, JobType.PROMOTE);
     }
 
     public JobRecord(String jobId, SelfAnalysisRequest selfAnalysisRequest) {
-        this.jobId = jobId;
-        this.payload = selfAnalysisRequest;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.SELF_ANALYSIS;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.SELF_ANALYSIS.defaultPriority();
+        this(jobId, selfAnalysisRequest, JobType.SELF_ANALYSIS);
     }
 
     public JobRecord(String jobId, GenerateArchitectureRequest request) {
-        this.jobId = jobId;
-        this.payload = request;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.GENERATE_ARCHITECTURE;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.GENERATE_ARCHITECTURE.defaultPriority();
+        this(jobId, request, JobType.GENERATE_ARCHITECTURE);
     }
 
     public JobRecord(String jobId, GenerateCloudArchitectureRequest request) {
-        this.jobId = jobId;
-        this.payload = request;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.GENERATE_CLOUD_ARCHITECTURE;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.GENERATE_CLOUD_ARCHITECTURE.defaultPriority();
+        this(jobId, request, JobType.GENERATE_CLOUD_ARCHITECTURE);
     }
 
     public JobRecord(String jobId, KnowledgeGraphRequest request) {
-        this.jobId = jobId;
-        this.payload = request;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.KNOWLEDGE_GRAPH;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.KNOWLEDGE_GRAPH.defaultPriority();
+        this(jobId, request, JobType.KNOWLEDGE_GRAPH);
     }
 
     public JobRecord(String jobId, TechDebtRequest request) {
-        this.jobId = jobId;
-        this.payload = request;
-        this.request = null;
-        this.reviewRequest = null;
-        this.fixPrRequest = null;
-        this.replyRequest = null;
-        this.hookRequest = null;
-        this.generateTestsRequest = null;
-        this.generateDocsRequest = null;
-        this.syncConfluenceRequest = null;
-        this.metricsRequest = null;
-        this.qualityReportRequest = null;
-        this.jiraReviewRequest = null;
-        this.promoteRequest = null;
-        this.jobType = JobType.TECH_DEBT;
-        this.createdAt = Instant.now();
-        this.status = JobStatus.PENDING;
-        this.priority = JobType.TECH_DEBT.defaultPriority();
+        this(jobId, request, JobType.TECH_DEBT);
     }
 
     public String getJobId() { return jobId; }
@@ -429,27 +129,28 @@ public class JobRecord {
     public JobPayload getPayload() { return payload; }
 
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public RunFixRequest getRequest() { return request; }
+    @Deprecated public RunFixRequest getRequest() { return payload instanceof RunFixRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public ReviewPrRequest getReviewRequest() { return reviewRequest; }
+    @Deprecated public ReviewPrRequest getReviewRequest() { return payload instanceof ReviewPrRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public FixPrRequest getFixPrRequest() { return fixPrRequest; }
+    @Deprecated public FixPrRequest getFixPrRequest() { return payload instanceof FixPrRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public ReplyCommentRequest getReplyRequest() { return replyRequest; }
+    @Deprecated public ReplyCommentRequest getReplyRequest() { return payload instanceof ReplyCommentRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public HookJobRequest getHookRequest() { return hookRequest; }
+    @Deprecated public HookJobRequest getHookRequest() { return payload instanceof HookJobRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public GenerateTestsRequest getGenerateTestsRequest() { return generateTestsRequest; }
+    @Deprecated public GenerateTestsRequest getGenerateTestsRequest() { return payload instanceof GenerateTestsRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public GenerateDocsRequest getGenerateDocsRequest() { return generateDocsRequest; }
+    @Deprecated public GenerateDocsRequest getGenerateDocsRequest() { return payload instanceof GenerateDocsRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public SyncConfluenceRequest getSyncConfluenceRequest() { return syncConfluenceRequest; }
+    @Deprecated public SyncConfluenceRequest getSyncConfluenceRequest() { return payload instanceof SyncConfluenceRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public MetricsJobRequest getMetricsRequest() { return metricsRequest; }
+    @Deprecated public MetricsJobRequest getMetricsRequest() { return payload instanceof MetricsJobRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public QualityReportJobRequest getQualityReportRequest() { return qualityReportRequest; }
+    @Deprecated public QualityReportJobRequest getQualityReportRequest() { return payload instanceof QualityReportJobRequest r ? r : null; }
     /** @deprecated Use {@link #getPayload()} with pattern matching instead. */
-    @Deprecated public JiraReviewRequest getJiraReviewRequest() { return jiraReviewRequest; }
+    @Deprecated public JiraReviewRequest getJiraReviewRequest() { return payload instanceof JiraReviewRequest r ? r : null; }
+
     public Instant getCreatedAt() { return createdAt; }
 
     public JobStatus getStatus() { return status; }
@@ -512,7 +213,7 @@ public class JobRecord {
     public String getFixBranchName() { return fixBranchName; }
     public void setFixBranchName(String fixBranchName) { this.fixBranchName = fixBranchName; }
 
-    public PromoteRequest getPromoteRequest() { return promoteRequest; }
+    public PromoteRequest getPromoteRequest() { return payload instanceof PromoteRequest r ? r : null; }
 
     public String getScytaleEvidenceRef() { return scytaleEvidenceRef; }
     public void setScytaleEvidenceRef(String scytaleEvidenceRef) { this.scytaleEvidenceRef = scytaleEvidenceRef; }
