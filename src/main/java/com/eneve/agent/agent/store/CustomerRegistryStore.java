@@ -146,10 +146,9 @@ public class CustomerRegistryStore {
     /** List all products regardless of customer assignment. */
     public List<ProductConfig> listAllProducts() {
         String sql = """
-                SELECT p.product_id, cp.customer_id, p.display_name, p.git, p.jira, p.confluence,
+                SELECT p.product_id, NULL AS customer_id, p.display_name, p.git, p.jira, p.confluence,
                        p.metadata, p.created_at, p.updated_at
                 FROM products p
-                LEFT JOIN customer_products cp ON cp.product_id = p.product_id
                 ORDER BY p.display_name
                 """;
         List<ProductConfig> results = new ArrayList<>();
