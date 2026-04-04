@@ -3,9 +3,11 @@ package com.eneve.agent.loganalysis;
 import com.eneve.agent.RunFixService;
 import com.eneve.agent.agent.store.CloudAccountStore;
 import com.eneve.agent.agent.store.CustomerRegistryStore;
+import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.CloudAccount;
 import com.eneve.agent.model.CustomerConfig;
+import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.QuickFixRequest;
 import com.eneve.agent.tools.AwsClientFactory;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -45,6 +47,7 @@ public class LogAnalysisFindingsResource {
     @Inject LogAnalysisService logAnalysisService;
     @Inject JiraService jiraService;
     @Inject RunFixService runFixService;
+    @Inject JobStore jobStore;
     @Inject ObjectMapper mapper;
     @Inject CustomerRegistryStore customerRegistryStore;
     @Inject CloudAccountStore cloudAccountStore;
@@ -302,6 +305,7 @@ public class LogAnalysisFindingsResource {
             RunFixService.QuickFixResult result = runFixService.quickFix(new QuickFixRequest(repoUrl, jiraKey));
             jobId = result.jobId();
             LOG.infof("LogAnalysisFindingsResource: started fix job %s for Jira ticket %s", jobId, jiraKey);
+            findingsStore.saveJobAndPr(id, jobId, null);
         } catch (Exception e) {
             LOG.warnf("LogAnalysisFindingsResource: Jira ticket %s created but fix job failed: %s",
                     jiraKey, e.getMessage());
@@ -448,6 +452,28 @@ public class LogAnalysisFindingsResource {
         if (f.analysedAt()      != null) node.put("analysedAt",      f.analysedAt().toString());
         if (f.jiraKey()         != null) node.put("jiraKey",         f.jiraKey());
         if (f.monitoringSince() != null) node.put("monitoringSince", f.monitoringSince().toString());
+
+        // Job tracking — look up live status and PR URL from the job store
+        if (f.jobId() != null) {
+            node.put("jobId", f.jobId());
+            jobStore.get(f.jobId()).ifPresentOrElse(job -> {
+                node.put("jobStatus", job.getStatus() != null ? job.getStatus().name() : null);
+                String prUrl = job.getPrUrl() != null ? job.getPrUrl() : f.prUrl();
+                if (prUrl != null) {
+                    node.put("prUrl", prUrl);
+                    // Keep pr_url in sync with the job's latest value
+                    if (job.getPrUrl() != null && !job.getPrUrl().equals(f.prUrl())) {
+                        findingsStore.savePrUrl(f.id(), job.getPrUrl());
+                    }
+                }
+            }, () -> {
+                // Job not in active store — fall back to persisted values
+                if (f.prUrl() != null) node.put("prUrl", f.prUrl());
+            });
+        } else if (f.prUrl() != null) {
+            node.put("prUrl", f.prUrl());
+        }
+
         return node;
     }
 }

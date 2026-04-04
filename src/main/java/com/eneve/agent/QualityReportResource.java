@@ -1,5 +1,7 @@
 package com.eneve.agent;
 
+import com.eneve.agent.agent.store.QualityReportStore;
+
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,6 +39,7 @@ import jakarta.ws.rs.core.Response;
 public class QualityReportResource {
 
     @Inject QualityReportService qualityReportService;
+    @Inject QualityReportStore qualityReportStore;
 
     @GET
     @Path("/{workspace}/{repoSlug}/{branch}")
@@ -164,4 +167,37 @@ public class QualityReportResource {
             @Parameter(description = "Repository HTTPS clone URL", required = true)
             String repoUrl
     ) {}
+
+    @GET
+    @Path("/{workspace}/all/coverage-trend")
+    @Operation(
+            operationId = "getCoverageTrend",
+            summary = "Cross-repo test coverage trend",
+            description = "Returns weekly-bucketed average line coverage % per repository for all repos "
+                    + "in the workspace. Uses JSONB path extraction for efficiency. "
+                    + "Repos without JaCoCo coverage data are excluded."
+    )
+    @APIResponse(responseCode = "200", description = "Weekly coverage trend per repository")
+    public Response getCoverageTrend(
+            @Parameter(description = "Workspace or GitLab namespace", required = true)
+            @PathParam("workspace") String workspace,
+
+            @Parameter(description = "Branch name (default: main)")
+            @QueryParam("branch") @DefaultValue("main") String branch,
+
+            @Parameter(description = "Number of days to look back (default 90, max 365)")
+            @QueryParam("days") @DefaultValue("90") int days) {
+
+        int safeDays = Math.min(Math.max(1, days), 365);
+
+        List<Map<String, Object>> trend = qualityReportStore.getCoverageTrendAllRepos(workspace, branch, safeDays);
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("workspace",  workspace);
+        body.put("branch",     branch);
+        body.put("periodDays", safeDays);
+        body.put("trend",      trend);
+
+        return Response.ok(body).build();
+    }
 }

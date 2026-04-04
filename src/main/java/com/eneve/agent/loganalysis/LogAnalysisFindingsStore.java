@@ -32,7 +32,7 @@ public class LogAnalysisFindingsStore {
                    exception_class, top_frames, sample_message,
                    first_seen_at, last_seen_at, occurrence_count, suppress_until,
                    ai_decision, severity, ai_reason, status, deep_analysis, analysed_at, jira_key,
-                   monitoring_since
+                   monitoring_since, job_id, pr_url
             FROM log_analysis_findings
             """;
 
@@ -269,6 +269,43 @@ public class LogAnalysisFindingsStore {
     }
 
     /**
+     * Persists the fix job ID and (optionally) the PR URL linked to a finding.
+     *
+     * @return true if the row was found and updated
+     */
+    public boolean saveJobAndPr(long id, String jobId, String prUrl) {
+        String sql = "UPDATE log_analysis_findings SET job_id = ?, pr_url = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jobId);
+            ps.setString(2, prUrl);
+            ps.setLong(3, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to save job/pr for finding %d: %s", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Updates the PR URL for a finding (called once the fix job produces a PR).
+     *
+     * @return true if the row was found and updated
+     */
+    public boolean savePrUrl(long id, String prUrl) {
+        String sql = "UPDATE log_analysis_findings SET pr_url = ? WHERE id = ?";
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, prUrl);
+            ps.setLong(2, id);
+            return ps.executeUpdate() > 0;
+        } catch (SQLException e) {
+            LOG.errorf("Failed to save pr_url for finding %d: %s", id, e.getMessage());
+            return false;
+        }
+    }
+
+    /**
      * Persists the deep-analysis text for a finding and marks it as analysed.
      *
      * @return true if the row was found and updated
@@ -444,7 +481,9 @@ public class LogAnalysisFindingsStore {
                 rs.getString("deep_analysis"),
                 toInstant(rs.getTimestamp("analysed_at")),
                 rs.getString("jira_key"),
-                toInstant(rs.getTimestamp("monitoring_since"))
+                toInstant(rs.getTimestamp("monitoring_since")),
+                rs.getString("job_id"),
+                rs.getString("pr_url")
         );
     }
 

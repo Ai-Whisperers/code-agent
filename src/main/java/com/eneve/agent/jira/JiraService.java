@@ -349,6 +349,10 @@ public class JiraService {
                 "list components for " + projectKey);
     }
 
+    public String listPrioritiesRaw() {
+        return httpClient.get("/rest/api/3/priority", "list priorities");
+    }
+
     // ─── Configuration ────────────────────────────────────────────────────────
 
     public boolean isConfigured() { return httpClient.isConfigured(); }

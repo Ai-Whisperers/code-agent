@@ -12,6 +12,9 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Timestamp;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
 
 /**
@@ -138,6 +141,66 @@ public class QualityReportStore {
         } catch (SQLException e) {
             LOG.errorf("QualityReportStore: failed to query latest-per-branch for %s/%s: %s",
                     workspace, repoSlug, e.getMessage());
+        }
+        return results;
+    }
+
+    // ─── Cross-repo coverage trend ───────────────────────────────────────────
+
+    /**
+     * Returns weekly-bucketed average line coverage % per repository for all repos
+     * in the given workspace, using JSONB path extraction to avoid deserialising
+     * full {@link QualityReport} objects.
+     *
+     * <p>Rows where {@code report_data->'coverage'} is null (repos without JaCoCo) are skipped.
+     *
+     * @param workspace workspace slug
+     * @param branch    branch name (e.g. {@code "main"} or {@code "develop"})
+     * @param days      rolling window in days (1–365)
+     * @return list of {@code {repoSlug, week, avgLineRate}} maps, ordered by repo then week
+     */
+    public List<Map<String, Object>> getCoverageTrendAllRepos(String workspace, String branch, int days) {
+        Instant since = Instant.now().minus(days, ChronoUnit.DAYS);
+
+        String sql = """
+                SELECT
+                    repo_slug,
+                    DATE_TRUNC('week', created_at)                                   AS week,
+                    ROUND(AVG(
+                        CAST(report_data->'coverage'->>'lineRate' AS DOUBLE PRECISION)
+                    )::numeric, 4)                                                   AS avg_line_rate
+                FROM quality_reports
+                WHERE workspace = ?
+                  AND branch = ?
+                  AND created_at >= ?
+                  AND report_data->'coverage' IS NOT NULL
+                  AND report_data->'coverage'->>'lineRate' IS NOT NULL
+                GROUP BY repo_slug, week
+                ORDER BY repo_slug, week
+                """;
+
+        List<Map<String, Object>> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+
+            ps.setString(1, workspace);
+            ps.setString(2, branch);
+            ps.setTimestamp(3, Timestamp.from(since));
+
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    Map<String, Object> row = new LinkedHashMap<>();
+                    row.put("repoSlug",    rs.getString("repo_slug"));
+                    Timestamp week = rs.getTimestamp("week");
+                    row.put("week",        week != null ? week.toInstant().toString() : null);
+                    double rate = rs.getDouble("avg_line_rate");
+                    row.put("avgLineRate", rs.wasNull() ? null : rate);
+                    results.add(row);
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("QualityReportStore.getCoverageTrendAllRepos failed for %s branch=%s: %s",
+                    workspace, branch, e.getMessage());
         }
         return results;
     }

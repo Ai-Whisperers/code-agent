@@ -25,5 +25,7 @@ public record LogAnalysisFinding(
         String deepAnalysis,
         Instant analysedAt,
         String jiraKey,
-        Instant monitoringSince
+        Instant monitoringSince,
+        String jobId,
+        String prUrl
 ) {}

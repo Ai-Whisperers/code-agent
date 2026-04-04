@@ -143,6 +143,42 @@ public class JiraMetaResource {
     }
 
     @GET
+    @Path("/priorities")
+    @RolesAllowed({"app_admin", "app_developer"})
+    @Operation(
+            operationId = "listJiraPriorities",
+            summary = "List all Jira priorities",
+            description = "Returns id and name for every priority configured in Jira."
+    )
+    @APIResponse(responseCode = "200", description = "Array of {id, name}")
+    @APIResponse(responseCode = "503", description = "Jira not configured or unreachable")
+    public Response listPriorities() {
+        if (!jiraService.isConfigured()) {
+            return Response.status(503).entity("{\"error\":\"Jira is not configured\"}").build();
+        }
+        String raw = jiraService.listPrioritiesRaw();
+        if (raw == null) {
+            return Response.status(503).entity("{\"error\":\"Jira request failed\"}").build();
+        }
+        try {
+            JsonNode root = mapper.readTree(raw);
+            ArrayNode result = mapper.createArrayNode();
+            if (root.isArray()) {
+                for (JsonNode p : root) {
+                    ObjectNode item = mapper.createObjectNode();
+                    item.put("id",   p.path("id").asText(""));
+                    item.put("name", p.path("name").asText(""));
+                    result.add(item);
+                }
+            }
+            return Response.ok(result).build();
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse Jira priorities response: %s", e.getMessage());
+            return Response.status(503).entity("{\"error\":\"Failed to parse Jira response\"}").build();
+        }
+    }
+
+    @GET
     @Path("/repo-product")
     @Operation(
             operationId = "getRepoProduct",
