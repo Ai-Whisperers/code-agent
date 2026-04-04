@@ -56,6 +56,9 @@ public class ComplianceResource {
             @Parameter(description = "Filter by review status: NONE, IN_PROGRESS, COMPLETE")
             @QueryParam("reviewStatus") String reviewStatusParam,
 
+            @Parameter(description = "Filter by Jira priority: Critical, High, Medium, Low")
+            @QueryParam("priority") String priorityParam,
+
             @Parameter(description = "Maximum number of results (1–200, default 100)")
             @QueryParam("limit") @DefaultValue("100") int limit,
 
@@ -65,7 +68,7 @@ public class ComplianceResource {
     ) {
         try {
             ComplianceService.Soc2PageResult result =
-                    complianceService.listSoc2Jobs(statusParam, slaStatusParam, reviewStatusParam, limit, page);
+                    complianceService.listSoc2Jobs(statusParam, slaStatusParam, reviewStatusParam, priorityParam, limit, page);
             return Response.ok(Map.of(
                     "items", result.items(),
                     "total", result.total(),

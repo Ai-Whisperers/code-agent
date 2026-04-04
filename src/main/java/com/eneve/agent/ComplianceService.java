@@ -36,7 +36,8 @@ public class ComplianceService {
      * @throws IllegalArgumentException if {@code statusParam} is not a valid {@link JobStatus} name
      */
     public Soc2PageResult listSoc2Jobs(String statusParam, String slaStatusParam,
-                                        String reviewStatusParam, int limit, int page) {
+                                        String reviewStatusParam, String priorityParam,
+                                        int limit, int page) {
         String bugIssueTypes = soc2Policy.bugIssueTypes();
         int criticalDays     = soc2Policy.criticalSlaDays();
         int highDays         = soc2Policy.highSlaDays();
@@ -44,7 +45,7 @@ public class ComplianceService {
         int safeLimit = Math.min(Math.max(1, limit), 200);
         int offset    = Math.max(0, page) * safeLimit;
 
-        List<JobRecord> candidates = jobStore.findJobsWithJiraIssueType(safeLimit + offset + 100);
+        List<JobRecord> candidates = jobStore.findJobsWithJiraIssueType();
 
         JobStatus filterStatus = null;
         if (statusParam != null && !statusParam.isBlank()) {
@@ -56,6 +57,11 @@ public class ComplianceService {
         for (JobRecord job : candidates) {
             if (!JobStore.isSoc2Applicable(job, bugIssueTypes)) continue;
             if (filterStatus != null && job.getStatus() != filterStatus) continue;
+
+            if (priorityParam != null && !priorityParam.isBlank()
+                    && !priorityParam.equalsIgnoreCase(job.getJiraPriority())) {
+                continue;
+            }
 
             String slaStatus  = deriveSlaStatus(job, criticalDays, highDays);
             Instant slaDeadline = deriveSlaDeadline(job, criticalDays, highDays);

@@ -326,7 +326,7 @@ public class JobStore {
     /**
      * Returns all jobs (active + history) that have a non-null {@code jira_issue_type}, ordered newest first.
      */
-    public List<JobRecord> findJobsWithJiraIssueType(int limit) { return queryHelper.findJobsWithJiraIssueType(limit); }
+    public List<JobRecord> findJobsWithJiraIssueType() { return queryHelper.findJobsWithJiraIssueType(); }
 
     /**
      * Returns {@code true} when the job is linked to a Jira issue type that appears in

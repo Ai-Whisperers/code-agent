@@ -523,8 +523,7 @@ class JobQueryHelper {
         return results;
     }
 
-    List<JobRecord> findJobsWithJiraIssueType(int limit) {
-        int safeLimit = Math.min(Math.max(1, limit), 500);
+    List<JobRecord> findJobsWithJiraIssueType() {
         String sql = """
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
@@ -542,12 +541,10 @@ class JobQueryHelper {
                 FROM job_history
                 WHERE jira_key IS NOT NULL
                 ORDER BY created_at DESC
-                LIMIT ?
                 """;
         List<JobRecord> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
-            ps.setInt(1, safeLimit);
             try (ResultSet rs = ps.executeQuery()) {
                 while (rs.next()) {
                     JobRecord job = rowMapper.mapRow(rs);
