@@ -78,9 +78,11 @@ public class ComplianceService {
                 continue;
             }
 
-            String jiraKey = null;
-            if (job.getRequest() != null)         jiraKey = job.getRequest().jiraKey();
-            else if (job.getFixPrRequest() != null) jiraKey = job.getFixPrRequest().jiraKey();
+            String jiraKey = switch (job.getPayload()) {
+                case com.eneve.agent.model.RunFixRequest r  -> r.jiraKey();
+                case com.eneve.agent.model.FixPrRequest r   -> r.jiraKey();
+                default -> null;
+            };
 
             results.add(new Soc2JobSummary(
                     job.getJobId(),
@@ -145,7 +147,7 @@ public class ComplianceService {
         if (job.getPrId() == null) return "NONE";
         try {
             String status = "NONE";
-            for (JobRecord r : jobStore.findByPrId(job.getPrId())) {
+            for (JobRecord r : jobStore.findByPrId(job.getPrId(), job.getWorkspace(), job.getRepoSlug())) {
                 if (r.getJobType() != JobType.REVIEW) continue;
                 if (r.getStatus() == JobStatus.SUCCESS) return "COMPLETE";
                 if (r.getStatus() == JobStatus.RUNNING

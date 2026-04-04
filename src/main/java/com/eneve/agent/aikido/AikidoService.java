@@ -50,6 +50,43 @@ public class AikidoService {
     /** Minimum delay between consecutive detail API calls to stay under 20 req/min. */
     private static final long DETAIL_CALL_DELAY_MS = 3_100L;
 
+    /**
+     * Loaded once from {@code container-repo-mapping.json} on first use.
+     * Key: full container image name (e.g. "julesenergy/julesclick-files").
+     * Value: the {@code codeRepo} slug that owns it (e.g. "FileService").
+     */
+    private volatile java.util.Map<String, String> containerRepoMapping = null;
+
+    private java.util.Map<String, String> getContainerRepoMapping() {
+        if (containerRepoMapping != null) return containerRepoMapping;
+        synchronized (this) {
+            if (containerRepoMapping != null) return containerRepoMapping;
+            java.util.Map<String, String> map = new java.util.HashMap<>();
+            try (var stream = getClass().getClassLoader()
+                    .getResourceAsStream("container-repo-mapping.json")) {
+                if (stream != null) {
+                    JsonNode root = objectMapper.readTree(stream);
+                    JsonNode mappings = root.path("mappings");
+                    var it = mappings.fieldNames();
+                    while (it.hasNext()) {
+                        String imgName = it.next();
+                        String codeRepo = mappings.path(imgName).path("codeRepo").asText("");
+                        // Store all entries — blank/null codeRepo stored as "" to mark the image
+                        // as "known but untracked" so Pass 2 drops it instead of misrouting it.
+                        map.put(imgName.toLowerCase(), codeRepo.toLowerCase());
+                    }
+                    LOG.infof("Loaded %d container→repo mappings from container-repo-mapping.json", map.size());
+                } else {
+                    LOG.warn("container-repo-mapping.json not found on classpath");
+                }
+            } catch (Exception ex) {
+                LOG.warnf("Failed to load container-repo-mapping.json: %s", ex.getMessage());
+            }
+            containerRepoMapping = java.util.Collections.unmodifiableMap(map);
+        }
+        return containerRepoMapping;
+    }
+
     @Inject HttpClient httpClient;
     @Inject ObjectMapper objectMapper;
 
@@ -286,13 +323,28 @@ public class AikidoService {
             int matched = 0;
 
             // Global dedup: each group_id is assigned to exactly one repo slug.
-            // code_repo_name is the authoritative match; container_repo_name is a fallback
-            // so that a container issue for "julesenergy/jtp" doesn't also appear under
-            // the "jtp" software repo (which would cause duplicate React keys).
-            // We do two passes: pass 1 assigns via code_repo_name, pass 2 via container only
-            // for groups not already assigned.
+            //
+            // Routing rules:
+            //   Container issues (attack_surface = docker_container / container / …):
+            //     1. Try container_repo_name last-segment first (e.g. "julesclick-files" from
+            //        "julesenergy/julesclick-files") — this keeps the issue under its own
+            //        container repo if that slug is tracked.
+            //     2. Fall back to code_repo_name if the container slug is not tracked.
+            //
+            //   Software issues (all other attack_surfaces):
+            //     Match by code_repo_name only.
+            //
+            // This prevents a container CVE that was built from the "fit" source repo from
+            // appearing under "fit" when the container image has its own tracked slug.
             java.util.Map<Integer, String> groupToSlug = new java.util.LinkedHashMap<>();
 
+            java.util.Map<String, String> ctrMapping = getContainerRepoMapping();
+            LOG.infof("Aikido routing: mapping has %d container entries, tracking %d repo slugs: %s",
+                    ctrMapping.size(), slugMap.size(), slugMap.keySet());
+
+            // Pass 1a: any issue with a container_repo_name → resolve via mapping first,
+            // then last-segment match. Attack_surface is NOT checked here — a container image
+            // name in the mapping is authoritative regardless of how Aikido classifies the surface.
             for (JsonNode issue : issues) {
                 String severity = extractSeverity(issue);
                 if (!"critical".equals(severity) && !"high".equals(severity)) {
@@ -303,21 +355,49 @@ public class AikidoService {
                 int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
                 if (groupId < 0 || groupToSlug.containsKey(groupId)) continue;
 
-                // Pass 1: prefer code_repo_name match
-                String codeRepoName = issue.path("code_repo_name").asText("").toLowerCase();
-                if (!codeRepoName.isBlank()) {
+                String containerRepoName = issue.path("container_repo_name").asText("").toLowerCase();
+                if (containerRepoName.isBlank()) continue;
+
+                String mappedCodeRepo = ctrMapping.get(containerRepoName);
+                if (mappedCodeRepo != null) {
+                    // Mapping is authoritative — find the tracked slug or drop in Pass 2
+                    boolean mappingMatched = false;
                     for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
-                        String slugLower = entry.getValue();
-                        String lastSeg = codeRepoName.substring(codeRepoName.lastIndexOf('/') + 1);
-                        if (codeRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                        if (entry.getValue().equals(mappedCodeRepo)) {
                             groupToSlug.put(groupId, entry.getKey());
+                            LOG.infof("Aikido routing [1a-map]: group %d container '%s' → mapped codeRepo '%s' → tracked slug '%s'",
+                                    groupId, containerRepoName, mappedCodeRepo, entry.getKey());
+                            mappingMatched = true;
                             break;
                         }
                     }
+                    if (!mappingMatched) {
+                        LOG.infof("Aikido routing [1a-map]: group %d container '%s' → mapped codeRepo '%s' NOT in tracked slugs — will drop",
+                                groupId, containerRepoName, mappedCodeRepo);
+                    }
+                    continue; // mapping is authoritative — don't fall through to last-seg
+                }
+
+                // No mapping entry — try last-segment match against tracked slugs
+                String lastSeg = containerRepoName.substring(containerRepoName.lastIndexOf('/') + 1);
+                boolean segMatched = false;
+                for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
+                    String slugLower = entry.getValue();
+                    if (containerRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                        groupToSlug.put(groupId, entry.getKey());
+                        LOG.infof("Aikido routing [1a-seg]: group %d container '%s' → slug '%s'",
+                                groupId, containerRepoName, entry.getKey());
+                        segMatched = true;
+                        break;
+                    }
+                }
+                if (!segMatched) {
+                    LOG.infof("Aikido routing [1a-seg]: group %d container '%s' — no slug match, no mapping — will try Pass 2",
+                            groupId, containerRepoName);
                 }
             }
 
-            // Pass 2: for groups not matched by code_repo_name, try container_repo_name
+            // Pass 1b: software issues (no container_repo_name) → match by code_repo_name
             for (JsonNode issue : issues) {
                 String severity = extractSeverity(issue);
                 if (!"critical".equals(severity) && !"high".equals(severity)) continue;
@@ -326,27 +406,85 @@ public class AikidoService {
                 if (groupId < 0 || groupToSlug.containsKey(groupId)) continue;
 
                 String containerRepoName = issue.path("container_repo_name").asText("").toLowerCase();
-                if (!containerRepoName.isBlank()) {
+                if (!containerRepoName.isBlank()) continue; // handled in Pass 1a
+
+                String codeRepoName = issue.path("code_repo_name").asText("").toLowerCase();
+                if (!codeRepoName.isBlank()) {
+                    String lastSeg = codeRepoName.substring(codeRepoName.lastIndexOf('/') + 1);
                     for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
                         String slugLower = entry.getValue();
-                        String lastSeg = containerRepoName.substring(containerRepoName.lastIndexOf('/') + 1);
-                        if (containerRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                        if (codeRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
                             groupToSlug.put(groupId, entry.getKey());
+                            LOG.infof("Aikido routing [1b]: group %d code_repo '%s' → slug '%s'",
+                                    groupId, codeRepoName, entry.getKey());
                             break;
                         }
                     }
                 }
             }
 
-            // Collect one representative export row per group_id (rows differ only in affected_file)
+            // Pass 2: anything still unassigned — fall back to code_repo_name only if the
+            // container_repo_name is NOT in the mapping at all (truly unknown container).
+            // If container_repo_name IS in the mapping, the issue belongs to a known but
+            // untracked repo — drop it to avoid misrouting.
+            for (JsonNode issue : issues) {
+                String severity = extractSeverity(issue);
+                if (!"critical".equals(severity) && !"high".equals(severity)) continue;
+                if (isInactiveStatus(issue)) continue;
+                int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
+                if (groupId < 0 || groupToSlug.containsKey(groupId)) continue;
+
+                String containerRepoName = issue.path("container_repo_name").asText("").toLowerCase();
+                if (!containerRepoName.isBlank() && ctrMapping.containsKey(containerRepoName)) {
+                    LOG.infof("Aikido routing [drop]: group %d container '%s' in mapping but codeRepo not tracked — dropping",
+                            groupId, containerRepoName);
+                    continue;
+                }
+
+                String codeRepoName = issue.path("code_repo_name").asText("").toLowerCase();
+                if (!codeRepoName.isBlank()) {
+                    String lastSeg = codeRepoName.substring(codeRepoName.lastIndexOf('/') + 1);
+                    for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
+                        String slugLower = entry.getValue();
+                        if (codeRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                            groupToSlug.put(groupId, entry.getKey());
+                            LOG.infof("Aikido routing [2-fallback]: group %d container '%s' code_repo '%s' → slug '%s'",
+                                    groupId, containerRepoName, codeRepoName, entry.getKey());
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Collect one representative export row per group_id.
+            // Prefer the row whose container_repo_name (lowercased last-segment) matches the
+            // assigned slug — this ensures containerImage on the final issue reflects the
+            // correct container, not a sibling container that happens to share the same group_id.
             java.util.Map<Integer, JsonNode> groupRepresentative = new java.util.LinkedHashMap<>();
             for (JsonNode issue : issues) {
                 String severity = extractSeverity(issue);
                 if (!"critical".equals(severity) && !"high".equals(severity)) continue;
                 if (isInactiveStatus(issue)) continue;
                 int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
-                if (groupId < 0 || !groupToSlug.containsKey(groupId)) continue;
-                groupRepresentative.putIfAbsent(groupId, issue);
+                String assignedSlug = groupToSlug.get(groupId);
+                if (groupId < 0 || assignedSlug == null) continue;
+
+                if (!groupRepresentative.containsKey(groupId)) {
+                    groupRepresentative.put(groupId, issue);
+                } else {
+                    // Upgrade to this row if its container_repo_name maps to the assigned slug
+                    String ctr = issue.path("container_repo_name").asText("").toLowerCase();
+                    if (!ctr.isBlank()) {
+                        String mappedRepo = ctrMapping.get(ctr);
+                        String slugLower = assignedSlug.toLowerCase();
+                        boolean isCanonical = (mappedRepo != null && mappedRepo.equals(slugLower))
+                                || ctr.equals(slugLower)
+                                || ctr.substring(ctr.lastIndexOf('/') + 1).equals(slugLower);
+                        if (isCanonical) {
+                            groupRepresentative.put(groupId, issue);
+                        }
+                    }
+                }
             }
 
             int totalGroups = groupRepresentative.size();
