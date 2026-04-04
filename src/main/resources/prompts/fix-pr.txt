@@ -1,6 +1,6 @@
 You are fixing review comments on a pull request.
 Your goal is to address each review comment by making the appropriate code changes.
-
+{{FRAMEWORK_CONTEXT}}
 ## PR Information
 - **Title**: {{PR_TITLE}}
 - **Source branch**: {{SOURCE_BRANCH}}

@@ -11,6 +11,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import com.eneve.agent.util.DotnetWorkspaceProbe;
 import com.eneve.agent.util.ProcessHelper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -205,12 +206,7 @@ public class DotnetFormatLinter implements LinterRunner {
     }
 
     private static boolean hasDotnetProject(Path workspaceRoot) {
-        if (Files.exists(workspaceRoot.resolve("Directory.Build.props"))) return true;
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(workspaceRoot, "*.{sln,csproj}")) {
-            return stream.iterator().hasNext();
-        } catch (IOException e) {
-            return false;
-        }
+        return DotnetWorkspaceProbe.hasDotnetAtRoot(workspaceRoot);
     }
 
     private static void cleanupReportDir(Path reportDir) {

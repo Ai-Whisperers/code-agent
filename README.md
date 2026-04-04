@@ -1016,13 +1016,13 @@ This prevents false positives that arise from reviewing a diff without its wider
 
 ### Code graph (impact analysis)
 
-The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser with symbol resolution for call edges, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser with symbol resolution for call edges; C#, TypeScript, and PHP via Tree-sitter CST parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
 
 For Java, stored symbols use fully qualified type names and method signatures (as returned by the symbol solver). After upgrading the agent, run a **full rebuild** of each repo’s graph (`POST /graph/rebuild/{workspace}/{repoSlug}`) or `POST /graph/build-missing` so existing PostgreSQL rows match the new ID format; otherwise impact queries may be sparse until files are re-indexed naturally.
 
 **How it works:**
 
-1. On the first review of a repository, a full index is built from all `.java` and `.cs` files in the workspace
+1. On the first review of a repository, a full index is built from all `.java`, `.cs`, `.ts`, `.tsx`, and `.php` files in the workspace
 2. On subsequent reviews, only the files touched in the diff are re-indexed (typically 5–20 files)
 3. The agent queries the graph to find code that depends on the changed symbols and injects this as context
 4. During the review tool-use loop, the agent can query the graph on-demand via `query_code_graph`
@@ -1038,7 +1038,11 @@ For Java, stored symbols use fully qualified type names and method signatures (a
 curl -X POST http://localhost:8080/graph/rebuild/myworkspace/my-repo
 ```
 
-**Supported languages:** Java (full AST via JavaParser), C# (regex-based — classes, interfaces, structs, enums, methods, fields, inheritance, using directives, method calls). Non-supported files are silently skipped.
+**Supported languages:** Java (full AST via JavaParser with symbol resolution), C# / TypeScript / PHP (Tree-sitter CST — classes, interfaces, enums, methods, inheritance, imports, and call expressions; version-agnostic, no SDK required). Non-supported files are silently skipped.
+
+**Nested .NET layouts:** When a `.sln` or `.csproj` is not at the repository root, the agent walks up to 3 directory levels to find it and uses `dotnet test <path>` accordingly. Multi-solution repos fall back to `dotnet test` at root with a warning logged.
+
+**Tree-sitter native library:** The `ch.usi.si.seart:java-tree-sitter` JNI library bundles pre-compiled native binaries for `linux/amd64`, `linux/aarch64`, and `darwin/arm64` inside the JAR. No additional `apt` packages or Docker changes are required. If the library fails to load (unsupported platform), indexing falls back to the previous regex-based path automatically.
 
 ### Semantic search (cross-repo vector search)
 

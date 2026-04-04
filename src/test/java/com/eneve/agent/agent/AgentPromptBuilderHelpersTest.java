@@ -96,6 +96,29 @@ class AgentPromptBuilderHelpersTest {
     }
 
     @Test
+    void resolvesTestCommandWithSlnPathWhenSlnIsNested() throws IOException {
+        Path sub = Files.createDirectories(tempDir.resolve("src"));
+        Files.writeString(sub.resolve("MyApp.sln"), "");
+
+        String cmd = AgentPromptBuilder.resolveTestCommand(tempDir);
+
+        assertTrue(cmd.startsWith("dotnet test "), "Expected path-qualified dotnet test, got: " + cmd);
+        assertTrue(cmd.contains("MyApp.sln"), "Expected sln path in command, got: " + cmd);
+    }
+
+    @Test
+    void resolvesTestCommandAsDotnetTestAtRootWhenMultipleSlnFound() throws IOException {
+        Path sub1 = Files.createDirectories(tempDir.resolve("app1"));
+        Path sub2 = Files.createDirectories(tempDir.resolve("app2"));
+        Files.writeString(sub1.resolve("App1.sln"), "");
+        Files.writeString(sub2.resolve("App2.sln"), "");
+
+        String cmd = AgentPromptBuilder.resolveTestCommand(tempDir);
+
+        assertEquals("dotnet test", cmd);
+    }
+
+    @Test
     void resolvesTestCommandAsPhpArtisanWhenArtisanPresent() throws IOException {
         Files.writeString(tempDir.resolve("composer.json"), "{}");
         Files.writeString(tempDir.resolve("artisan"), "#!/usr/bin/env php");

@@ -183,6 +183,13 @@
             <version>3.26.4</version>
         </dependency>
 
+        <!-- Tree-sitter Java bindings (JNI, Java 11+) for C#/TypeScript/PHP code graph indexing -->
+        <dependency>
+            <groupId>ch.usi.si.seart</groupId>
+            <artifactId>java-tree-sitter</artifactId>
+            <version>1.12.0</version>
+        </dependency>
+
         <!-- Structurizr DSL: parse/validate Structurizr DSL + export views to Mermaid (structurizr-export is a transitive dep) -->
         <dependency>
             <groupId>com.structurizr</groupId>

@@ -1,6 +1,7 @@
 package com.eneve.agent.agent;
 
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.util.DotnetWorkspaceProbe;
 import com.eneve.agent.util.JdkResolver;
 import com.eneve.agent.util.NodeProjectHelper;
 import com.eneve.agent.util.ProcessHelper;
@@ -10,7 +11,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 
 import java.io.IOException;
-import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
@@ -58,18 +58,31 @@ public class BuildValidator {
 
     /**
      * Extracts a useful excerpt from build output for feeding back to the agent.
-     * Prefers lines containing [ERROR] or [WARN], then falls back to head+tail.
-     * This avoids the common problem of classpath dumps burying the actual failure.
+     * Collects lines that match Maven or MSBuild/dotnet CLI error patterns first,
+     * then falls back to head+tail. This avoids classpath dumps burying the actual
+     * failure for both Java and .NET projects.
+     *
+     * <p>Maven patterns: {@code [ERROR]}, {@code [FATAL]}, {@code FAILED},
+     * {@code BUILD FAILURE}.
+     *
+     * <p>MSBuild / dotnet CLI patterns: {@code : error CS}, {@code : error MSB},
+     * {@code : error NU}, {@code : error NETSDK}, {@code Build FAILED},
+     * {@code Error(s)}, {@code Unhandled exception}.
      */
     static String buildErrorExcerpt(String output) {
         if (output == null) return "";
         final int MAX = 3000;
         if (output.length() <= MAX) return output;
 
-        // Extract lines that contain actual errors/warnings — these are the most useful
+        // Collect lines matching Maven or MSBuild/dotnet CLI error indicators
         String errorLines = output.lines()
                 .filter(l -> l.contains("[ERROR]") || l.contains("[FATAL]")
-                        || l.contains("FAILED") || l.contains("BUILD FAILURE"))
+                        || l.contains("FAILED") || l.contains("BUILD FAILURE")
+                        // MSBuild / dotnet CLI patterns
+                        || l.contains(": error CS") || l.contains(": error MSB")
+                        || l.contains(": error NU") || l.contains(": error NETSDK")
+                        || l.contains("Build FAILED") || l.contains("Error(s)")
+                        || l.contains("Unhandled exception"))
                 .collect(java.util.stream.Collectors.joining("\n"));
 
         if (!errorLines.isBlank() && errorLines.length() <= MAX) {
@@ -91,8 +104,8 @@ public class BuildValidator {
         if (Files.exists(root.resolve("build.gradle")) || Files.exists(root.resolve("build.gradle.kts"))) {
             return "gradle test";
         }
-        if (hasDotnetProject(root)) {
-            return "dotnet test";
+        if (DotnetWorkspaceProbe.hasDotnetAtRoot(root)) {
+            return DotnetWorkspaceProbe.resolveDotnetTestCommand(root);
         }
         if (Files.exists(root.resolve("package.json")) && hasNodeTestableProject(root)) {
             return NodeProjectHelper.installAndTestCommand(root);
@@ -133,14 +146,6 @@ public class BuildValidator {
             }
         }
         return false;
-    }
-
-    private static boolean hasDotnetProject(Path root) {
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(root, "*.{sln,csproj}")) {
-            return stream.iterator().hasNext();
-        } catch (IOException e) {
-            return false;
-        }
     }
 
 }

@@ -42,7 +42,8 @@
       "IMPACT_SECTION",
       "PREVIOUS_COMMENTS",
       "DIFF_TRUNCATION_NOTE",
-      "DIFF"
+      "DIFF",
+      "FRAMEWORK_CONTEXT"
     ]
   },
   "fix-pr": {
@@ -53,7 +54,8 @@
       "TARGET_BRANCH",
       "COMMENTS",
       "DIFF",
-      "BUILD_AND_TEST_COMMAND"
+      "BUILD_AND_TEST_COMMAND",
+      "FRAMEWORK_CONTEXT"
     ]
   },
   "fix-comment": {
@@ -86,7 +88,8 @@
     "placeholders": [
       "COVERAGE_SECTION",
       "TARGET_FILES_SECTION",
-      "BUILD_AND_TEST_COMMAND"
+      "BUILD_AND_TEST_COMMAND",
+      "FRAMEWORK_CONTEXT"
     ]
   },
   "generate-docs": {

@@ -41,7 +41,7 @@ public class CodeGraphIndexer {
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
     private static final long MAX_INDEX_TIME_MS = 60_000;  // 60 seconds
 
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs", ".ts", ".tsx", ".php");
+    private static final Set<String> SUPPORTED_EXTENSIONS = LanguageRegistry.SUPPORTED_EXTENSIONS;
 
     // ── C# regex patterns ──────────────────────────────────────────────
     private static final Pattern CS_TYPE_DECL = Pattern.compile(
@@ -140,6 +140,9 @@ public class CodeGraphIndexer {
     @Inject
     JavaWorkspaceTypeSolver workspaceTypeSolver;
 
+    @Inject
+    com.eneve.agent.agent.treesitter.TreeSitterIndexer treeSitterIndexer;
+
     // ── Public API ─────────────────────────────────────────────────────
 
     public void indexFull(WorkspaceContext workspace, String wsName, String repoSlug) {
@@ -208,11 +211,14 @@ public class CodeGraphIndexer {
             }
             if (relativePath.endsWith(".java")) {
                 indexJavaFile(file, relativePath, wsName, repoSlug, javaParser);
+            } else if (treeSitterIndexer.index(file, relativePath, wsName, repoSlug)) {
+                // Handled by Tree-sitter driver (C#, TypeScript, PHP).
+                // Falls back to regex below only when Tree-sitter is unavailable.
             } else if (relativePath.endsWith(".cs")) {
                 indexCSharpFile(file, relativePath, wsName, repoSlug);
             } else if (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) {
                 indexTypeScriptFile(file, relativePath, wsName, repoSlug);
-            } else if (relativePath.endsWith(".php")) {
+            } else if (relativePath.endsWith(".php") || relativePath.endsWith(".blade.php")) {
                 indexPhpFile(file, relativePath, wsName, repoSlug);
             }
         } catch (Exception e) {

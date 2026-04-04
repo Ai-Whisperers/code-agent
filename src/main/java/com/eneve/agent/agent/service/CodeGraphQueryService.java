@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.service;
 
+import com.eneve.agent.agent.LanguageRegistry;
 import com.eneve.agent.agent.store.CodeGraphStore;
 import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -54,9 +55,7 @@ public class CodeGraphQueryService {
         boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
         int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
-                .filter(f -> f.endsWith(".java") || f.endsWith(".cs")
-                          || f.endsWith(".ts")   || f.endsWith(".tsx")
-                          || f.endsWith(".php"))
+                .filter(LanguageRegistry::isSupported)
                 .toList();
 
         if (sourceFiles.isEmpty()) {
@@ -216,9 +215,7 @@ public class CodeGraphQueryService {
         boolean crossRepoEnabled = Boolean.parseBoolean(settingsService.get("code-graph.cross-repo.enabled", "true"));
         int criticalThreshold = Integer.parseInt(settingsService.get("code-graph.cross-repo.critical-threshold", "3"));
         List<String> sourceFiles = changedFiles.stream()
-                .filter(f -> f.endsWith(".java") || f.endsWith(".cs")
-                          || f.endsWith(".ts")   || f.endsWith(".tsx")
-                          || f.endsWith(".php"))
+                .filter(LanguageRegistry::isSupported)
                 .limit(MAX_FILES_FOR_DIAGRAM)
                 .toList();
 

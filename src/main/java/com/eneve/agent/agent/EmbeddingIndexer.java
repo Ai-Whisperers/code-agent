@@ -43,7 +43,7 @@ public class EmbeddingIndexer {
     private static final Logger LOG = Logger.getLogger(EmbeddingIndexer.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
     private static final long MAX_INDEX_TIME_MS = 120_000; // 2 minutes
-    private static final Set<String> SUPPORTED_EXTENSIONS = Set.of(".java", ".cs", ".ts", ".tsx", ".php");
+    private static final Set<String> SUPPORTED_EXTENSIONS = LanguageRegistry.SUPPORTED_EXTENSIONS;
 
     private static final Pattern CS_TYPE_DECL = Pattern.compile(
             "^\\s*(?:(?:public|private|protected|internal|static|abstract|sealed|partial|readonly|new)\\s+)*"
@@ -226,7 +226,7 @@ public class EmbeddingIndexer {
                 return extractCSharpChunks(file, relativePath);
             } else if (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) {
                 return extractTypeScriptChunks(file, relativePath);
-            } else if (relativePath.endsWith(".php")) {
+            } else if (relativePath.endsWith(".php") || relativePath.endsWith(".blade.php")) {
                 return extractPhpChunks(file, relativePath);
             }
         } catch (Exception e) {

@@ -1,5 +1,6 @@
 You are generating unit tests for a software project.
 Your ONLY goal is to write new or improved test files. Do NOT modify any production source code.
+{{FRAMEWORK_CONTEXT}}
 {{COVERAGE_SECTION}}
 ## Discovery (do this FIRST)
 1. Identify the project type and test framework:

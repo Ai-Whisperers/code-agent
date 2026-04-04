@@ -9,6 +9,7 @@ import com.eneve.agent.agent.model.MemoryEntry;
 import com.eneve.agent.agent.model.CommentFeedbackEntry;
 import com.eneve.agent.agent.model.CommentContext;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
@@ -34,6 +35,7 @@ import com.eneve.agent.tools.GuardrailConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.util.DotnetWorkspaceProbe;
 import com.eneve.agent.util.NodeProjectHelper;
 import org.jboss.logging.Logger;
 
@@ -138,7 +140,8 @@ public class AgentPromptBuilder {
                     "IMPACT_SECTION", impactSection != null ? impactSection : "",
                     "PREVIOUS_COMMENTS", previousCommentsSection,
                     "DIFF_TRUNCATION_NOTE", diffTruncated ? "(truncated — some files omitted)\n" : "",
-                    "DIFF", annotatedDiff
+                    "DIFF", annotatedDiff,
+                    "FRAMEWORK_CONTEXT", buildFrameworkContext(workspace != null ? workspace.getRoot() : null)
             ));
         }
 
@@ -193,7 +196,8 @@ public class AgentPromptBuilder {
                 "TARGET_BRANCH", targetBranch,
                 "COMMENTS", commentsSection.toString(),
                 "DIFF", diff.isEmpty() ? "(diff not available)" : diff,
-                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot)
+                "BUILD_AND_TEST_COMMAND", resolveTestCommand(workspaceRoot),
+                "FRAMEWORK_CONTEXT", buildFrameworkContext(workspaceRoot)
         ));
 
         String guardrailText = resolveWritableGuardrails(
@@ -247,7 +251,8 @@ public class AgentPromptBuilder {
         String generateTestsInstructions = promptTemplates.resolve("generate-tests", Map.of(
                 "COVERAGE_SECTION", coverageSection,
                 "TARGET_FILES_SECTION", targetFilesSection,
-                "BUILD_AND_TEST_COMMAND", testCommand
+                "BUILD_AND_TEST_COMMAND", testCommand,
+                "FRAMEWORK_CONTEXT", buildFrameworkContext(workspaceRoot)
         ));
 
         String guardrailText = promptTemplates.resolve("guardrails.tests", Map.of(
@@ -456,8 +461,8 @@ public class AgentPromptBuilder {
         if (Files.exists(workspaceRoot.resolve("package.json"))) {
             return NodeProjectHelper.suggestedTestCommand(workspaceRoot);
         }
-        if (hasDotnetProject(workspaceRoot)) {
-            return "dotnet test";
+        if (DotnetWorkspaceProbe.hasDotnetAtRoot(workspaceRoot)) {
+            return DotnetWorkspaceProbe.resolveDotnetTestCommand(workspaceRoot);
         }
         if (Files.exists(workspaceRoot.resolve("composer.json"))) {
             // Check for Laravel Artisan first, fall back to direct PHPUnit
@@ -494,18 +499,6 @@ public class AgentPromptBuilder {
         if (Files.exists(workspaceRoot.resolve("__tests__"))) return "__tests__";
         if (Files.exists(workspaceRoot.resolve("spec"))) return "spec";
         return "tests";
-    }
-
-    private static boolean hasDotnetProject(Path workspaceRoot) {
-        try (var stream = Files.list(workspaceRoot)) {
-            return stream.anyMatch(p -> {
-                String name = p.getFileName().toString().toLowerCase();
-                return name.endsWith(".sln") || name.endsWith(".csproj")
-                        || name.endsWith(".fsproj") || name.endsWith(".vbproj");
-            });
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     private RepoSettings loadRepoSettings(String workspace, String repoSlug) {
@@ -683,5 +676,54 @@ public class AgentPromptBuilder {
 
         LOG.debugf("Injected %d FP patterns into review prompt for %s/%s", patterns.size(), workspace, repoSlug);
         return sb.toString();
+    }
+
+    /**
+     * Returns a framework-specific context block to inject into prompts, or an empty string
+     * when the workspace does not belong to a recognised framework.
+     *
+     * <p>Detection is done by inspecting well-known files in the workspace root (e.g.
+     * {@code composer.json} for PHP projects) so this method works even when the repo
+     * settings archetype has not yet been persisted to the database.
+     *
+     * @param workspaceRoot root directory of the cloned repository, may be {@code null}
+     */
+    static String buildFrameworkContext(Path workspaceRoot) {
+        if (workspaceRoot == null) {
+            return "";
+        }
+        // Laravel: composer.json exists and declares laravel/framework
+        Path composerJson = workspaceRoot.resolve("composer.json");
+        if (Files.exists(composerJson)) {
+            try {
+                String content = Files.readString(composerJson);
+                if (content.contains("\"laravel/framework\"")) {
+                    return """
+
+                            ## Framework: Laravel
+                            - Follow Laravel conventions: Eloquent ORM, service container, facades, artisan commands
+                            - Prefer `php artisan test` for running tests; fall back to `vendor/bin/phpunit`
+                            - Routes live in `routes/`, controllers in `app/Http/Controllers/`, models in `app/Models/`
+                            - Use Laravel validation (`$request->validate()`), jobs, events, and notifications rather than raw PHP equivalents
+                            - Blade templates live in `resources/views/` with the `.blade.php` extension
+                            - Configuration is in `config/`; environment variables are accessed via `env()` / `.env`
+                            """;
+                }
+                if (content.contains("\"symfony/framework-bundle\"")) {
+                    return """
+
+                            ## Framework: Symfony
+                            - Follow Symfony conventions: services, dependency injection container, event dispatcher
+                            - Use Symfony Console for CLI commands, HttpFoundation for request/response
+                            - Configuration lives in `config/`; services are defined in `config/services.yaml`
+                            - Run tests with `php bin/phpunit`
+                            """;
+                }
+            } catch (IOException e) {
+                LOG.debugf("buildFrameworkContext: could not read composer.json at %s: %s",
+                        composerJson, e.getMessage());
+            }
+        }
+        return "";
     }
 }

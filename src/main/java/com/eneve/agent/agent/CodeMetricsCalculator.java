@@ -204,12 +204,8 @@ public class CodeMetricsCalculator {
                 @Override
                 public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
                     String name = file.toString();
-                    if (name.endsWith(".java") || name.endsWith(".cs")
-                            || name.endsWith(".ts") || name.endsWith(".tsx")
-                            || name.endsWith(".php")) {
-                        if (!name.endsWith(".d.ts")) {
-                            files.add(file);
-                        }
+                    if (LanguageRegistry.isSupported(name) && !name.endsWith(".d.ts")) {
+                        files.add(file);
                     }
                     return FileVisitResult.CONTINUE;
                 }
@@ -235,7 +231,7 @@ public class CodeMetricsCalculator {
             analyseRegexFile(file, relativePath, "C#", CS_METHOD_DECL, CS_KEYWORDS, out);
         } else if (name.endsWith(".ts") || name.endsWith(".tsx")) {
             analyseTypeScriptFile(file, relativePath, out);
-        } else if (name.endsWith(".php")) {
+        } else if (name.endsWith(".php") || name.endsWith(".blade.php")) {
             analyseRegexFile(file, relativePath, "PHP", PHP_METHOD_DECL, PHP_KEYWORDS, out);
         }
     }

@@ -7,6 +7,7 @@ import java.nio.file.Path;
 import java.util.concurrent.TimeUnit;
 
 import com.eneve.agent.agent.CoverageReporter.CoverageSnapshot;
+import com.eneve.agent.util.DotnetWorkspaceProbe;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
@@ -153,12 +154,7 @@ public class DotnetCoverageReporter {
     // ─── Helpers ──────────────────────────────────────────────────────────
 
     private static boolean hasDotnetProject(Path workspaceRoot) {
-        if (Files.exists(workspaceRoot.resolve("Directory.Build.props"))) return true;
-        try (DirectoryStream<Path> stream = Files.newDirectoryStream(workspaceRoot, "*.{sln,csproj}")) {
-            return stream.iterator().hasNext();
-        } catch (IOException e) {
-            return false;
-        }
+        return DotnetWorkspaceProbe.hasDotnetAtRoot(workspaceRoot);
     }
 
     private static void deleteTempDir(Path dir) {

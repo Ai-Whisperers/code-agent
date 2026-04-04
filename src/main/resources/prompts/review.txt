@@ -1,6 +1,6 @@
 You are performing an automated code review of a pull request.
 Your goal is to review the changes for quality, correctness, and adherence to best practices.
-
+{{FRAMEWORK_CONTEXT}}
 ## PR Information
 - **Title**: {{PR_TITLE}}
 - **Target branch**: {{TARGET_BRANCH}}

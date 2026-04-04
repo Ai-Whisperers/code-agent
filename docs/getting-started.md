@@ -21,7 +21,7 @@ Before setting up the Code Agent Runner, ensure you have the following:
 | Component | Purpose | Notes |
 |-----------|---------|-------|
 | **Node.js** | ESLint integration | Version 18.x or 20.x |
-| **.NET SDK** | C# code formatting | Version 6.0 or 8.0 |
+| **.NET SDK** | C# code formatting, build validation, and coverage | Version 9.0 (matches the Docker image). Required for `dotnet format`, `dotnet test`, and Coverlet coverage. |
 | **Chromium** | Mermaid diagram rendering | Headless browser for SVG generation |
 
 ### External Service Accounts
