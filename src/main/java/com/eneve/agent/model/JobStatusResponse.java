@@ -193,12 +193,13 @@ public record JobStatusResponse(
     public static JobStatusResponse fromSearch(String jobId, JobType jobType, JobStatus status,
                                                Instant createdAt, String summary, String errorMessage,
                                                String prUrl, int filesChanged, int linesChanged,
-                                               int priority, String jiraKey) {
+                                               int priority, String jiraKey,
+                                               String workspace, String repoSlug) {
         return new JobStatusResponse(
                 jobId, jobType, status, createdAt, summary, errorMessage,
                 prUrl, filesChanged, linesChanged, 0, priority, jiraKey,
                 null, null, null,
-                null, null,
+                workspace, repoSlug,
                 null, null, null, null, null, "NOT_APPLICABLE",
                 null, false, null, false, null
         );

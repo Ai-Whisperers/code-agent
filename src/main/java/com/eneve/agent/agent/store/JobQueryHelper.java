@@ -299,13 +299,15 @@ class JobQueryHelper {
 
         String cte = """
                 SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key,
+                       workspace, repo_slug
                 FROM jobs WHERE 1=1
                 """ + where + """
 
                 UNION ALL
                 SELECT job_id, job_type, status, created_at,
-                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key
+                       summary, error_message, pr_url, pr_id, files_changed, lines_changed, priority, jira_key,
+                       workspace, repo_slug
                 FROM job_history WHERE 1=1
                 """ + where;
 
@@ -332,7 +334,8 @@ class JobQueryHelper {
                             rs.getString("summary"), rs.getString("error_message"),
                             rs.getString("pr_url"), rs.getInt("files_changed"),
                             rs.getInt("lines_changed"), rs.getInt("priority"),
-                            rs.getString("jira_key")));
+                            rs.getString("jira_key"),
+                            rs.getString("workspace"), rs.getString("repo_slug")));
                 }
             }
         } catch (SQLException e) {
