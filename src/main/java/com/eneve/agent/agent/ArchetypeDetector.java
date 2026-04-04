@@ -26,7 +26,7 @@ import java.util.Map;
  *     Quarkus → WildFly (POM) → WildFly (Dockerfile) → generic Maven packaging.
  *   </li>
  *   <li><b>Non-Maven projects</b>:
- *     .NET → PHP → TypeScript (Angular/React) → WildFly (Dockerfile) →
+ *     .NET → PHP → TypeScript (Angular/React/typescript) → WildFly (Dockerfile) →
  *     Docker → Terraform → SQL → Shell.
  *   </li>
  * </ol>

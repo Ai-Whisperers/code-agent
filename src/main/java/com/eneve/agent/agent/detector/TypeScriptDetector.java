@@ -12,9 +12,9 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Detects Angular or React from a {@code package.json} in the project root.
+ * Detects Angular, React, or plain TypeScript from a {@code package.json} in the project root.
  *
- * <p>Angular ({@code @angular/core}) is checked before React ({@code react}).
+ * <p>Precedence: Angular ({@code @angular/core}) → React ({@code react}) → TypeScript ({@code typescript}).
  * Version strings are stripped of semver range prefixes before being stored.
  */
 public class TypeScriptDetector implements Detector {
@@ -56,6 +56,13 @@ public class TypeScriptDetector implements Detector {
                 String version = stripVersionRange(reactVersion);
                 LOG.debugf("Detected React via package.json: %s", version);
                 return new ArchetypeInfo("react", version);
+            }
+
+            String tsCompilerVersion = allDeps.get("typescript");
+            if (tsCompilerVersion != null) {
+                String version = stripVersionRange(tsCompilerVersion);
+                LOG.debugf("Detected TypeScript via package.json: %s", version);
+                return new ArchetypeInfo("typescript", version);
             }
 
         } catch (Exception e) {

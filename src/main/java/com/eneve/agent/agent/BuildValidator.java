@@ -2,6 +2,7 @@ package com.eneve.agent.agent;
 
 import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.util.JdkResolver;
+import com.eneve.agent.util.NodeProjectHelper;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -93,11 +94,45 @@ public class BuildValidator {
         if (hasDotnetProject(root)) {
             return "dotnet test";
         }
-        if (Files.exists(root.resolve("package.json")) && hasNpmTestScript(root)) {
-            String installCmd = Files.exists(root.resolve("package-lock.json")) ? "npm ci" : "npm install";
-            return installCmd + " --ignore-scripts && npm test";
+        if (Files.exists(root.resolve("package.json")) && hasNodeTestableProject(root)) {
+            return NodeProjectHelper.installAndTestCommand(root);
         }
         return null;
+    }
+
+    /**
+     * True when the repo has a {@code test} script, or Vitest/Jest/Angular can run tests without one.
+     */
+    private static boolean hasNodeTestableProject(Path root) {
+        if (!Files.exists(root.resolve("package.json"))) {
+            return false;
+        }
+        if (NodeProjectHelper.hasRunnableTestScript(root)) {
+            return true;
+        }
+        if (NodeProjectHelper.isAngularWorkspace(root)) {
+            return true;
+        }
+        if (hasVitestConfig(root)) {
+            return true;
+        }
+        try {
+            return Files.readString(root.resolve("package.json")).contains("\"jest\"");
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean hasVitestConfig(Path root) {
+        for (String name : new String[] {
+                "vitest.config.ts", "vitest.config.mts", "vitest.config.cts",
+                "vitest.config.js", "vitest.config.mjs", "vitest.config.cjs"
+        }) {
+            if (Files.exists(root.resolve(name))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasDotnetProject(Path root) {
@@ -108,13 +143,4 @@ public class BuildValidator {
         }
     }
 
-    private static boolean hasNpmTestScript(Path root) {
-        try {
-            String content = Files.readString(root.resolve("package.json"));
-            if (!content.contains("\"test\"")) return false;
-            return !content.contains("\"test\": \"echo \\\"Error: no test specified\\\"");
-        } catch (IOException e) {
-            return false;
-        }
-    }
 }

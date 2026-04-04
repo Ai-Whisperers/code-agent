@@ -38,7 +38,7 @@ import jakarta.inject.Inject;
  * Orchestrates automated framework version upgrade checks across all registered repositories.
  *
  * <p>Supported archetypes: {@code quarkus}, {@code dotnet}, {@code wildfly}, {@code angular},
- * {@code react}, {@code laravel}, {@code symfony}, {@code php}.
+ * {@code react}, {@code typescript}, {@code laravel}, {@code symfony}, {@code php}.
  *
  * <p>Flow for each supported archetype:
  * <ol>
@@ -56,7 +56,7 @@ public class UpgradeService {
 
     /** Archetypes for which automated upgrade plans are created. */
     static final List<String> SUPPORTED_ARCHETYPES = List.of(
-            "quarkus", "dotnet", "wildfly", "angular", "react", "laravel", "symfony", "php");
+            "quarkus", "dotnet", "wildfly", "angular", "react", "typescript", "laravel", "symfony", "php");
 
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject MavenCentralClient mavenCentralClient;
@@ -232,6 +232,7 @@ public class UpgradeService {
             case "wildfly"  -> wildflyReleaseClient.getLatestWildflyVersion();
             case "angular"  -> npmRegistryClient.getLatestVersion("@angular/core");
             case "react"    -> npmRegistryClient.getLatestVersion("react");
+            case "typescript" -> npmRegistryClient.getLatestVersion("typescript");
             case "laravel"  -> packagistClient.getLatestVersion("laravel", "framework");
             case "symfony"  -> packagistClient.getLatestVersion("symfony", "framework-bundle");
             case "php"      -> phpReleaseClient.getLatestPhpVersion();
@@ -373,6 +374,7 @@ public class UpgradeService {
                                                latestJdbcVersion, currentJdbcVersion, jdbcSource);
             case "angular" -> buildAngularSpec(currentVersion, latestVersion, branchName);
             case "react"   -> buildReactSpec(currentVersion, latestVersion, branchName);
+            case "typescript" -> buildTypeScriptCompilerSpec(currentVersion, latestVersion, branchName);
             case "laravel" -> buildLaravelSpec(currentVersion, latestVersion, branchName);
             case "symfony" -> buildSymfonySpec(currentVersion, latestVersion, branchName);
             case "php"     -> buildPhpSpec(currentVersion, latestVersion, branchName);
@@ -600,6 +602,30 @@ public class UpgradeService {
                 """.formatted(
                 currentVersion, latestVersion,
                 latestVersion, latestVersion, latestVersion,
+                currentVersion, latestVersion,
+                branchName, defaultBranch());
+    }
+
+    private String buildTypeScriptCompilerSpec(String currentVersion, String latestVersion, String branchName) {
+        return """
+                Upgrade the TypeScript compiler (`typescript` package) from %s to %s in this repository.
+
+                Steps:
+                1. Update the `typescript` devDependency (or dependency) in package.json to %s.
+                2. Read the TypeScript release notes for breaking changes: \
+                https://github.com/microsoft/TypeScript/wiki/Breaking-Changes
+                3. Run the install command for your package manager (`npm install`, `pnpm install`, or `yarn install`).
+                4. Run `npx tsc --noEmit` (or the project's `npm run build` / `typecheck` script) and fix new type errors.
+                5. Update `@types/*` packages if the compiler flags incompatible DefinitelyTyped versions.
+                6. Run the full test suite.
+
+                Current version: %s
+                Target version: %s
+                Use branch name: %s
+                Target branch (PR base): %s
+                """.formatted(
+                currentVersion, latestVersion,
+                latestVersion,
                 currentVersion, latestVersion,
                 branchName, defaultBranch());
     }

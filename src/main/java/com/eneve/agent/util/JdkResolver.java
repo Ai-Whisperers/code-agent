@@ -163,10 +163,18 @@ public final class JdkResolver {
      *   <li>1–8  → 8</li>
      *   <li>9–17 → 17</li>
      *   <li>18–21 → 21</li>
-     *   <li>&gt;21 → 0 (not covered)</li>
+     *   <li>&gt;21 → 21 (agent ships JDK 21; POM may target a newer {@code release} — Maven may still fail until upgraded)</li>
      * </ul>
      */
     static int pickSupportedMajor(int required) {
+        if (required <= 0) {
+            return 0;
+        }
+        if (required > 21) {
+            LOG.debugf("JdkResolver: POM declares Java %d — mapping to 21 for JDK selection (newest shipped in image)",
+                    required);
+            required = 21;
+        }
         for (int supported : SUPPORTED_MAJORS) {
             if (required <= supported) return supported;
         }

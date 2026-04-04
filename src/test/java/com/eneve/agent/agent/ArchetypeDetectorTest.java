@@ -632,7 +632,42 @@ class ArchetypeDetectorTest {
 
         ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
 
-        assertNull(info, "A package.json without React or Angular should return null");
+        assertNull(info, "A package.json without React, Angular, or TypeScript should return null");
+    }
+
+    @Test
+    void detectsTypeScriptCompilerViaDevDependencies() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "name": "ts-lib",
+                  "devDependencies": {
+                    "typescript": "~5.7.2"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("typescript", info.archetype());
+        assertEquals("5.7.2", info.version());
+    }
+
+    @Test
+    void reactTakesPriorityOverTypeScriptCompiler() throws IOException {
+        Files.writeString(tempDir.resolve("package.json"), """
+                {
+                  "dependencies": {
+                    "react": "^19.0.0",
+                    "typescript": "^5.7.0"
+                  }
+                }
+                """);
+
+        ArchetypeDetector.ArchetypeInfo info = detector.detect(tempDir);
+
+        assertNotNull(info);
+        assertEquals("react", info.archetype());
     }
 
     @Test

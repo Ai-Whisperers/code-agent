@@ -15,8 +15,8 @@ import java.util.Set;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
-import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.StaticJavaParser;
+import com.eneve.agent.util.JavaParserConfig;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
@@ -37,8 +37,7 @@ import jakarta.inject.Inject;
 public class EmbeddingIndexer {
 
     static {
-        StaticJavaParser.getParserConfiguration()
-                .setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17);
+        StaticJavaParser.setConfiguration(JavaParserConfig.java21BaseConfiguration());
     }
 
     private static final Logger LOG = Logger.getLogger(EmbeddingIndexer.class);

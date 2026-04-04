@@ -8,6 +8,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
+import com.eneve.agent.util.NodeProjectHelper;
 import com.eneve.agent.util.ProcessHelper;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -43,7 +44,7 @@ public class EsLintRunner implements LinterRunner {
             String installOutput = installDependencies(workspaceRoot, timeoutMinutes);
             if (installOutput == null) {
                 return new LinterResult(name(), Collections.emptyList(), false,
-                        "Skipped: npm install failed");
+                        "Skipped: package manager install failed");
             }
 
             String eslintCommand = "npx eslint . --format json --no-error-on-unmatched-pattern 2>/dev/null; true";
@@ -83,20 +84,20 @@ public class EsLintRunner implements LinterRunner {
     }
 
     private String installDependencies(Path workspaceRoot, long timeoutMinutes) {
-        boolean hasLockFile = Files.exists(workspaceRoot.resolve("package-lock.json"));
-        // Try npm ci first when a lock file exists — it is faster and reproducible.
-        // If the lock file is out of sync with package.json (e.g. the agent just bumped a
-        // dependency), npm ci exits with EUSAGE. In that case fall back to npm install so
-        // the lock file is regenerated and ESLint can still run.
-        if (hasLockFile) {
-            String result = runNpmCommand("npm ci --ignore-scripts", workspaceRoot, timeoutMinutes);
-            if (result != null) return result;
+        NodeProjectHelper.PackageManager pm = NodeProjectHelper.detectPackageManager(workspaceRoot);
+        if (pm == NodeProjectHelper.PackageManager.NPM && Files.exists(workspaceRoot.resolve("package-lock.json"))) {
+            // npm: try ci first; fall back to install when the lockfile is out of sync with package.json
+            String ciOnly = runShellCommand("npm ci --ignore-scripts", workspaceRoot, timeoutMinutes);
+            if (ciOnly != null) {
+                return ciOnly;
+            }
             LOG.info("npm ci failed (lock file out of sync) — retrying with npm install");
+            return runShellCommand("npm install --ignore-scripts", workspaceRoot, timeoutMinutes);
         }
-        return runNpmCommand("npm install --ignore-scripts", workspaceRoot, timeoutMinutes);
+        return runShellCommand(NodeProjectHelper.linterInstallCommand(pm, workspaceRoot), workspaceRoot, timeoutMinutes);
     }
 
-    private String runNpmCommand(String command, Path workspaceRoot, long timeoutMinutes) {
+    private String runShellCommand(String command, Path workspaceRoot, long timeoutMinutes) {
         try {
             ProcessBuilder pb = ProcessHelper.cleanBuilder(null, "sh", "-c", command)
                     .directory(workspaceRoot.toFile())

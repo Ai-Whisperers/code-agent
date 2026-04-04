@@ -34,6 +34,7 @@ import com.eneve.agent.tools.GuardrailConfig;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.util.NodeProjectHelper;
 import org.jboss.logging.Logger;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -453,7 +454,7 @@ public class AgentPromptBuilder {
             return "gradle test";
         }
         if (Files.exists(workspaceRoot.resolve("package.json"))) {
-            return "npm test";
+            return NodeProjectHelper.suggestedTestCommand(workspaceRoot);
         }
         if (hasDotnetProject(workspaceRoot)) {
             return "dotnet test";

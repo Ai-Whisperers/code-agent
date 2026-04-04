@@ -66,6 +66,18 @@ class AgentPromptBuilderHelpersTest {
     }
 
     @Test
+    void resolvesTestCommandAsPnpmWhenPnpmLockfilePresent() throws IOException {
+        Files.writeString(tempDir.resolve("pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
+        Files.writeString(tempDir.resolve("package.json"), """
+                { "scripts": { "test": "vitest run" } }
+                """);
+
+        String cmd = AgentPromptBuilder.resolveTestCommand(tempDir);
+
+        assertEquals("pnpm test", cmd);
+    }
+
+    @Test
     void resolvesTestCommandAsDotnetTestWhenCsprojPresent() throws IOException {
         Files.writeString(tempDir.resolve("MyApp.csproj"), "<Project/>");
 

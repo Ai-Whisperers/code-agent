@@ -111,7 +111,7 @@ public final class WorkspaceToolSchemas {
                         .properties(Tool.InputSchema.Properties.builder()
                                 .putAdditionalProperty("symbol", JsonValue.from(Map.of(
                                         "type", "string",
-                                        "description", "The symbol to query (e.g. 'MyClass.myMethod' or 'MyInterface')"
+                                        "description", "The symbol to query. Java: fully qualified type (e.g. 'com.example.Foo') or method signature from the graph (e.g. 'com.example.Foo.bar(java.lang.String)'). Other languages: 'Type.member' or type name as indexed."
                                 )))
                                 .putAdditionalProperty("relation", JsonValue.from(Map.of(
                                         "type", "string",

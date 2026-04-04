@@ -20,6 +20,30 @@ public class CodeGraphQueryService {
     private static final int MAX_SYMBOLS_PER_FILE = 10;
     private static final int MAX_EDGES_PER_SYMBOL = 5;
 
+    /**
+     * Whether a stored graph symbol refers to a method/constructor-like node for impact routing.
+     * Java qualified signatures contain {@code (} or {@code #}; legacy graphs used {@code Type.method};
+     * qualified type names (e.g. {@code com.foo.Bar}) use a dotted form without parentheses.
+     */
+    static boolean isMethodLikeSymbol(String symbol) {
+        if (symbol == null || symbol.isBlank()) {
+            return false;
+        }
+        if (symbol.contains("(") || symbol.contains("#")) {
+            return true;
+        }
+        int dot = symbol.lastIndexOf('.');
+        if (dot < 0) {
+            return false;
+        }
+        String last = symbol.substring(dot + 1);
+        if (last.isEmpty()) {
+            return false;
+        }
+        // Lowercase start => method/field chunk (e.g. StringHelper.sanitize, Foo.bar); UpperCamel => type (com.foo.Bar)
+        return Character.isLowerCase(last.charAt(0));
+    }
+
     @Inject
     CodeGraphStore store;
 
@@ -50,7 +74,7 @@ public class CodeGraphQueryService {
                     callersMap.put(symbol, callers);
                 }
 
-                if (!symbol.contains(".")) {
+                if (!isMethodLikeSymbol(symbol)) {
                     List<CodeGraphStore.EdgeResult> impls = store.findImplementations(workspace, repoSlug, symbol);
                     if (!impls.isEmpty()) {
                         implMap.put(symbol, impls);
@@ -148,7 +172,7 @@ public class CodeGraphQueryService {
                     // Detail mode: list individual callers grouped by repo
                     List<CodeGraphStore.CrossRepoEdgeResult> callers =
                             store.findCallersAcrossWorkspace(workspace, repoSlug, symbol);
-                    if (symbol.contains(".")) {
+                    if (isMethodLikeSymbol(symbol)) {
                         // Method symbol: show callers
                         if (!callers.isEmpty()) {
                             out.append("- **`").append(symbol).append("`** is called from other repos:\n");
@@ -214,7 +238,7 @@ public class CodeGraphQueryService {
                     break;
                 }
 
-                if (symbol.contains(".")) {
+                if (isMethodLikeSymbol(symbol)) {
                     // Method symbol: gather callers and callees
                     List<CodeGraphStore.EdgeResult> callers =
                             store.findCallers(workspace, repoSlug, symbol)

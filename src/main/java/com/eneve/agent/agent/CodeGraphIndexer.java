@@ -16,14 +16,18 @@ import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import com.github.javaparser.JavaParser;
-import com.github.javaparser.ParserConfiguration;
 import com.github.javaparser.ParseResult;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.ImportDeclaration;
 import com.github.javaparser.ast.body.ClassOrInterfaceDeclaration;
 import com.github.javaparser.ast.body.EnumDeclaration;
+import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.body.RecordDeclaration;
+import com.github.javaparser.ast.body.TypeDeclaration;
 import com.github.javaparser.ast.body.VariableDeclarator;
 import com.github.javaparser.ast.expr.MethodCallExpr;
+import com.github.javaparser.ast.type.ClassOrInterfaceType;
+import com.github.javaparser.resolution.declarations.ResolvedTypeDeclaration;
 import com.eneve.agent.workspace.WorkspaceContext;
 
 import jakarta.enterprise.context.ApplicationScoped;
@@ -32,9 +36,6 @@ import org.jboss.logging.Logger;
 
 @ApplicationScoped
 public class CodeGraphIndexer {
-
-    private static final JavaParser JAVA_PARSER = new JavaParser(
-            new ParserConfiguration().setLanguageLevel(ParserConfiguration.LanguageLevel.JAVA_17));
 
     private static final Logger LOG = Logger.getLogger(CodeGraphIndexer.class);
     private static final long MAX_FILE_SIZE = 200 * 1024; // 200KB
@@ -136,6 +137,9 @@ public class CodeGraphIndexer {
     @Inject
     CodeGraphStore store;
 
+    @Inject
+    JavaWorkspaceTypeSolver workspaceTypeSolver;
+
     // ── Public API ─────────────────────────────────────────────────────
 
     public void indexFull(WorkspaceContext workspace, String wsName, String repoSlug) {
@@ -145,6 +149,7 @@ public class CodeGraphIndexer {
         List<Path> sourceFiles = findSourceFiles(workspace.getRoot());
         LOG.infof("Found %d source files to index (Java, C#, TypeScript, PHP)", sourceFiles.size());
 
+        JavaParser javaParser = workspaceTypeSolver.createJavaParser(workspace.getRoot());
         long startTime = System.currentTimeMillis();
         int indexed = 0;
         for (Path file : sourceFiles) {
@@ -153,7 +158,7 @@ public class CodeGraphIndexer {
                 break;
             }
             String relativePath = workspace.getRoot().relativize(file).toString();
-            dispatchIndex(file, relativePath, wsName, repoSlug);
+            dispatchIndex(file, relativePath, wsName, repoSlug, javaParser);
             indexed++;
         }
         LOG.infof("Full index complete: %d files indexed for %s/%s", indexed, wsName, repoSlug);
@@ -171,6 +176,7 @@ public class CodeGraphIndexer {
         }
 
         LOG.infof("Incremental code graph index for %s/%s: %d files", wsName, repoSlug, indexable.size());
+        JavaParser javaParser = workspaceTypeSolver.createJavaParser(workspace.getRoot());
         long startTime = System.currentTimeMillis();
         int indexed = 0;
 
@@ -185,7 +191,7 @@ public class CodeGraphIndexer {
 
             Path absolutePath = workspace.getRoot().resolve(filePath);
             if (Files.exists(absolutePath)) {
-                dispatchIndex(absolutePath, filePath, wsName, repoSlug);
+                dispatchIndex(absolutePath, filePath, wsName, repoSlug, javaParser);
             }
             indexed++;
         }
@@ -194,14 +200,14 @@ public class CodeGraphIndexer {
 
     // ── Dispatcher ─────────────────────────────────────────────────────
 
-    private void dispatchIndex(Path file, String relativePath, String wsName, String repoSlug) {
+    private void dispatchIndex(Path file, String relativePath, String wsName, String repoSlug, JavaParser javaParser) {
         try {
             if (Files.size(file) > MAX_FILE_SIZE) {
                 LOG.debugf("Skipping large file: %s (%d bytes)", relativePath, Files.size(file));
                 return;
             }
             if (relativePath.endsWith(".java")) {
-                indexJavaFile(file, relativePath, wsName, repoSlug);
+                indexJavaFile(file, relativePath, wsName, repoSlug, javaParser);
             } else if (relativePath.endsWith(".cs")) {
                 indexCSharpFile(file, relativePath, wsName, repoSlug);
             } else if (relativePath.endsWith(".ts") || relativePath.endsWith(".tsx")) {
@@ -214,91 +220,147 @@ public class CodeGraphIndexer {
         }
     }
 
-    // ── Java (JavaParser AST) ──────────────────────────────────────────
+    // ── Java (JavaParser AST + symbol resolution) ───────────────────────
 
-    private void indexJavaFile(Path file, String relativePath, String wsName, String repoSlug)
+    private void indexJavaFile(Path file, String relativePath, String wsName, String repoSlug, JavaParser javaParser)
             throws Exception {
-        ParseResult<CompilationUnit> parseResult = JAVA_PARSER.parse(file);
+        ParseResult<CompilationUnit> parseResult = javaParser.parse(file);
         if (!parseResult.isSuccessful() || parseResult.getResult().isEmpty()) {
             throw new RuntimeException("Parse failed: " + parseResult.getProblems());
         }
         CompilationUnit cu = parseResult.getResult().get();
 
-        cu.findAll(ClassOrInterfaceDeclaration.class).forEach(decl -> {
-            String name = decl.getNameAsString();
-            String type = decl.isInterface() ? "INTERFACE" : "CLASS";
-            int lineStart = decl.getBegin().map(p -> p.line).orElse(0);
-            int lineEnd = decl.getEnd().map(p -> p.line).orElse(0);
-            String modifiers = decl.getModifiers().stream()
+        for (ClassOrInterfaceDeclaration decl : cu.findAll(ClassOrInterfaceDeclaration.class)) {
+            String nodeType = decl.isInterface() ? "INTERFACE" : "CLASS";
+            indexTypeDeclaration(decl, cu, relativePath, wsName, repoSlug, nodeType);
+        }
+        for (RecordDeclaration decl : cu.findAll(RecordDeclaration.class)) {
+            indexTypeDeclaration(decl, cu, relativePath, wsName, repoSlug, "RECORD");
+        }
+        for (EnumDeclaration decl : cu.findAll(EnumDeclaration.class)) {
+            indexTypeDeclaration(decl, cu, relativePath, wsName, repoSlug, "ENUM");
+        }
+
+        for (ImportDeclaration imp : cu.getImports()) {
+            if (imp.isAsterisk() || imp.isStatic()) {
+                continue;
+            }
+            String imported = imp.getNameAsString();
+            String simpleImported = simpleNameFromQualified(imported);
+            for (TypeDeclaration<?> td : cu.findAll(TypeDeclaration.class)) {
+                String typeQualified = qualifiedTypeName(td, cu);
+                store.upsertEdge(wsName, repoSlug, typeQualified, simpleImported,
+                        "IMPORTS", relativePath, null);
+            }
+        }
+    }
+
+    private void indexTypeDeclaration(TypeDeclaration<?> decl, CompilationUnit cu, String relativePath,
+                                    String wsName, String repoSlug, String nodeType) {
+        String typeQualified = qualifiedTypeName(decl, cu);
+        int lineStart = decl.getBegin().map(p -> p.line).orElse(0);
+        int lineEnd = decl.getEnd().map(p -> p.line).orElse(0);
+        String modifiers = decl.getModifiers().stream()
+                .map(m -> m.getKeyword().asString())
+                .collect(Collectors.joining(" "));
+        store.upsertNode(wsName, repoSlug, relativePath, typeQualified, nodeType, lineStart, lineEnd, modifiers);
+
+        if (decl instanceof ClassOrInterfaceDeclaration cid) {
+            cid.getExtendedTypes().forEach(ext -> store.upsertEdge(wsName, repoSlug, typeQualified,
+                    resolveRefTypeName(ext), "EXTENDS", relativePath, null));
+            cid.getImplementedTypes().forEach(impl -> store.upsertEdge(wsName, repoSlug, typeQualified,
+                    resolveRefTypeName(impl), "IMPLEMENTS", relativePath, null));
+        } else if (decl instanceof RecordDeclaration rec) {
+            rec.getImplementedTypes().forEach(impl -> store.upsertEdge(wsName, repoSlug, typeQualified,
+                    resolveRefTypeName(impl), "IMPLEMENTS", relativePath, null));
+        } else if (decl instanceof EnumDeclaration en) {
+            en.getImplementedTypes().forEach(impl -> store.upsertEdge(wsName, repoSlug, typeQualified,
+                    resolveRefTypeName(impl), "IMPLEMENTS", relativePath, null));
+        }
+
+        for (MethodDeclaration method : decl.getMethods()) {
+            String methodSig = qualifiedMethodName(method, typeQualified);
+            int mStart = method.getBegin().map(p -> p.line).orElse(0);
+            int mEnd = method.getEnd().map(p -> p.line).orElse(0);
+            String mMods = method.getModifiers().stream()
                     .map(m -> m.getKeyword().asString())
                     .collect(Collectors.joining(" "));
-            store.upsertNode(wsName, repoSlug, relativePath, name, type, lineStart, lineEnd, modifiers);
+            store.upsertNode(wsName, repoSlug, relativePath, methodSig, "METHOD", mStart, mEnd, mMods);
 
-            decl.getExtendedTypes().forEach(ext ->
-                    store.upsertEdge(wsName, repoSlug, name, ext.getNameAsString(),
-                            "EXTENDS", relativePath, null));
+            method.findAll(MethodCallExpr.class).forEach(call -> {
+                String target = resolveCallTarget(call, typeQualified);
+                store.upsertEdge(wsName, repoSlug, methodSig, target, "CALLS", relativePath, null);
+            });
+        }
 
-            decl.getImplementedTypes().forEach(impl ->
-                    store.upsertEdge(wsName, repoSlug, name, impl.getNameAsString(),
-                            "IMPLEMENTS", relativePath, null));
-
-            decl.getMethods().forEach(method -> {
-                String methodSymbol = name + "." + method.getNameAsString();
-                int mStart = method.getBegin().map(p -> p.line).orElse(0);
-                int mEnd = method.getEnd().map(p -> p.line).orElse(0);
-                String mMods = method.getModifiers().stream()
+        decl.getFields().forEach(field -> {
+            for (VariableDeclarator var : field.getVariables()) {
+                String fieldSymbol = typeQualified + "." + var.getNameAsString();
+                int fStart = field.getBegin().map(p -> p.line).orElse(0);
+                int fEnd = field.getEnd().map(p -> p.line).orElse(0);
+                String fMods = field.getModifiers().stream()
                         .map(m -> m.getKeyword().asString())
                         .collect(Collectors.joining(" "));
-                store.upsertNode(wsName, repoSlug, relativePath, methodSymbol, "METHOD",
-                        mStart, mEnd, mMods);
-
-                method.findAll(MethodCallExpr.class).forEach(call -> {
-                    String scope = call.getScope()
-                            .map(s -> s.toString().contains(".") ?
-                                    s.toString().substring(s.toString().lastIndexOf('.') + 1) :
-                                    s.toString())
-                            .orElse(name);
-                    String target = scope + "." + call.getNameAsString();
-                    store.upsertEdge(wsName, repoSlug, methodSymbol, target,
-                            "CALLS", relativePath, null);
-                });
-            });
-
-            decl.getFields().forEach(field -> {
-                for (VariableDeclarator var : field.getVariables()) {
-                    String fieldSymbol = name + "." + var.getNameAsString();
-                    int fStart = field.getBegin().map(p -> p.line).orElse(0);
-                    int fEnd = field.getEnd().map(p -> p.line).orElse(0);
-                    String fMods = field.getModifiers().stream()
-                            .map(m -> m.getKeyword().asString())
-                            .collect(Collectors.joining(" "));
-                    store.upsertNode(wsName, repoSlug, relativePath, fieldSymbol, "FIELD",
-                            fStart, fEnd, fMods);
-                }
-            });
+                store.upsertNode(wsName, repoSlug, relativePath, fieldSymbol, "FIELD",
+                        fStart, fEnd, fMods);
+            }
         });
+    }
 
-        cu.findAll(EnumDeclaration.class).forEach(decl -> {
-            String name = decl.getNameAsString();
-            int lineStart = decl.getBegin().map(p -> p.line).orElse(0);
-            int lineEnd = decl.getEnd().map(p -> p.line).orElse(0);
-            String modifiers = decl.getModifiers().stream()
-                    .map(m -> m.getKeyword().asString())
-                    .collect(Collectors.joining(" "));
-            store.upsertNode(wsName, repoSlug, relativePath, name, "ENUM", lineStart, lineEnd, modifiers);
-        });
+    private static String qualifiedTypeName(TypeDeclaration<?> decl, CompilationUnit cu) {
+        try {
+            var resolved = decl.resolve();
+            if (resolved instanceof ResolvedTypeDeclaration rt) {
+                return rt.getQualifiedName();
+            }
+        } catch (Exception e) {
+            // fall through to fallback
+        }
+        return fallbackQualifiedType(cu, decl.getNameAsString());
+    }
 
-        cu.findAll(ImportDeclaration.class).forEach(imp -> {
-            String imported = imp.getNameAsString();
-            String simpleName = imported.contains(".")
-                    ? imported.substring(imported.lastIndexOf('.') + 1)
-                    : imported;
-            String className = cu.findFirst(ClassOrInterfaceDeclaration.class)
-                    .map(ClassOrInterfaceDeclaration::getNameAsString)
-                    .orElse(relativePath);
-            store.upsertEdge(wsName, repoSlug, className, simpleName,
-                    "IMPORTS", relativePath, null);
-        });
+    private static String fallbackQualifiedType(CompilationUnit cu, String simpleName) {
+        return cu.getPackageDeclaration()
+                .map(p -> p.getNameAsString() + "." + simpleName)
+                .orElse(simpleName);
+    }
+
+    private static String qualifiedMethodName(MethodDeclaration method, String typeQualified) {
+        try {
+            return method.resolve().getQualifiedSignature();
+        } catch (Exception e) {
+            return typeQualified + "." + method.getNameAsString() + "()";
+        }
+    }
+
+    private static String resolveRefTypeName(ClassOrInterfaceType ext) {
+        try {
+            return ext.resolve().asReferenceType().getQualifiedName();
+        } catch (Exception e) {
+            return ext.getNameAsString();
+        }
+    }
+
+    private static String resolveCallTarget(MethodCallExpr call, String enclosingTypeQualified) {
+        try {
+            return call.resolve().asMethod().getQualifiedSignature();
+        } catch (Exception e) {
+            return unresolvedCallTarget(call, enclosingTypeQualified);
+        }
+    }
+
+    private static String unresolvedCallTarget(MethodCallExpr call, String enclosingTypeQualified) {
+        String name = call.getNameAsString();
+        String base = call.getScope().map(Object::toString).orElse(enclosingTypeQualified);
+        return base + "." + name + "()";
+    }
+
+    private static String simpleNameFromQualified(String qualified) {
+        if (qualified == null || qualified.isBlank()) {
+            return qualified;
+        }
+        int dot = qualified.lastIndexOf('.');
+        return dot < 0 ? qualified : qualified.substring(dot + 1);
     }
 
     // ── C# (regex-based) ───────────────────────────────────────────────

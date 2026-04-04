@@ -1016,7 +1016,9 @@ This prevents false positives that arise from reviewing a diff without its wider
 
 ### Code graph (impact analysis)
 
-The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis (Java via JavaParser with symbol resolution for call edges, C# via regex-based parsing). On each review the graph is refreshed incrementally (only changed files are re-indexed), and an **Impact Analysis** section is injected into the review prompt showing callers, implementations, and dependents of changed symbols.
+
+For Java, stored symbols use fully qualified type names and method signatures (as returned by the symbol solver). After upgrading the agent, run a **full rebuild** of each repo’s graph (`POST /graph/rebuild/{workspace}/{repoSlug}`) or `POST /graph/build-missing` so existing PostgreSQL rows match the new ID format; otherwise impact queries may be sparse until files are re-indexed naturally.
 
 **How it works:**
 
@@ -1027,7 +1029,7 @@ The agent maintains a per-repo code graph in PostgreSQL, built from AST analysis
 
 **Available tools during review:**
 
-- **`query_code_graph`** — find callers, implementations, or dependents of a specific symbol. Parameters: `symbol` (e.g. `MyClass.myMethod`), `relation` (`callers`, `implementations`, or `dependents`)
+- **`query_code_graph`** — find callers, implementations, or dependents of a specific symbol. Parameters: `symbol` (Java: fully qualified type or method signature, e.g. `com.example.Foo` or `com.example.Foo.bar(java.lang.String)`; other languages: `Type.member` as indexed), `relation` (`callers`, `implementations`, or `dependents`)
 
 **Background pre-building:** A scheduler runs every 6 hours to pre-build graphs for repos that don't have one yet, so the first review isn't slowed down by a full index. This can also be triggered on demand via `POST /graph/build-missing`.
 

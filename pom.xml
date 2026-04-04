@@ -171,10 +171,15 @@
             <artifactId>snakeyaml</artifactId>
         </dependency>
 
-        <!-- JavaParser for code graph AST analysis -->
+        <!-- JavaParser for code graph AST analysis + symbol resolution -->
         <dependency>
             <groupId>com.github.javaparser</groupId>
             <artifactId>javaparser-core</artifactId>
+            <version>3.26.4</version>
+        </dependency>
+        <dependency>
+            <groupId>com.github.javaparser</groupId>
+            <artifactId>javaparser-symbol-solver-core</artifactId>
             <version>3.26.4</version>
         </dependency>
 
