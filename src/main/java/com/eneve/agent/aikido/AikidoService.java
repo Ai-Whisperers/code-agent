@@ -40,11 +40,15 @@ public class AikidoService {
     private static final Logger LOG = Logger.getLogger(AikidoService.class);
 
     @Inject SettingsService settings;
+    @Inject AikidoGroupDetailStore groupDetailStore;
 
     private String baseUrl() { return settings.get("aikido.base.url", "https://app.aikido.dev"); }
     private String clientId() { return settings.get("aikido.client.id", ""); }
     private String clientSecret() { return settings.getSecret("aikido.client.secret"); }
     private String ciApiSecret() { return settings.getSecret("aikido.ci.api.secret"); }
+
+    /** Minimum delay between consecutive detail API calls to stay under 20 req/min. */
+    private static final long DETAIL_CALL_DELAY_MS = 3_100L;
 
     @Inject HttpClient httpClient;
     @Inject ObjectMapper objectMapper;
@@ -221,12 +225,15 @@ public class AikidoService {
             String slugLower = repoSlug.toLowerCase();
             for (JsonNode group : groups) {
                 if (!groupMatchesRepo(group, slugLower)) continue;
+                // Skip low/medium — only critical/high are actionable for the snapshot
+                String sev = extractSeverity(group);
+                if (!"critical".equals(sev) && !"high".equals(sev)) continue;
                 int groupId = group.path("id").asInt(-1);
                 if (groupId < 0) continue;
                 AikidoIssueInfo info = getIssueGroupDetail(groupId);
                 if (info != null) results.add(info);
             }
-            LOG.infof("Aikido: found %d open issue(s) for repo '%s'", results.size(), repoSlug);
+            LOG.infof("Aikido: found %d open critical/high issue(s) for repo '%s'", results.size(), repoSlug);
         } catch (Exception e) {
             LOG.errorf("Aikido: failed to parse open issues for repo '%s': %s", repoSlug, e.getMessage());
         }
@@ -234,12 +241,17 @@ public class AikidoService {
     }
 
     /**
-     * Fetches the open-issue-groups list <b>once</b> and returns a map of
-     * {@code repoSlug → List<AikidoIssueInfo>} for every slug in {@code repoSlugs}.
+     * Uses the {@code /api/public/v1/issues/export} endpoint to fetch <b>all</b> issues
+     * (open, task_closed, snoozed, ignored, etc.) across all severities, then returns a map of
+     * {@code repoSlug → List<AikidoIssueInfo>} filtered to critical and high severity only.
      *
-     * <p>This is the preferred method when scanning multiple repos: it makes exactly
-     * 1 list call + 1 detail call per distinct matching group, keeping total API calls
-     * well within Aikido's 20 req/min rate limit.
+     * <p>Advantages over the old open-issue-groups + N detail calls approach:
+     * <ul>
+     *   <li>Single API call — no N+1 detail fetches, well within the 20 req/min rate limit.</li>
+     *   <li>Includes issues with {@code group_status=task_closed} (Jira ticket created) which
+     *       the open-issue-groups endpoint silently omits.</li>
+     *   <li>Full detail fields (description, how_to_fix, related_cve_ids, etc.) are inline.</li>
+     * </ul>
      */
     public java.util.Map<String, List<AikidoIssueInfo>> findOpenIssuesForAllRepos(
             java.util.Collection<String> repoSlugs) {
@@ -249,12 +261,20 @@ public class AikidoService {
             result.put(slug, new ArrayList<>());
         }
 
-        String json = get("/api/public/v1/open-issue-groups", "list open issues (bulk)");
+        String json = get("/api/public/v1/issues/export", "export all issues (bulk)");
         if (json == null) return result;
 
         try {
-            JsonNode groups = parseGroups(json);
-            if (groups == null) return result;
+            JsonNode root = objectMapper.readTree(json);
+            // The export endpoint returns { "data": [...] } or a bare array
+            JsonNode issues = root.isArray() ? root : root.path("data");
+            if (!issues.isArray()) {
+                LOG.warnf("Aikido export: unexpected response shape. Raw (first 500 chars): %s",
+                        json.length() > 500 ? json.substring(0, 500) : json);
+                return result;
+            }
+
+            LOG.infof("Aikido export: received %d total issue(s)", issues.size());
 
             // Pre-lowercase all slugs once
             java.util.Map<String, String> slugMap = new java.util.LinkedHashMap<>();
@@ -262,50 +282,269 @@ public class AikidoService {
                 slugMap.put(slug, slug.toLowerCase());
             }
 
-            // Collect group IDs per slug — a group can match multiple repos (monorepo)
-            java.util.Map<String, java.util.Set<Integer>> slugToGroupIds = new java.util.LinkedHashMap<>();
-            for (String slug : repoSlugs) {
-                slugToGroupIds.put(slug, new java.util.LinkedHashSet<>());
-            }
+            int skippedSeverity = 0;
+            int matched = 0;
 
-            for (JsonNode group : groups) {
-                int groupId = group.path("id").asInt(-1);
-                if (groupId < 0) continue;
-                for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
-                    if (groupMatchesRepo(group, entry.getValue())) {
-                        slugToGroupIds.get(entry.getKey()).add(groupId);
+            // Global dedup: each group_id is assigned to exactly one repo slug.
+            // code_repo_name is the authoritative match; container_repo_name is a fallback
+            // so that a container issue for "julesenergy/jtp" doesn't also appear under
+            // the "jtp" software repo (which would cause duplicate React keys).
+            // We do two passes: pass 1 assigns via code_repo_name, pass 2 via container only
+            // for groups not already assigned.
+            java.util.Map<Integer, String> groupToSlug = new java.util.LinkedHashMap<>();
+
+            for (JsonNode issue : issues) {
+                String severity = extractSeverity(issue);
+                if (!"critical".equals(severity) && !"high".equals(severity)) {
+                    skippedSeverity++;
+                    continue;
+                }
+                if (isInactiveStatus(issue)) continue;
+                int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
+                if (groupId < 0 || groupToSlug.containsKey(groupId)) continue;
+
+                // Pass 1: prefer code_repo_name match
+                String codeRepoName = issue.path("code_repo_name").asText("").toLowerCase();
+                if (!codeRepoName.isBlank()) {
+                    for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
+                        String slugLower = entry.getValue();
+                        String lastSeg = codeRepoName.substring(codeRepoName.lastIndexOf('/') + 1);
+                        if (codeRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                            groupToSlug.put(groupId, entry.getKey());
+                            break;
+                        }
                     }
                 }
             }
 
-            // Fetch detail for each distinct group ID exactly once
-            java.util.Map<Integer, AikidoIssueInfo> detailCache = new java.util.LinkedHashMap<>();
-            for (java.util.Set<Integer> ids : slugToGroupIds.values()) {
-                for (int id : ids) {
-                    if (!detailCache.containsKey(id)) {
-                        AikidoIssueInfo info = getIssueGroupDetail(id);
-                        if (info != null) detailCache.put(id, info);
+            // Pass 2: for groups not matched by code_repo_name, try container_repo_name
+            for (JsonNode issue : issues) {
+                String severity = extractSeverity(issue);
+                if (!"critical".equals(severity) && !"high".equals(severity)) continue;
+                if (isInactiveStatus(issue)) continue;
+                int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
+                if (groupId < 0 || groupToSlug.containsKey(groupId)) continue;
+
+                String containerRepoName = issue.path("container_repo_name").asText("").toLowerCase();
+                if (!containerRepoName.isBlank()) {
+                    for (java.util.Map.Entry<String, String> entry : slugMap.entrySet()) {
+                        String slugLower = entry.getValue();
+                        String lastSeg = containerRepoName.substring(containerRepoName.lastIndexOf('/') + 1);
+                        if (containerRepoName.equals(slugLower) || lastSeg.equals(slugLower)) {
+                            groupToSlug.put(groupId, entry.getKey());
+                            break;
+                        }
                     }
                 }
             }
 
-            // Assemble results — override repoName with the matched slug so multi-repo
-            // issue groups are attributed to the correct repo card, not whichever repo
-            // Aikido happened to return first in the detail response.
-            for (java.util.Map.Entry<String, java.util.Set<Integer>> entry : slugToGroupIds.entrySet()) {
-                String slug = entry.getKey();
-                List<AikidoIssueInfo> issues = result.get(slug);
-                for (int id : entry.getValue()) {
-                    AikidoIssueInfo info = detailCache.get(id);
-                    if (info != null) issues.add(info.withRepoName(slug));
+            // Collect one representative export row per group_id (rows differ only in affected_file)
+            java.util.Map<Integer, JsonNode> groupRepresentative = new java.util.LinkedHashMap<>();
+            for (JsonNode issue : issues) {
+                String severity = extractSeverity(issue);
+                if (!"critical".equals(severity) && !"high".equals(severity)) continue;
+                if (isInactiveStatus(issue)) continue;
+                int groupId = issue.path("group_id").asInt(issue.path("id").asInt(-1));
+                if (groupId < 0 || !groupToSlug.containsKey(groupId)) continue;
+                groupRepresentative.putIfAbsent(groupId, issue);
+            }
+
+            int totalGroups = groupRepresentative.size();
+            LOG.infof("Aikido export: %d distinct critical/high group(s) to enrich", totalGroups);
+
+            // Determine which groups are already in the DB cache
+            java.util.Set<Integer> cachedIds = groupDetailStore.findCachedIds(groupRepresentative.keySet());
+            int cacheMisses = totalGroups - cachedIds.size();
+            LOG.infof("Aikido detail cache: %d hit(s), %d miss(es) — will fetch misses at ~%dms intervals",
+                    cachedIds.size(), cacheMisses, DETAIL_CALL_DELAY_MS);
+
+            long lastDetailCallMs = 0;
+
+            for (java.util.Map.Entry<Integer, JsonNode> entry : groupRepresentative.entrySet()) {
+                int groupId = entry.getKey();
+                JsonNode exportRow = entry.getValue();
+                String slug = groupToSlug.get(groupId);
+
+                AikidoIssueInfo exportInfo = parseExportIssue(exportRow, groupId, slug);
+                if (exportInfo == null) continue;
+
+                // Try DB cache first; fall back to API (rate-limited) on miss
+                AikidoIssueInfo detailInfo = groupDetailStore.find(groupId).orElse(null);
+                if (detailInfo == null) {
+                    // Rate-limit: ensure at least DETAIL_CALL_DELAY_MS between API calls
+                    long now = System.currentTimeMillis();
+                    long elapsed = now - lastDetailCallMs;
+                    if (lastDetailCallMs > 0 && elapsed < DETAIL_CALL_DELAY_MS) {
+                        try { Thread.sleep(DETAIL_CALL_DELAY_MS - elapsed); }
+                        catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+                    }
+                    detailInfo = getIssueGroupDetail(groupId);
+                    lastDetailCallMs = System.currentTimeMillis();
+                    if (detailInfo != null) {
+                        groupDetailStore.upsert(detailInfo);
+                    }
                 }
-                LOG.infof("Aikido: found %d open issue(s) for repo '%s'", issues.size(), slug);
+
+                AikidoIssueInfo merged;
+                if (detailInfo != null) {
+                    // Prefer detail fields for rich content; keep export fields for status/SLA/versions.
+                    // Always keep exportInfo.issueType() when it is "container" — the detail endpoint
+                    // returns the vulnerability class (e.g. "open_source") not the attack surface.
+                    String mergedIssueType = "container".equals(exportInfo.issueType())
+                            ? "container"
+                            : (detailInfo.issueType() != null && !"unknown".equals(detailInfo.issueType())
+                                    ? detailInfo.issueType() : exportInfo.issueType());
+                    merged = new AikidoIssueInfo(
+                            groupId,
+                            mergedIssueType,
+                            detailInfo.title() != null && !detailInfo.title().isBlank()
+                                    ? detailInfo.title() : exportInfo.title(),
+                            detailInfo.description(),
+                            exportInfo.severity(),
+                            exportInfo.severityScore() != null ? exportInfo.severityScore() : detailInfo.severityScore(),
+                            exportInfo.packageName() != null && !"unknown".equals(exportInfo.packageName())
+                                    ? exportInfo.packageName() : detailInfo.packageName(),
+                            exportInfo.currentVersion() != null && !exportInfo.currentVersion().isBlank()
+                                    ? exportInfo.currentVersion() : detailInfo.currentVersion(),
+                            exportInfo.fixedVersion() != null && !exportInfo.fixedVersion().isBlank()
+                                    ? exportInfo.fixedVersion() : detailInfo.fixedVersion(),
+                            exportInfo.cveId() != null && !exportInfo.cveId().isBlank()
+                                    ? exportInfo.cveId() : detailInfo.cveId(),
+                            detailInfo.cveDescription(),
+                            detailInfo.cvssScore(),
+                            slug,
+                            detailInfo.repoUrl(),
+                            exportInfo.containerImage() != null
+                                    ? exportInfo.containerImage() : detailInfo.containerImage(),
+                            detailInfo.changelogSummary(),
+                            detailInfo.howToFix(),
+                            detailInfo.relatedCveIds() != null && !detailInfo.relatedCveIds().isEmpty()
+                                    ? detailInfo.relatedCveIds() : exportInfo.relatedCveIds(),
+                            exportInfo.groupStatus(),
+                            exportInfo.timeToFixMinutes() != null
+                                    ? exportInfo.timeToFixMinutes() : detailInfo.timeToFixMinutes(),
+                            exportInfo.firstDetectedAt(),
+                            exportInfo.slaRemediateBy()
+                    );
+                } else {
+                    merged = exportInfo;
+                }
+
+                result.get(slug).add(merged);
+                matched++;
+            }
+
+            LOG.infof("Aikido export: %d critical/high issue(s) matched across %d repo(s) (skipped %d lower-severity)",
+                    matched, repoSlugs.size(), skippedSeverity);
+            for (java.util.Map.Entry<String, List<AikidoIssueInfo>> entry : result.entrySet()) {
+                LOG.infof("Aikido: found %d critical/high issue(s) for repo '%s'",
+                        entry.getValue().size(), entry.getKey());
             }
 
         } catch (Exception e) {
-            LOG.errorf("Aikido: failed to parse open issues (bulk): %s", e.getMessage());
+            LOG.errorf("Aikido: failed to parse export issues (bulk): %s", e.getMessage());
         }
         return result;
+    }
+
+    /**
+     * Parses a single row from the {@code /issues/export} response into an {@link AikidoIssueInfo}.
+     *
+     * <p>Export row field mapping (confirmed from live JSON):
+     * <ul>
+     *   <li>{@code type}              → issueType</li>
+     *   <li>{@code severity}          → severity</li>
+     *   <li>{@code severity_score}    → severityScore</li>
+     *   <li>{@code status}            → groupStatus  (open / closed / ignored / snoozed)</li>
+     *   <li>{@code affected_package}  → packageName</li>
+     *   <li>{@code installed_version} → currentVersion</li>
+     *   <li>{@code patched_versions}  → fixedVersion  (array — take first element)</li>
+     *   <li>{@code cve_id}            → cveId</li>
+     *   <li>{@code code_repo_name}    → repoName (plain slug)</li>
+     *   <li>{@code container_repo_name} → containerImage</li>
+     *   <li>{@code sla_days}          → timeToFixMinutes (days × 1440)</li>
+     * </ul>
+     */
+    // attack_surface values that indicate the issue lives in a container image, not source code
+    private static final java.util.Set<String> CONTAINER_ATTACK_SURFACES = java.util.Set.of(
+            "docker_container", "container", "container_image", "container_registry"
+    );
+
+    private AikidoIssueInfo parseExportIssue(JsonNode issue, int groupId, String repoSlug) {
+        try {
+            String issueType  = extractIssueType(issue);
+            String severity   = extractSeverity(issue);
+            String groupStatus = extractText(issue, "status", "");
+            Integer severityScore = issue.path("severity_score").isNumber()
+                    ? issue.path("severity_score").asInt() : null;
+
+            // sla_days is in days — convert to minutes for the shared model field
+            Integer timeToFixMinutes = null;
+            if (issue.path("sla_days").isNumber()) {
+                timeToFixMinutes = issue.path("sla_days").asInt() * 1440;
+            }
+
+            String packageName = extractText(issue, "affected_package",
+                    extractText(issue, "package_name",
+                            extractText(issue, "dependency_name", "unknown")));
+
+            String currentVersion = extractText(issue, "installed_version",
+                    extractText(issue, "current_version", ""));
+
+            // patched_versions is an array — take the first element as the target fix version
+            String fixedVersion = "";
+            JsonNode patchedArr = issue.path("patched_versions");
+            if (patchedArr.isArray() && patchedArr.size() > 0) {
+                fixedVersion = patchedArr.get(0).asText("");
+            }
+            if (fixedVersion.isBlank()) {
+                fixedVersion = extractText(issue, "fix_version",
+                        extractText(issue, "fixed_in_version", ""));
+            }
+
+            String cveId = extractText(issue, "cve_id", extractText(issue, "cve", ""));
+
+            // container_repo_name is the container image identifier (e.g. "julesenergy/jtp")
+            String containerImage = extractText(issue, "container_repo_name", null);
+            if (containerImage != null && containerImage.isBlank()) containerImage = null;
+
+            // attack_surface tells us WHERE the vulnerability was found.
+            // A CVE in a container image has type="open_source" but attack_surface="docker_container".
+            // Override issueType to "container" so the UI can distinguish it from a source-code fix.
+            String attackSurface = issue.path("attack_surface").asText("").toLowerCase();
+            if (CONTAINER_ATTACK_SURFACES.contains(attackSurface)) {
+                issueType = "container";
+            }
+
+            // first_detected_at and sla_remediate_by are epoch-seconds integers in the export
+            java.time.Instant firstDetectedAt = null;
+            if (issue.path("first_detected_at").isNumber()) {
+                firstDetectedAt = java.time.Instant.ofEpochSecond(issue.path("first_detected_at").asLong());
+            }
+            java.time.Instant slaRemediateBy = null;
+            if (issue.path("sla_remediate_by").isNumber()) {
+                slaRemediateBy = java.time.Instant.ofEpochSecond(issue.path("sla_remediate_by").asLong());
+            }
+
+            // Build a human-readable title from package + CVE
+            String title = packageName.equals("unknown") ? cveId
+                    : (cveId.isBlank() ? packageName : packageName + " (" + cveId + ")");
+
+            return new AikidoIssueInfo(
+                    groupId, issueType, title,
+                    null,           // description — not in export; available via detail endpoint if needed
+                    severity, severityScore,
+                    packageName, currentVersion, fixedVersion,
+                    cveId, null, null,
+                    repoSlug, null, containerImage, null,
+                    null,           // howToFix — not in export
+                    java.util.List.of(), groupStatus, timeToFixMinutes,
+                    firstDetectedAt, slaRemediateBy
+            );
+        } catch (Exception e) {
+            LOG.warnf("Aikido export: failed to parse issue group %d: %s", groupId, e.getMessage());
+            return null;
+        }
     }
 
     /** Parses the open-issue-groups JSON response and returns the groups array, or null on error. */
@@ -315,8 +554,15 @@ public class AikidoService {
             JsonNode groups = root.isArray() ? root : root.path("data");
             if (!groups.isArray()) groups = root.path("groups");
             if (!groups.isArray()) {
-                LOG.warnf("Aikido: unexpected response shape when listing open issues");
+                LOG.warnf("Aikido: unexpected response shape when listing open issues. Raw (first 2000 chars): %s",
+                        json.length() > 2000 ? json.substring(0, 2000) : json);
                 return null;
+            }
+            // Log the first group entry so we can inspect the actual field names
+            if (groups.size() > 0) {
+                LOG.infof("Aikido open-issue-groups first entry fields: %s | raw: %s",
+                        fieldNames(groups.get(0)),
+                        groups.get(0).toString());
             }
             return groups;
         } catch (Exception e) {
@@ -358,6 +604,10 @@ public class AikidoService {
             for (JsonNode group : groups) {
                 if (!groupMatchesRepo(group, slugLower)) continue;
 
+                // Skip low/medium at the group level to avoid unnecessary detail calls
+                String groupSev = extractSeverity(group);
+                if (!"critical".equals(groupSev) && !"high".equals(groupSev)) continue;
+
                 // Group-level type filter: avoid the detail API call for non-actionable types
                 String groupType = extractIssueType(group);
                 if (!"unknown".equals(groupType) && !isActionableType(groupType)) {
@@ -394,27 +644,29 @@ public class AikidoService {
     }
 
     private boolean groupMatchesRepo(JsonNode group, String slugLower) {
-        // Primary: check the locations array — Aikido's actual structure.
-        // Each location has { "id": ..., "name": "repo-slug", "type": "code_repository" | "container_repository" }
-        // The name can be a plain slug ("fit") or "org/repo" ("julesenergy/fit").
-        JsonNode locations = group.path("locations");
-        if (locations.isArray()) {
-            for (JsonNode loc : locations) {
-                String locName = loc.path("name").asText("").toLowerCase();
-                if (locName.isBlank()) continue;
-                // Exact match or last path segment match (handles "org/repo" format)
-                String lastSegment = locName.substring(locName.lastIndexOf('/') + 1);
-                if (locName.equals(slugLower) || lastSegment.equals(slugLower)) return true;
-            }
-        }
-
-        // Fallback: legacy fields that some Aikido API versions use
-        for (String field : new String[]{"repo_name", "repository_name", "name"}) {
+        // ── Export endpoint fields (flat structure, no locations array) ──────────
+        // code_repo_name: plain slug e.g. "jtp"
+        // container_repo_name: org/slug e.g. "julesenergy/jtp"
+        for (String field : new String[]{"code_repo_name", "container_repo_name",
+                "repo_name", "repository_name", "name"}) {
             String name = group.path(field).asText("").toLowerCase();
             if (name.isBlank()) continue;
             String lastSegment = name.substring(name.lastIndexOf('/') + 1);
             if (name.equals(slugLower) || lastSegment.equals(slugLower)) return true;
         }
+
+        // ── Open-issue-groups endpoint: locations array ───────────────────────
+        JsonNode locations = group.path("locations");
+        if (locations.isArray()) {
+            for (JsonNode loc : locations) {
+                String locName = loc.path("name").asText("").toLowerCase();
+                if (locName.isBlank()) continue;
+                String lastSegment = locName.substring(locName.lastIndexOf('/') + 1);
+                if (locName.equals(slugLower) || lastSegment.equals(slugLower)) return true;
+            }
+        }
+
+        // ── Nested code_repo object (some API versions) ───────────────────────
         JsonNode codeRepo = group.path("code_repo");
         if (!codeRepo.isMissingNode()) {
             String name = codeRepo.path("name").asText(codeRepo.path("repo_name").asText("")).toLowerCase();
@@ -423,6 +675,8 @@ public class AikidoService {
                 if (name.equals(slugLower) || lastSegment.equals(slugLower)) return true;
             }
         }
+
+        // ── URL-based fallback ────────────────────────────────────────────────
         for (String field : new String[]{"repo_url", "repository_url", "clone_url"}) {
             String url = group.path(field).asText("");
             if (url.isBlank() && !codeRepo.isMissingNode()) {
@@ -441,6 +695,13 @@ public class AikidoService {
      * Get detailed info for a specific issue group.
      */
     public AikidoIssueInfo getIssueGroupDetail(int issueGroupId) {
+        // Serve from DB cache when available — avoids burning rate-limit quota
+        var cached = groupDetailStore.find(issueGroupId);
+        if (cached.isPresent()) {
+            LOG.debugf("Aikido detail cache hit for group %d", issueGroupId);
+            return cached.get();
+        }
+
         String json = get("/api/public/v1/issues/groups/" + issueGroupId, "issue group detail");
         if (json == null) return null;
 
@@ -448,10 +709,24 @@ public class AikidoService {
             JsonNode root = objectMapper.readTree(json);
 
             String issueType = extractIssueType(root);
-            LOG.debugf("Aikido issue group %d: issueType=%s", issueGroupId, issueType);
+            String severity = extractSeverity(root);
 
-            String title = extractText(root, "title", "");
-            String severity = extractText(root, "severity", "medium");
+            String title       = extractText(root, "title", "");
+            String description = extractText(root, "description", "");
+            String groupStatus = extractText(root, "group_status", "");
+            Integer severityScore = root.path("severity_score").isNumber()
+                    ? root.path("severity_score").asInt() : null;
+            Integer timeToFixMinutes = root.path("time_to_fix_minutes").isNumber()
+                    ? root.path("time_to_fix_minutes").asInt() : null;
+            String howToFix = extractText(root, "how_to_fix", "");
+
+            // related_cve_ids is an array of strings
+            java.util.List<String> relatedCveIds = new java.util.ArrayList<>();
+            JsonNode cveArray = root.path("related_cve_ids");
+            if (cveArray.isArray()) {
+                cveArray.forEach(n -> { if (!n.asText("").isBlank()) relatedCveIds.add(n.asText()); });
+            }
+
             String packageName = extractText(root, "affected_package",
                     extractText(root, "package_name",
                             extractText(root, "dependency_name", "unknown")));
@@ -462,10 +737,8 @@ public class AikidoService {
                             extractText(root, "patched_version", "")));
             String cveId = extractText(root, "cve_id",
                     extractText(root, "cve", ""));
-            String repoName = extractRepoName(root);
-
-            String repoUrl = extractRepoUrl(root);
-
+            String repoName    = extractRepoName(root);
+            String repoUrl     = extractRepoUrl(root);
             String containerImage = extractContainerImage(root);
 
             String cveDescription = null;
@@ -488,10 +761,16 @@ public class AikidoService {
                 changelogSummary = fetchChangelogSummary(packageName, currentVersion, fixedVersion);
             }
 
-            return new AikidoIssueInfo(
-                    issueGroupId, issueType, title, severity, packageName, currentVersion, fixedVersion,
-                    cveId, cveDescription, cvssScore, repoName, repoUrl, containerImage, changelogSummary
+            AikidoIssueInfo result = new AikidoIssueInfo(
+                    issueGroupId, issueType, title, description, severity, severityScore,
+                    packageName, currentVersion, fixedVersion,
+                    cveId, cveDescription, cvssScore, repoName, repoUrl, containerImage, changelogSummary,
+                    howToFix, relatedCveIds, groupStatus, timeToFixMinutes,
+                    null, null  // firstDetectedAt / slaRemediateBy come from the export, not the detail endpoint
             );
+            // Persist to DB cache so subsequent calls don't need an API round-trip
+            groupDetailStore.upsert(result);
+            return result;
         } catch (Exception e) {
             LOG.errorf("Failed to parse Aikido issue group %d: %s", issueGroupId, e.getMessage());
             return null;
@@ -641,6 +920,39 @@ public class AikidoService {
             LOG.errorf("Aikido %s error: %s", operation, e.getMessage());
             return null;
         }
+    }
+
+    /**
+     * Returns {@code true} if the issue row's {@code status} field indicates it is no longer
+     * active — i.e. it has been closed, ignored, or snoozed in Aikido.
+     * These issues should not appear in the security dashboard.
+     */
+    private static boolean isInactiveStatus(JsonNode issue) {
+        String status = issue.path("status").asText("").toLowerCase();
+        return "closed".equals(status) || "ignored".equals(status) || "snoozed".equals(status);
+    }
+
+    /** Returns a comma-separated list of top-level field names present in the node. */
+    private static String fieldNames(JsonNode node) {
+        if (!node.isObject()) return "(not an object)";
+        var names = new java.util.ArrayList<String>();
+        node.fieldNames().forEachRemaining(names::add);
+        return String.join(", ", names);
+    }
+
+    /**
+     * Extracts the severity from an Aikido issue group node.
+     * Aikido's public API uses {@code "severity"} as the field name.
+     * Falls back to {@code "risk_level"} and {@code "criticality"} for webhook shapes.
+     */
+    private static String extractSeverity(JsonNode node) {
+        for (String field : new String[]{"severity", "risk_level", "criticality"}) {
+            JsonNode n = node.path(field);
+            if (!n.isMissingNode() && !n.isNull() && !n.asText("").isBlank()) {
+                return n.asText("").toLowerCase();
+            }
+        }
+        return "medium";
     }
 
     private static String extractIssueType(JsonNode node) {

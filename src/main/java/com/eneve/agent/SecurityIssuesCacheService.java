@@ -96,7 +96,9 @@ public class SecurityIssuesCacheService {
                 row.issueGroupId(),
                 row.issueType(),
                 row.title(),
+                row.description(),
                 row.severity(),
+                row.severityScore(),
                 row.packageName(),
                 row.currentVersion(),
                 row.fixedVersion(),
@@ -106,7 +108,13 @@ public class SecurityIssuesCacheService {
                 row.repoName(),
                 row.repoUrl(),
                 row.containerImage(),
-                null    // changelogSummary not stored in cache
+                null,   // changelogSummary not stored in cache
+                row.howToFix(),
+                row.relatedCveIds(),
+                row.groupStatus(),
+                row.timeToFixMinutes(),
+                row.discoveredAt(),
+                row.aikidoDueDate()
         );
     }
 

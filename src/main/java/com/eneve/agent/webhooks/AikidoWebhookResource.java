@@ -12,6 +12,7 @@ import com.eneve.agent.SecurityIssuesCacheService;
 import com.eneve.agent.agent.HookEvaluator;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.store.RepoSettingsStore;
+import com.eneve.agent.aikido.AikidoGroupDetailStore;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.aikido.AikidoTriageService;
 import com.eneve.agent.model.RunResult;
@@ -54,6 +55,7 @@ public class AikidoWebhookResource {
     @Inject UpgradeService upgradeService;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject AikidoService aikidoService;
+    @Inject AikidoGroupDetailStore groupDetailStore;
     @Inject AikidoTriageService aikidoTriageService;
     @Inject HookEvaluator hookEvaluator;
     @Inject TeamsNotifier teamsNotifier;
@@ -104,10 +106,23 @@ public class AikidoWebhookResource {
                     repo.workspace(), repo.repoSlug(), eventType);
 
             // Extract vulnerability context from payload
-            String severity = payloadNode.path("severity").asText(
-                    payloadNode.path("risk_level").asText("unknown")).toLowerCase();
+            String severity = extractSeverityFromPayload(payloadNode);
             String issueType = extractIssueType(payloadNode);
             Integer groupId = extractGroupId(payloadNode);
+
+            // Refresh the DB detail cache for this group in the background so the next
+            // snapshot rebuild gets fresh data without an extra API call.
+            if (groupId != null) {
+                final int gid = groupId;
+                upgradeExecutor.submit(() -> {
+                    try {
+                        var detail = aikidoService.getIssueGroupDetail(gid);
+                        if (detail != null) groupDetailStore.upsert(detail);
+                    } catch (Exception e) {
+                        LOG.warnf("Failed to refresh detail cache for group %d: %s", gid, e.getMessage());
+                    }
+                });
+            }
 
             // Only new vulnerability events trigger remediation (not "fixed" or "resolved")
             boolean isNewVulnerability = eventType != null
@@ -385,8 +400,7 @@ public class AikidoWebhookResource {
             }
 
             // Extract context from payload
-            String severity = payload.path("severity").asText(
-                    payload.path("risk_level").asText("unknown"));
+            String severity = extractSeverityFromPayload(payload);
             String packageName = payload.path("package").path("name").asText(
                     payload.path("dependency").path("name").asText("unknown"));
             String cveId = payload.path("cve").path("id").asText(
@@ -433,6 +447,14 @@ public class AikidoWebhookResource {
             LOG.warnf("Failed to evaluate Aikido hooks for %s/%s: %s", 
                     repo.workspace(), repo.repoSlug(), e.getMessage());
         }
+    }
+
+    private static String extractSeverityFromPayload(JsonNode node) {
+        for (String field : new String[]{"severity_level", "severity", "risk_level", "criticality"}) {
+            String val = node.path(field).asText("");
+            if (!val.isBlank()) return val.toLowerCase();
+        }
+        return "unknown";
     }
 
     private static Response ok(String action, String reason) {

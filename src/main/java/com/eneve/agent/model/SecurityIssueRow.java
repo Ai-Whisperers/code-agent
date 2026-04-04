@@ -13,7 +13,9 @@ public record SecurityIssueRow(
         int issueGroupId,
         String issueType,
         String title,
+        String description,
         String severity,
+        Integer severityScore,
         String packageName,
         String currentVersion,
         String fixedVersion,
@@ -26,5 +28,13 @@ public record SecurityIssueRow(
         Instant slaDeadline,
         String slaStatus,
         String linkedJobId,
-        String linkedJobStatus
+        String linkedJobStatus,
+        String howToFix,
+        java.util.List<String> relatedCveIds,
+        String groupStatus,
+        Integer timeToFixMinutes,
+        /** When Aikido first detected this vulnerability. */
+        Instant discoveredAt,
+        /** Aikido's own remediation deadline ({@code sla_remediate_by}). */
+        Instant aikidoDueDate
 ) {}

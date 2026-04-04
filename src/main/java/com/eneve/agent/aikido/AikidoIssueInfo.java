@@ -8,7 +8,9 @@ public record AikidoIssueInfo(
         int issueGroupId,
         String issueType,
         String title,
+        String description,
         String severity,
+        Integer severityScore,
         String packageName,
         String currentVersion,
         String fixedVersion,
@@ -18,7 +20,15 @@ public record AikidoIssueInfo(
         String repoName,
         String repoUrl,
         String containerImage,
-        String changelogSummary
+        String changelogSummary,
+        String howToFix,
+        java.util.List<String> relatedCveIds,
+        String groupStatus,
+        Integer timeToFixMinutes,
+        /** When Aikido first detected this vulnerability (from {@code first_detected_at} epoch seconds). */
+        java.time.Instant firstDetectedAt,
+        /** Aikido's remediation deadline (from {@code sla_remediate_by} epoch seconds). */
+        java.time.Instant slaRemediateBy
 ) {
     /**
      * Returns a copy of this record with the repoName replaced by the given slug.
@@ -26,9 +36,11 @@ public record AikidoIssueInfo(
      */
     public AikidoIssueInfo withRepoName(String slug) {
         return new AikidoIssueInfo(
-                issueGroupId, issueType, title, severity, packageName,
-                currentVersion, fixedVersion, cveId, cveDescription, cvssScore,
-                slug, repoUrl, containerImage, changelogSummary
+                issueGroupId, issueType, title, description, severity, severityScore,
+                packageName, currentVersion, fixedVersion, cveId, cveDescription, cvssScore,
+                slug, repoUrl, containerImage, changelogSummary,
+                howToFix, relatedCveIds, groupStatus, timeToFixMinutes,
+                firstDetectedAt, slaRemediateBy
         );
     }
 
@@ -58,8 +70,13 @@ public record AikidoIssueInfo(
             sb.append("**Fixed version:** ").append(fixedVersion).append("\n");
         }
 
-        if (cveDescription != null && !cveDescription.isBlank()) {
+        if (description != null && !description.isBlank()) {
+            sb.append("\n### Vulnerability Details\n").append(description).append("\n");
+        } else if (cveDescription != null && !cveDescription.isBlank()) {
             sb.append("\n### Vulnerability Details\n").append(cveDescription).append("\n");
+        }
+        if (howToFix != null && !howToFix.isBlank()) {
+            sb.append("\n### How to Fix (Aikido guidance)\n").append(howToFix).append("\n");
         }
 
         if (changelogSummary != null && !changelogSummary.isBlank()) {

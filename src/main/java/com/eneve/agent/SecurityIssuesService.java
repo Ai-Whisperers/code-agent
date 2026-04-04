@@ -118,18 +118,43 @@ public class SecurityIssuesService {
 
     // ─── Private helpers ──────────────────────────────────────────────────────
 
+    private static final java.util.Set<String> CONTAINER_TYPES = java.util.Set.of(
+            "container", "container_security"
+    );
+
+    private static final java.util.Set<String> INACTIVE_STATUSES = java.util.Set.of(
+            "closed", "ignored", "snoozed"
+    );
+
+    private static boolean isContainerIssue(SecurityIssueRow r) {
+        return r.issueType() != null && CONTAINER_TYPES.contains(r.issueType().toLowerCase());
+    }
+
+    private static boolean isActiveIssue(AikidoIssueInfo issue) {
+        if (issue.groupStatus() == null || issue.groupStatus().isBlank()) return true;
+        return !INACTIVE_STATUSES.contains(issue.groupStatus().toLowerCase());
+    }
+
     private RepoSecuritySummary buildRepoSummary(String repoSlug, List<AikidoIssueInfo> aikidoIssues) {
         List<SecurityIssueRow> rows = new ArrayList<>();
         for (AikidoIssueInfo issue : aikidoIssues) {
+            if (!isActiveIssue(issue)) continue;
             rows.add(buildIssueRow(issue));
         }
 
         int criticalCount = (int) rows.stream()
-                .filter(r -> "critical".equalsIgnoreCase(r.severity()))
-                .count();
+                .filter(r -> "critical".equalsIgnoreCase(r.severity())).count();
         int highCount = (int) rows.stream()
-                .filter(r -> "high".equalsIgnoreCase(r.severity()))
-                .count();
+                .filter(r -> "high".equalsIgnoreCase(r.severity())).count();
+
+        int softwareCriticalCount = (int) rows.stream()
+                .filter(r -> !isContainerIssue(r) && "critical".equalsIgnoreCase(r.severity())).count();
+        int softwareHighCount = (int) rows.stream()
+                .filter(r -> !isContainerIssue(r) && "high".equalsIgnoreCase(r.severity())).count();
+        int containerCriticalCount = (int) rows.stream()
+                .filter(r -> isContainerIssue(r) && "critical".equalsIgnoreCase(r.severity())).count();
+        int containerHighCount = (int) rows.stream()
+                .filter(r -> isContainerIssue(r) && "high".equalsIgnoreCase(r.severity())).count();
 
         List<String> containers = rows.stream()
                 .map(SecurityIssueRow::containerImage)
@@ -137,13 +162,17 @@ public class SecurityIssuesService {
                 .distinct()
                 .collect(Collectors.toList());
 
-        return new RepoSecuritySummary(repoSlug, containers, criticalCount, highCount, rows);
+        return new RepoSecuritySummary(repoSlug, containers,
+                criticalCount, highCount,
+                softwareCriticalCount, softwareHighCount,
+                containerCriticalCount, containerHighCount,
+                rows);
     }
 
     private SecurityIssueRow buildIssueRow(AikidoIssueInfo issue) {
         String groupIdStr = String.valueOf(issue.issueGroupId());
 
-        Instant createdAt = Instant.now(); // Aikido API doesn't expose creation date in AikidoIssueInfo
+        Instant createdAt = issue.firstDetectedAt() != null ? issue.firstDetectedAt() : Instant.now();
         Instant slaDeadline = computeSlaDeadline(issue.severity(), createdAt);
         String slaStatus = computeSlaStatus(issue.severity(), createdAt, slaDeadline);
 
@@ -164,7 +193,9 @@ public class SecurityIssuesService {
                 issue.issueGroupId(),
                 issue.issueType(),
                 issue.title(),
+                issue.description(),
                 issue.severity(),
+                issue.severityScore(),
                 issue.packageName(),
                 issue.currentVersion(),
                 issue.fixedVersion(),
@@ -177,7 +208,13 @@ public class SecurityIssuesService {
                 slaDeadline,
                 slaStatus,
                 linkedJobId,
-                linkedJobStatus
+                linkedJobStatus,
+                issue.howToFix(),
+                issue.relatedCveIds(),
+                issue.groupStatus(),
+                issue.timeToFixMinutes(),
+                issue.firstDetectedAt(),
+                issue.slaRemediateBy()
         );
     }
 
