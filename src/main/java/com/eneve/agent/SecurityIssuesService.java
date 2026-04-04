@@ -141,6 +141,9 @@ public class SecurityIssuesService {
             if (!isActiveIssue(issue)) continue;
             rows.add(buildIssueRow(issue));
         }
+        rows.sort(java.util.Comparator.comparingInt(
+                (SecurityIssueRow r) -> r.severityScore() != null ? r.severityScore() : 0
+        ).reversed());
 
         int criticalCount = (int) rows.stream()
                 .filter(r -> "critical".equalsIgnoreCase(r.severity())).count();
