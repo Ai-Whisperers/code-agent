@@ -31,7 +31,11 @@ public enum JobType {
     /** Rewrites or extracts code from a source repository into a target repository.
      *  Supports full cross-language rewrites (e.g. PHP→C#), framework migrations (e.g. Angular→React),
      *  and partial extractions (e.g. monolith→microservice). */
-    REWRITE;
+    REWRITE,
+    /** Classifies an incoming Jira Service Desk ticket as QUESTION, REQUEST, BUG_REPORT, or OUTAGE_REPORT
+     *  (Stage 1: Haiku) and, for bugs and outages, performs a deep AI root-cause analysis
+     *  (Stage 2: Sonnet) using the knowledge index. Results are posted as internal (agent-only) comments. */
+    SERVICE_DESK_TRIAGE;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -61,8 +65,9 @@ public enum JobType {
             case REVIEW_EPIC      ->  15;
             case REVIEW_FEATURE   ->  15;
             case REVIEW_USERSTORY ->  15;
-            case SELF_ANALYSIS    ->  10;
-            case REWRITE          ->  55;
+            case SELF_ANALYSIS         ->  10;
+            case REWRITE               ->  55;
+            case SERVICE_DESK_TRIAGE   ->  55;
         };
     }
 }

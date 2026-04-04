@@ -70,6 +70,11 @@ public class BedrockEmbeddingService {
     private static final int COHERE_MAX_BATCH = 96;
     /** Titan Embeddings V2: only one text per InvokeModel call. */
     private static final int TITAN_BATCH = 1;
+    /**
+     * Titan Embeddings V2 hard limit is 8 192 tokens.
+     * At ~4 chars/token that is ~32 768 chars; use 30 000 to leave a safe margin.
+     */
+    private static final int TITAN_MAX_CHARS = 30_000;
 
     @Inject ObjectMapper mapper;
     @Inject SettingsService settingsService;
@@ -312,8 +317,12 @@ public class BedrockEmbeddingService {
         List<float[]> results = new ArrayList<>();
         for (String text : texts) {
             try {
+                String truncated = text.length() > TITAN_MAX_CHARS ? text.substring(0, TITAN_MAX_CHARS) : text;
+                if (truncated.length() < text.length()) {
+                    LOG.debugf("Titan input truncated from %d to %d chars for model %s", text.length(), truncated.length(), model);
+                }
                 var requestBody = mapper.createObjectNode();
-                requestBody.put("inputText", text);
+                requestBody.put("inputText", truncated);
                 requestBody.put("dimensions", 1024);
                 requestBody.put("normalize", true);
 

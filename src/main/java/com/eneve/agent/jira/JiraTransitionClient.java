@@ -36,6 +36,19 @@ class JiraTransitionClient {
         http.postWithCreds("/rest/api/3/issue/" + issueKey + "/comment", body, "add comment", creds);
     }
 
+    /**
+     * Posts an <em>internal</em> (agent-only) comment on a Jira Service Management issue.
+     * The {@code visibility} block restricts the comment to the "Service Desk Team" role,
+     * making it invisible to the customer reporter.
+     */
+    void addInternalComment(String issueKey, String commentText) {
+        String body = """
+                {"visibility":{"type":"role","value":"Service Desk Team"},\
+                "body":{"type":"doc","version":1,"content":[{"type":"paragraph","content":[{"type":"text","text":"%s"}]}]}}
+                """.formatted(JiraHttpClient.escapeJson(commentText));
+        http.post("/rest/api/3/issue/" + issueKey + "/comment", body, "add internal comment");
+    }
+
     void transitionToInProgress(String issueKey) {
         String id = settings.get("jira.transition.in-progress", "");
         if (id.isBlank()) {

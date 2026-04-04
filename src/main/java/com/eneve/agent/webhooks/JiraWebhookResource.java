@@ -280,12 +280,13 @@ public class JiraWebhookResource {
     private void evaluateJiraHooks(String event, String issueKey, JsonNode fields) {
         try {
             // Extract fields for context
-            String summary = fields.path("summary").asText("");
-            String projectKey = fields.path("project").path("key").asText("");
-            String issueType = fields.path("issuetype").path("name").asText("");
+            String summary        = fields.path("summary").asText("");
+            String projectKey     = fields.path("project").path("key").asText("");
+            String issueType      = fields.path("issuetype").path("name").asText("");
             String assigneeDisplay = fields.path("assignee").path("displayName").asText("");
-            String priority = fields.path("priority").path("name").asText("");
-            
+            String priority       = fields.path("priority").path("name").asText("");
+            String description    = extractDescriptionText(fields.path("description"));
+
             // Determine trigger type
             String triggerType;
             if (event.equals("jira:issue_created")) {
@@ -295,41 +296,78 @@ public class JiraWebhookResource {
             } else {
                 triggerType = "jira.issue_assigned"; // fallback for assignee changes
             }
-            
-            // Build context map
-            var context = Map.of(
-                    "issueKey", issueKey,
-                    "summary", summary,
-                    "projectKey", projectKey,
-                    "issueType", issueType,
-                    "assignee", assigneeDisplay,
-                    "priority", priority
-            );
-            
+
+            // Build context map (includes description for service desk triage)
+            var context = new java.util.HashMap<String, String>();
+            context.put("issueKey",    issueKey);
+            context.put("summary",     summary);
+            context.put("projectKey",  projectKey);
+            context.put("issueType",   issueType);
+            context.put("assignee",    assigneeDisplay);
+            context.put("priority",    priority);
+            context.put("description", description);
+
             // Parse workspace/repo from default repo URL if available
             String workspace = "unknown";
-            String repoSlug = "unknown";
+            String repoSlug  = "unknown";
             if (defaultRepoUrl() != null && !defaultRepoUrl().isBlank()) {
                 try {
                     RepoCoordinates coords = RepoCoordinates.parse(defaultRepoUrl());
                     workspace = coords.organization();
-                    repoSlug = coords.repository();
+                    repoSlug  = coords.repository();
                 } catch (IllegalArgumentException e) {
                     LOG.debugf("Could not parse default repo URL for hook evaluation: %s", e.getMessage());
                 }
             }
-            
-            // Evaluate hooks
+
+            // Evaluate standard Jira hooks (issue_created / issue_updated / issue_assigned)
             var hookJobIds = hookEvaluator.evaluateByTrigger(
                     triggerType, workspace, repoSlug, defaultRepoUrl(), context);
-            
             if (!hookJobIds.isEmpty()) {
-                LOG.infof("JIRA webhook: triggered %d hook jobs for %s", hookJobIds.size(), triggerType);
+                LOG.infof("JIRA webhook: triggered %d hook job(s) for %s", hookJobIds.size(), triggerType);
             }
-            
+
+            // Additionally evaluate service-desk-ticket hooks on issue_created
+            if (event.equals("jira:issue_created")) {
+                var sdHookJobIds = hookEvaluator.evaluateByTrigger(
+                        "jira.service_desk_ticket", workspace, repoSlug, defaultRepoUrl(), context);
+                if (!sdHookJobIds.isEmpty()) {
+                    LOG.infof("JIRA webhook: triggered %d service-desk-triage hook job(s) for %s",
+                            sdHookJobIds.size(), issueKey);
+                }
+            }
+
         } catch (Exception e) {
             LOG.warnf("Failed to evaluate Jira hooks for %s: %s", issueKey, e.getMessage());
         }
+    }
+
+    /**
+     * Extracts plain text from a Jira ADF description node.
+     * Walks paragraph/text content nodes and concatenates their text values.
+     */
+    private static String extractDescriptionText(JsonNode descNode) {
+        if (descNode == null || descNode.isMissingNode() || descNode.isNull()) return "";
+        // ADF format: {"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"..."}]}]}
+        StringBuilder sb = new StringBuilder();
+        JsonNode content = descNode.path("content");
+        if (content.isArray()) {
+            for (JsonNode block : content) {
+                JsonNode inner = block.path("content");
+                if (inner.isArray()) {
+                    for (JsonNode node : inner) {
+                        if ("text".equals(node.path("type").asText(""))) {
+                            sb.append(node.path("text").asText(""));
+                        }
+                    }
+                }
+                sb.append("\n");
+            }
+        } else if (descNode.isTextual()) {
+            // Plain text fallback
+            return descNode.asText("");
+        }
+        return sb.toString().trim();
     }
 
     private void audit(String platform, String eventType, String workspace,

@@ -126,6 +126,10 @@ public class JobRecord {
         this(jobId, request, JobType.REWRITE);
     }
 
+    public JobRecord(String jobId, ServiceDeskTriageRequest request) {
+        this(jobId, request, JobType.SERVICE_DESK_TRIAGE);
+    }
+
     public String getJobId() { return jobId; }
     public JobType getJobType() { return jobType; }
 

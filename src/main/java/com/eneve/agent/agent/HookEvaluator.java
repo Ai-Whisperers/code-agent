@@ -12,6 +12,7 @@ import com.eneve.agent.model.JiraReviewRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.RepoCoordinates;
+import com.eneve.agent.model.ServiceDeskTriageRequest;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
@@ -187,8 +188,34 @@ public class HookEvaluator {
         String timestamp = String.valueOf(Instant.now().getEpochSecond());
         String branchName = "agent/hook-" + hook.name() + "-" + timestamp;
 
-        // Dispatch Jira review jobs when the hook action type is a review action
+        // Dispatch service desk triage jobs
         String actionType = hook.actionType();
+        if ("service_desk_triage".equals(actionType)) {
+            String issueKey    = context != null ? context.get("issueKey")    : null;
+            String projectKey  = context != null ? context.get("projectKey")  : null;
+            String summary     = context != null ? context.get("summary")     : null;
+            String description = context != null ? context.get("description") : null;
+            String issueType   = context != null ? context.get("issueType")   : null;
+            String priority    = context != null ? context.get("priority")    : null;
+
+            if (issueKey == null || issueKey.isBlank()) {
+                LOG.warnf("Hook '%s' is a service_desk_triage action but no issueKey in context — skipping",
+                        hook.name());
+                return null;
+            }
+            ServiceDeskTriageRequest triageReq = new ServiceDeskTriageRequest(
+                    issueKey, projectKey, summary, description, issueType, priority);
+            String jobId = UUID.randomUUID().toString();
+            JobRecord job = new JobRecord(jobId, triageReq);
+            String result = enqueueHookJob(job, hook.name(), "service-desk-triage for " + issueKey);
+            if (result != null) {
+                LOG.infof("Hook '%s' triggered SERVICE_DESK_TRIAGE job %s for issue %s",
+                        hook.name(), result, issueKey);
+            }
+            return result;
+        }
+
+        // Dispatch Jira review jobs when the hook action type is a review action
         if ("review_epic".equals(actionType) || "review_feature".equals(actionType)
                 || "review_userstory".equals(actionType)) {
             String issueKey = context != null ? context.get("issue_key") : null;

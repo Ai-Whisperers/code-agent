@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(22, values.length);
+        assertEquals(23, values.length);
         assertEquals(JobType.FIX,                        values[0]);
         assertEquals(JobType.REVIEW,                     values[1]);
         assertEquals(JobType.FIX_PR,                     values[2]);
@@ -33,6 +33,7 @@ class JobTypeTest {
         assertEquals(JobType.KNOWLEDGE_GRAPH,            values[19]);
         assertEquals(JobType.TECH_DEBT,                  values[20]);
         assertEquals(JobType.REWRITE,                    values[21]);
+        assertEquals(JobType.SERVICE_DESK_TRIAGE,        values[22]);
     }
 
     @Test
@@ -59,6 +60,7 @@ class JobTypeTest {
         assertEquals("KNOWLEDGE_GRAPH",            JobType.KNOWLEDGE_GRAPH.name());
         assertEquals("TECH_DEBT",                  JobType.TECH_DEBT.name());
         assertEquals("REWRITE",                    JobType.REWRITE.name());
+        assertEquals("SERVICE_DESK_TRIAGE",        JobType.SERVICE_DESK_TRIAGE.name());
     }
 
     @Test
@@ -85,6 +87,7 @@ class JobTypeTest {
         assertEquals(JobType.KNOWLEDGE_GRAPH,            JobType.valueOf("KNOWLEDGE_GRAPH"));
         assertEquals(JobType.TECH_DEBT,                  JobType.valueOf("TECH_DEBT"));
         assertEquals(JobType.REWRITE,                    JobType.valueOf("REWRITE"));
+        assertEquals(JobType.SERVICE_DESK_TRIAGE,        JobType.valueOf("SERVICE_DESK_TRIAGE"));
     }
 
     @Test
@@ -123,6 +126,7 @@ class JobTypeTest {
         assertEquals(19, JobType.KNOWLEDGE_GRAPH.ordinal());
         assertEquals(20, JobType.TECH_DEBT.ordinal());
         assertEquals(21, JobType.REWRITE.ordinal());
+        assertEquals(22, JobType.SERVICE_DESK_TRIAGE.ordinal());
     }
 
     @Test

@@ -17,9 +17,11 @@ public final class TriggerType {
     public static final String SCM_PUSH = "scm.push";
 
     // ── Jira ──────────────────────────────────────────────────────────────────
-    public static final String JIRA_ISSUE_CREATED = "jira.issue_created";
-    public static final String JIRA_ISSUE_UPDATED = "jira.issue_updated";
-    public static final String JIRA_ISSUE_ASSIGNED = "jira.issue_assigned";
+    public static final String JIRA_ISSUE_CREATED        = "jira.issue_created";
+    public static final String JIRA_ISSUE_UPDATED        = "jira.issue_updated";
+    public static final String JIRA_ISSUE_ASSIGNED       = "jira.issue_assigned";
+    /** Fired when a new Jira Service Desk ticket is created (maps to jira:issue_created filtered by SD project). */
+    public static final String JIRA_SERVICE_DESK_TICKET  = "jira.service_desk_ticket";
 
     // ── Confluence ────────────────────────────────────────────────────────────
     public static final String CONFLUENCE_PAGE_CREATED = "confluence.page_created";
@@ -45,7 +47,7 @@ public final class TriggerType {
     );
 
     public static final Set<String> JIRA_TRIGGERS = Set.of(
-        JIRA_ISSUE_CREATED, JIRA_ISSUE_UPDATED, JIRA_ISSUE_ASSIGNED
+        JIRA_ISSUE_CREATED, JIRA_ISSUE_UPDATED, JIRA_ISSUE_ASSIGNED, JIRA_SERVICE_DESK_TICKET
     );
 
     public static final Set<String> CONFLUENCE_TRIGGERS = Set.of(

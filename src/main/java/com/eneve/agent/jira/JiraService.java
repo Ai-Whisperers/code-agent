@@ -273,6 +273,15 @@ public class JiraService {
         transitions.addComment(issueKey, commentText, creds);
     }
 
+    /**
+     * Posts an internal (agent-only) comment on a Jira Service Management issue.
+     * The comment is restricted to the "Service Desk Team" role and is never visible
+     * to the customer reporter.
+     */
+    public void addInternalComment(String issueKey, String commentText) {
+        transitions.addInternalComment(issueKey, commentText);
+    }
+
     public void transitionToInProgress(String issueKey) {
         transitions.transitionToInProgress(issueKey);
     }

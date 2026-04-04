@@ -256,5 +256,29 @@
       "product_context",
       "issue_type_guidance"
     ]
+  },
+  "service-desk-triage": {
+    "description": "Single-shot Haiku triage prompt: classifies a Jira Service Desk ticket as QUESTION, REQUEST, BUG_REPORT, or OUTAGE_REPORT with severity and confidence",
+    "placeholders": [
+      "PROJECT_KEY",
+      "ISSUE_TYPE",
+      "PRIORITY",
+      "SUMMARY",
+      "DESCRIPTION"
+    ]
+  },
+  "service-desk-deep-analysis": {
+    "description": "Deep analysis prompt: produces a structured internal markdown report with root cause hypothesis, impact assessment, recommended next steps, and prevention guidance for a bug or outage ticket",
+    "placeholders": [
+      "ISSUE_KEY",
+      "PROJECT_KEY",
+      "CATEGORY",
+      "SEVERITY",
+      "TRIAGE_REASON",
+      "SUMMARY",
+      "DESCRIPTION",
+      "SIMILAR_TICKETS_SECTION",
+      "RELATED_OPEN_ISSUES_SECTION"
+    ]
   }
 }
