@@ -90,6 +90,8 @@ public class ReviewHandler implements JobHandler {
                     ? request.targetBranch() : prInfo.get("destinationBranch");
             String prTitle = prInfo.get("title");
             job.setPrId(request.prId());
+            job.setWorkspace(coords.organization());
+            job.setRepoSlug(coords.repository());
 
             String authUrl = platformService.buildCloneUrl(coords.organization(), coords.project(), coords.repository());
             LOG.infof("Review: cloning %s/%s branch %s for PR #%s",
