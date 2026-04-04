@@ -174,6 +174,7 @@ public class QualityReportStore {
                   AND branch = ?
                   AND created_at >= ?
                   AND report_data->'coverage' IS NOT NULL
+                  AND report_data->'coverage' != 'null'::jsonb
                   AND report_data->'coverage'->>'lineRate' IS NOT NULL
                 GROUP BY repo_slug, week
                 ORDER BY repo_slug, week
