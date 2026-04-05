@@ -153,6 +153,9 @@ public class LogAnalysisService {
             events.addAll(fetchLogEvents(target, cfg, groupName));
         }
 
+        // Drop log lines emitted by this service to avoid self-triggering findings
+        events.removeIf(e -> e.message() != null && e.message().contains("LogAnalysisService:"));
+
         if (events.isEmpty()) {
             LOG.debugf("LogAnalysisService: no matching events for %s/%s", customerId, envName);
             return 0;
