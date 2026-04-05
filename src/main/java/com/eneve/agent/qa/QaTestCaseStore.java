@@ -10,6 +10,7 @@ import java.sql.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 /**
  * JDBC store for {@code qa_test_cases}.
@@ -126,6 +127,47 @@ public class QaTestCaseStore {
         }
     }
 
+    /**
+     * Sets the Jira issue key, marks the test case as synced, and records the sync timestamp.
+     * Used after a successful "Upload to Jira" sync.
+     */
+    public void updateJiraKeyAndSync(String id, String jiraIssueKey) {
+        String sql = """
+                UPDATE qa_test_cases
+                SET jira_issue_key    = ?,
+                    xray_sync_status  = 'synced',
+                    xray_synced_at    = now()
+                WHERE id = ?::uuid
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jiraIssueKey);
+            ps.setString(2, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("QaTestCaseStore.updateJiraKeyAndSync: id=%s: %s", id, e.getMessage());
+            throw new RuntimeException("Failed to update Jira key and sync status", e);
+        }
+    }
+
+    /** Marks an existing synced test case as updated (refreshes xray_synced_at). */
+    public void markSynced(String id) {
+        String sql = """
+                UPDATE qa_test_cases
+                SET xray_sync_status = 'synced',
+                    xray_synced_at   = now()
+                WHERE id = ?::uuid
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("QaTestCaseStore.markSynced: id=%s: %s", id, e.getMessage());
+            throw new RuntimeException("Failed to mark test case as synced", e);
+        }
+    }
+
     // ─── Queries ──────────────────────────────────────────────────────────────
 
     /** Returns all test cases for a plan, ordered by story_key then test_case_id. */
@@ -181,6 +223,69 @@ public class QaTestCaseStore {
             LOG.errorf("QaTestCaseStore.findByStory: planId=%s storyKey=%s: %s", planId, storyKey, e.getMessage());
         }
         return results;
+    }
+
+    /**
+     * Looks up a test case by its Jira issue key within a plan.
+     * Used during ETR import to avoid inserting duplicate rows.
+     */
+    public Optional<QaTestCase> findByJiraKey(String planId, String jiraKey) {
+        String sql = """
+                SELECT id, plan_id, feature_key, story_key, test_case_id, title, description,
+                       pre_conditions, test_steps, expected_results,
+                       test_case_type, priority, status, estimated_duration,
+                       kpi_step_count, kpi_estimated_mins, kpi_precondition_count,
+                       kpi_execution_count, kpi_last_result, kpi_last_executed_at,
+                       kpi_automation_status, jira_issue_key, xray_sync_status, xray_synced_at,
+                       generated_at
+                FROM qa_test_cases
+                WHERE plan_id = ?::uuid AND jira_issue_key = ?
+                LIMIT 1
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, planId);
+            ps.setString(2, jiraKey);
+            try (ResultSet rs = ps.executeQuery()) {
+                if (rs.next()) return Optional.of(mapRow(rs));
+            }
+        } catch (SQLException e) {
+            LOG.errorf("QaTestCaseStore.findByJiraKey: planId=%s jiraKey=%s: %s", planId, jiraKey, e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Links an AI-generated test case to an ETR Jira issue and marks it as matched.
+     * Also overwrites title, description, testSteps, and priority from the ETR issue.
+     */
+    public void linkJiraKeyAndMatch(String id, String jiraIssueKey,
+                                    String title, String description,
+                                    String testSteps, String priority) {
+        String sql = """
+                UPDATE qa_test_cases
+                SET jira_issue_key   = ?,
+                    xray_sync_status = 'matched',
+                    xray_synced_at   = now(),
+                    title            = ?,
+                    description      = ?,
+                    test_steps       = ?::jsonb,
+                    priority         = ?
+                WHERE id = ?::uuid
+                """;
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, jiraIssueKey);
+            ps.setString(2, title);
+            ps.setString(3, description);
+            ps.setString(4, testSteps);
+            ps.setString(5, priority);
+            ps.setString(6, id);
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            LOG.errorf("QaTestCaseStore.linkJiraKeyAndMatch: id=%s: %s", id, e.getMessage());
+            throw new RuntimeException("Failed to link Jira key", e);
+        }
     }
 
     /** Returns the count of test cases for a plan (fast check without loading all rows). */

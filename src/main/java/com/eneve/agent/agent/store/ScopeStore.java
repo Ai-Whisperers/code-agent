@@ -28,6 +28,12 @@ public class ScopeStore {
     public ScopeRecord create(String name, List<String> labels,
                                String epicIssuetype, String featureIssuetype,
                                String userstoryIssuetype, String scopeType) {
+        return create(name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, scopeType, null);
+    }
+
+    public ScopeRecord create(String name, List<String> labels,
+                               String epicIssuetype, String featureIssuetype,
+                               String userstoryIssuetype, String scopeType, String etrProjectKey) {
         String id = UUID.randomUUID().toString();
 
         // Use the first label as the legacy label column value (backward-compat)
@@ -35,8 +41,8 @@ public class ScopeStore {
         String type = (scopeType != null && !scopeType.isBlank()) ? scopeType : "po";
 
         String sqlScope = """
-                INSERT INTO scopes (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype, scope_type)
-                VALUES (?::uuid, ?, ?, ?, ?, ?, ?)
+                INSERT INTO scopes (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype, scope_type, etr_project_key)
+                VALUES (?::uuid, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
@@ -49,6 +55,7 @@ public class ScopeStore {
                     ps.setString(5, featureIssuetype);
                     ps.setString(6, userstoryIssuetype);
                     ps.setString(7, type);
+                    setNullable(ps, 8, etrProjectKey);
                     ps.executeUpdate();
                 }
                 replaceLabels(conn, id, labels);
@@ -66,7 +73,7 @@ public class ScopeStore {
 
     public Optional<ScopeRecord> findById(String id) {
         String sqlScope = """
-                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type, etr_project_key
                 FROM scopes WHERE id = ?::uuid
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -86,7 +93,7 @@ public class ScopeStore {
 
     public List<ScopeRecord> findAll() {
         String sqlScope = """
-                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type, etr_project_key
                 FROM scopes ORDER BY created_at DESC
                 """;
         List<ScopeRecord> results = new ArrayList<>();
@@ -106,7 +113,7 @@ public class ScopeStore {
 
     public List<ScopeRecord> findAllByType(String scopeType) {
         String sqlScope = """
-                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type, etr_project_key
                 FROM scopes WHERE scope_type = ? ORDER BY created_at DESC
                 """;
         List<ScopeRecord> results = new ArrayList<>();
@@ -129,11 +136,18 @@ public class ScopeStore {
     public void update(String id, String name, List<String> labels,
                        String epicIssuetype, String featureIssuetype,
                        String userstoryIssuetype) {
+        update(id, name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, null);
+    }
+
+    public void update(String id, String name, List<String> labels,
+                       String epicIssuetype, String featureIssuetype,
+                       String userstoryIssuetype, String etrProjectKey) {
         String primaryLabel = labels != null && !labels.isEmpty() ? labels.get(0) : "";
 
         String sqlScope = """
                 UPDATE scopes SET name = ?, label = ?,
-                    epic_issuetype = ?, feature_issuetype = ?, userstory_issuetype = ?
+                    epic_issuetype = ?, feature_issuetype = ?, userstory_issuetype = ?,
+                    etr_project_key = ?
                 WHERE id = ?::uuid
                 """;
         try (Connection conn = dataSource.getConnection()) {
@@ -145,7 +159,8 @@ public class ScopeStore {
                     ps.setString(3, epicIssuetype);
                     ps.setString(4, featureIssuetype);
                     ps.setString(5, userstoryIssuetype);
-                    ps.setString(6, id);
+                    setNullable(ps, 6, etrProjectKey);
+                    ps.setString(7, id);
                     ps.executeUpdate();
                 }
                 replaceLabels(conn, id, labels);
@@ -270,7 +285,13 @@ public class ScopeStore {
                 rs.getString("feature_issuetype"),
                 rs.getString("userstory_issuetype"),
                 rs.getTimestamp("created_at").toInstant(),
-                rs.getString("scope_type")
+                rs.getString("scope_type"),
+                rs.getString("etr_project_key")
         );
+    }
+
+    private void setNullable(PreparedStatement ps, int idx, String value) throws SQLException {
+        if (value != null && !value.isBlank()) ps.setString(idx, value.trim());
+        else ps.setNull(idx, Types.VARCHAR);
     }
 }

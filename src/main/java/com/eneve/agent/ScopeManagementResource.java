@@ -61,7 +61,8 @@ public class ScopeManagementResource {
                 strOf(body, "epicIssuetype"),
                 strOf(body, "featureIssuetype"),
                 strOf(body, "userstoryIssuetype"),
-                scopeType);
+                scopeType,
+                strOf(body, "etrProjectKey"));
 
         Map<String, Object> resp = scopeResponse(result.scope(), result.itemsSynced());
         if (result.itemsSynced() == 0) {
@@ -82,7 +83,8 @@ public class ScopeManagementResource {
             Object updated = managementService.updateScope(id, name, labels,
                     strOf(body, "epicIssuetype"),
                     strOf(body, "featureIssuetype"),
-                    strOf(body, "userstoryIssuetype"));
+                    strOf(body, "userstoryIssuetype"),
+                    strOf(body, "etrProjectKey"));
             return Response.ok(updated).build();
         } catch (ScopeNotFoundException e) {
             return notFound("Scope not found");
@@ -271,6 +273,7 @@ public class ScopeManagementResource {
         r.put("userstoryIssuetype", scope.userstoryIssuetype());
         r.put("createdAt",          scope.createdAt());
         r.put("scopeType",          scope.scopeType() != null ? scope.scopeType() : "po");
+        r.put("etrProjectKey",      scope.etrProjectKey());
         if (itemsSynced != null) r.put("itemsSynced", itemsSynced);
         return r;
     }

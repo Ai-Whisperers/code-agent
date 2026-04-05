@@ -57,6 +57,28 @@ public class JobsResource {
     RunFixService runFixService;
 
     @GET
+    @Path("/status/{jobId}")
+    @Operation(
+            operationId = "getJobStatus",
+            summary = "Get status of a single job",
+            description = "Returns current status, summary, and error message for the given job."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "200", description = "Job status",
+                    content = @Content(schema = @Schema(implementation = JobStatusResponse.class))),
+            @APIResponse(responseCode = "404", description = "Job not found")
+    })
+    public Response getJobStatus(
+            @Parameter(description = "UUID of the job", required = true)
+            @PathParam("jobId") String jobId) {
+        try {
+            return Response.ok(runFixService.getStatus(jobId)).build();
+        } catch (JobNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        }
+    }
+
+    @GET
     @Operation(
             operationId = "listJobs",
             summary = "List jobs",

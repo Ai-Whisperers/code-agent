@@ -22,8 +22,10 @@ import org.jboss.logging.Logger;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.IntStream;
 
 /**
  * Orchestrates AI test case generation for all child stories of a feature test plan.
@@ -46,10 +48,19 @@ public class QaTestCaseService {
     @Inject SettingsService settings;
     @Inject ObjectMapper mapper;
 
-    /**
-     * Result summary returned to the job handler.
-     */
+    /** Result summary returned to the job handler after generation. */
     public record GenerationResult(int totalCases, int storiesProcessed, int storiesFailed) {}
+
+    /** Result summary returned after a "Upload to Jira" sync. */
+    public record SyncResult(int created, int updated, int failed) {}
+
+    /** One suggestion returned when confidence is 40-79 (needs manual review). */
+    public record MatchSuggestion(String etrKey, String etrTitle,
+                                   String matchedAiId, int confidence, String reasoning) {}
+
+    /** Result returned by {@link #importFromJira}. */
+    public record ImportResult(int autoLinked, int newInserted, int storiesSearched,
+                                List<MatchSuggestion> suggestions) {}
 
     /**
      * Generates test cases for all child stories of the given plan.
@@ -126,6 +137,389 @@ public class QaTestCaseService {
         }
 
         return new GenerationResult(totalCases, storiesProcessed, storiesFailed);
+    }
+
+    // ─── Import from Jira (ETR) ───────────────────────────────────────────────
+
+    /**
+     * Fetches ETR test cases from Jira for all child stories in the plan,
+     * then either inserts them directly or runs AI matching against existing
+     * AI-generated cases depending on whether the plan already has test cases.
+     *
+     * @param planId       UUID of the qa_test_plans row
+     * @param etrProjectKey Jira project key to search (e.g. "ETR"); falls back to setting
+     * @param jobId        job ID for AI call audit trail (may be null)
+     * @return summary of import results
+     */
+    public ImportResult importFromJira(String planId, String etrProjectKey, String jobId) {
+        QaTestPlan plan = planStore.findById(planId)
+                .orElseThrow(() -> new IllegalArgumentException("Test plan not found: " + planId));
+
+        // Resolve ETR project key: arg → scope → global setting
+        String projectKey = etrProjectKey;
+        if (projectKey == null || projectKey.isBlank()) {
+            projectKey = settings.get("xray.test-project-key", "");
+        }
+        if (projectKey == null || projectKey.isBlank()) {
+            throw new IllegalStateException(
+                    "ETR project key is not configured — pass it in the request or set xray.test-project-key");
+        }
+
+        List<String> storyKeys = plan.planJson() != null
+                ? extractChildStoryKeys(plan.planJson()) : List.of();
+
+        // Search against the feature key and all story keys; ETR links may be on the
+        // feature rather than individual stories, so we try all candidate keys.
+        List<String> searchKeys = new ArrayList<>();
+        searchKeys.add(plan.issueKey());          // feature key first
+        searchKeys.addAll(storyKeys);             // then each story
+
+        // Collect results, deduplicated by ETR key.
+        // Also track which story key (or feature key) each ETR test was found under
+        // so we can populate the story_key column in qa_test_cases (NOT NULL).
+        Map<String, JiraIssueDetail> etrByKey = new LinkedHashMap<>();
+        Map<String, String> etrToStoryKey = new LinkedHashMap<>();
+        String featureKey = plan.issueKey();
+        for (String candidateKey : searchKeys) {
+            String jql = String.format("project = \"%s\" AND issue in linkedIssues(\"%s\")",
+                    projectKey, candidateKey);
+            try {
+                List<JiraIssueDetail> found = jiraService.searchIssues(jql, 50);
+                if (found != null) {
+                    for (JiraIssueDetail etr : found) {
+                        if (etrByKey.putIfAbsent(etr.key(), etr) == null) {
+                            // First time we see this ETR key: record the story key that found it.
+                            // If the search was on the feature key itself, fall back to the first
+                            // child story (or the feature key as a last resort).
+                            String assignedStoryKey = candidateKey.equals(featureKey)
+                                    ? (storyKeys.isEmpty() ? featureKey : storyKeys.get(0))
+                                    : candidateKey;
+                            etrToStoryKey.put(etr.key(), assignedStoryKey);
+                        }
+                    }
+                }
+                LOG.infof("QaTestCaseService.importFromJira: JQL for %s returned %d results",
+                        candidateKey, found != null ? found.size() : 0);
+            } catch (Exception e) {
+                LOG.warnf("QaTestCaseService.importFromJira: JQL failed for %s: %s", candidateKey, e.getMessage());
+            }
+        }
+
+        List<JiraIssueDetail> etrTests = new ArrayList<>(etrByKey.values());
+
+        LOG.infof("QaTestCaseService.importFromJira: planId=%s found=%d ETR tests (searched feature + %d stories)",
+                planId, etrTests.size(), storyKeys.size());
+
+        List<QaTestCase> aiCases = caseStore.findByPlan(planId);
+
+        if (aiCases.isEmpty()) {
+            // No AI cases yet — insert all ETR tests directly
+            int inserted = insertEtrTests(planId, featureKey, etrTests, etrToStoryKey);
+            return new ImportResult(0, inserted, storyKeys.size(), List.of());
+        } else {
+            return matchWithAi(planId, featureKey, etrTests, etrToStoryKey, aiCases, storyKeys.size(), jobId);
+        }
+    }
+
+    /**
+     * Calls Claude to match each ETR test against AI-generated cases, then
+     * auto-links high-confidence matches, inserts unmatched tests, and returns
+     * medium-confidence suggestions for manual review.
+     */
+    private ImportResult matchWithAi(String planId, String featureKey,
+                                      List<JiraIssueDetail> etrTests,
+                                      Map<String, String> etrToStoryKey,
+                                      List<QaTestCase> aiCases,
+                                      int storiesSearched, String jobId) {
+        // Build context strings for the prompt
+        List<Map<String, Object>> aiJson = new ArrayList<>();
+        for (QaTestCase tc : aiCases) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id",          tc.testCaseId());
+            m.put("title",       tc.title());
+            m.put("description", tc.description());
+            aiJson.add(m);
+        }
+
+        List<Map<String, Object>> etrJson = new ArrayList<>();
+        for (JiraIssueDetail etr : etrTests) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("key",         etr.key());
+            m.put("title",       etr.summary());
+            m.put("description", etr.description());
+            etrJson.add(m);
+        }
+
+        String aiCasesJson;
+        String etrCasesJson;
+        try {
+            aiCasesJson  = mapper.writeValueAsString(aiJson);
+            etrCasesJson = mapper.writeValueAsString(etrJson);
+        } catch (Exception e) {
+            LOG.errorf("QaTestCaseService.matchWithAi: failed to serialize JSON: %s", e.getMessage());
+            int inserted = insertEtrTests(planId, featureKey, etrTests, etrToStoryKey);
+            return new ImportResult(0, inserted, storiesSearched, List.of());
+        }
+
+        String prompt = promptTemplates.resolve("qa.testcase.matching", Map.of(
+                "AI_CASES_JSON",  aiCasesJson,
+                "ETR_CASES_JSON", etrCasesJson
+        ));
+
+        String rawResponse = callClaude(prompt, "qa-import-matching-" + planId, jobId);
+        if (rawResponse == null) {
+            LOG.warnf("QaTestCaseService.matchWithAi: Claude returned null — inserting all ETR tests");
+            int inserted = insertEtrTests(planId, featureKey, etrTests, etrToStoryKey);
+            return new ImportResult(0, inserted, storiesSearched, List.of());
+        }
+
+        // Parse match results
+        rawResponse = stripFences(rawResponse);
+
+        // Build a map from etrKey → ETR detail for quick lookup
+        Map<String, JiraIssueDetail> etrByKey = new LinkedHashMap<>();
+        for (JiraIssueDetail etr : etrTests) etrByKey.put(etr.key(), etr);
+
+        // Build a map from testCaseId → QaTestCase for quick lookup
+        Map<String, QaTestCase> aiById = new LinkedHashMap<>();
+        for (QaTestCase tc : aiCases) aiById.put(tc.testCaseId(), tc);
+
+        int autoLinked = 0;
+        int newInserted = 0;
+        List<MatchSuggestion> suggestions = new ArrayList<>();
+
+        try {
+            JsonNode results = mapper.readTree(rawResponse);
+            if (!results.isArray()) throw new IllegalStateException("Expected JSON array");
+
+            for (JsonNode result : results) {
+                String etrKey       = result.path("etrKey").asText(null);
+                String matchedAiId  = result.path("matchedAiId").isNull() ? null : result.path("matchedAiId").asText(null);
+                int    confidence   = result.path("confidence").asInt(0);
+                String reasoning    = result.path("reasoning").asText("");
+
+                if (etrKey == null) continue;
+                JiraIssueDetail etr = etrByKey.get(etrKey);
+                if (etr == null) continue;
+
+                if (confidence >= 80 && matchedAiId != null) {
+                    QaTestCase aiCase = aiById.get(matchedAiId);
+                    if (aiCase != null) {
+                        String stepsJson;
+                        try {
+                            stepsJson = mapper.writeValueAsString(
+                                    etr.description() != null ? List.of(etr.description()) : List.of());
+                        } catch (Exception ex) {
+                            stepsJson = "[]";
+                        }
+                        caseStore.linkJiraKeyAndMatch(aiCase.id(), etr.key(),
+                                etr.summary(),
+                                etr.description(),
+                                stepsJson,
+                                "Medium");
+                        autoLinked++;
+                        etrByKey.remove(etrKey);
+                        continue;
+                    }
+                }
+
+                if (confidence >= 40 && matchedAiId != null) {
+                    QaTestCase aiCase = aiById.get(matchedAiId);
+                    if (aiCase != null) {
+                        suggestions.add(new MatchSuggestion(etrKey, etr.summary(),
+                                matchedAiId, confidence, reasoning));
+                        etrByKey.remove(etrKey);
+                        continue;
+                    }
+                }
+
+                // confidence < 40 or no match — insert as new row if not already present
+                if (caseStore.findByJiraKey(planId, etr.key()).isEmpty()) {
+                    insertSingleEtrTest(planId, featureKey, etrToStoryKey.getOrDefault(etr.key(), featureKey), etr);
+                    newInserted++;
+                }
+                etrByKey.remove(etrKey);
+            }
+
+            // Any ETR tests not mentioned in the response get inserted as new
+            for (JiraIssueDetail remaining : etrByKey.values()) {
+                if (caseStore.findByJiraKey(planId, remaining.key()).isEmpty()) {
+                    insertSingleEtrTest(planId, featureKey, etrToStoryKey.getOrDefault(remaining.key(), featureKey), remaining);
+                    newInserted++;
+                }
+            }
+
+        } catch (Exception e) {
+            LOG.errorf("QaTestCaseService.matchWithAi: failed to parse Claude response: %s", e.getMessage());
+            for (JiraIssueDetail etr : etrTests) {
+                if (caseStore.findByJiraKey(planId, etr.key()).isEmpty()) {
+                    insertSingleEtrTest(planId, featureKey, etrToStoryKey.getOrDefault(etr.key(), featureKey), etr);
+                    newInserted++;
+                }
+            }
+        }
+
+        LOG.infof("QaTestCaseService.matchWithAi: planId=%s autoLinked=%d newInserted=%d suggestions=%d",
+                planId, autoLinked, newInserted, suggestions.size());
+        return new ImportResult(autoLinked, newInserted, storiesSearched, suggestions);
+    }
+
+    private int insertEtrTests(String planId, String featureKey,
+                               List<JiraIssueDetail> etrTests, Map<String, String> etrToStoryKey) {
+        int count = 0;
+        for (JiraIssueDetail etr : etrTests) {
+            if (caseStore.findByJiraKey(planId, etr.key()).isEmpty()) {
+                String storyKey = etrToStoryKey.getOrDefault(etr.key(), featureKey);
+                insertSingleEtrTest(planId, featureKey, storyKey, etr);
+                count++;
+            }
+        }
+        return count;
+    }
+
+    private void insertSingleEtrTest(String planId, String featureKey, String storyKey, JiraIssueDetail etr) {
+        String stepsJson;
+        try {
+            stepsJson = mapper.writeValueAsString(
+                    etr.description() != null ? List.of(etr.description()) : List.of());
+        } catch (Exception e) {
+            stepsJson = "[]";
+        }
+        QaTestCase tc = new QaTestCase(
+                null, planId, featureKey, storyKey,
+                etr.key(),
+                etr.summary(),
+                etr.description(),
+                "[]",
+                stepsJson,
+                "[]",
+                "Behaviour",
+                "Medium",
+                "Open",
+                null,
+                null, null, null, 0, null, null,
+                "manual",
+                etr.key(),
+                "synced",
+                null,
+                Instant.now()
+        );
+        caseStore.insertBatch(planId, featureKey, List.of(tc));
+    }
+
+    // ─── Jira sync ────────────────────────────────────────────────────────────
+
+    /**
+     * Pushes all test cases for the given plan to Jira.
+     *
+     * <ul>
+     *   <li>If a test case already has a {@code jiraIssueKey} → update the Jira issue.</li>
+     *   <li>Otherwise → create a new Jira issue and persist the returned key.</li>
+     * </ul>
+     *
+     * <p>Reads {@code xray.test-project-key} and {@code xray.test-issue-type} from settings.
+     *
+     * @param planId UUID of the qa_test_plans row
+     * @return summary of sync results
+     * @throws IllegalStateException if {@code xray.test-project-key} is not configured
+     */
+    public SyncResult syncToJira(String planId) {
+        String projectKey = settings.get("xray.test-project-key", "");
+        if (projectKey.isBlank()) {
+            throw new IllegalStateException(
+                    "xray.test-project-key is not configured — set it in System Settings → Xray Cloud (QA)");
+        }
+        String issueType = settings.get("xray.test-issue-type", "Test");
+
+        List<QaTestCase> cases = caseStore.findByPlan(planId);
+        if (cases.isEmpty()) {
+            return new SyncResult(0, 0, 0);
+        }
+
+        int created = 0;
+        int updated = 0;
+        int failed = 0;
+
+        for (QaTestCase tc : cases) {
+            try {
+                String summary = tc.title();
+                String description = buildJiraDescription(tc);
+
+                if (tc.jiraIssueKey() != null && !tc.jiraIssueKey().isBlank()) {
+                    jiraService.updateIssueSystem(tc.jiraIssueKey(), summary, description,
+                            List.of(), tc.priority());
+                    caseStore.markSynced(tc.id());
+                    updated++;
+                } else {
+                    String newKey = jiraService.createIssueSystem(
+                            projectKey, summary, description, issueType, null,
+                            List.of(), null, tc.priority());
+                    if (newKey != null && !newKey.isBlank()) {
+                        caseStore.updateJiraKeyAndSync(tc.id(), newKey);
+                        created++;
+                    } else {
+                        LOG.warnf("QaTestCaseService.syncToJira: createIssueSystem returned null for %s", tc.testCaseId());
+                        failed++;
+                    }
+                }
+            } catch (Exception e) {
+                LOG.errorf("QaTestCaseService.syncToJira: failed for %s: %s", tc.testCaseId(), e.getMessage());
+                failed++;
+            }
+        }
+
+        LOG.infof("QaTestCaseService.syncToJira: planId=%s created=%d updated=%d failed=%d",
+                planId, created, updated, failed);
+        return new SyncResult(created, updated, failed);
+    }
+
+    private String buildJiraDescription(QaTestCase tc) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("Test Case ID: ").append(tc.testCaseId()).append("\n");
+        sb.append("Type: ").append(tc.testCaseType()).append("\n");
+        sb.append("Priority: ").append(tc.priority()).append("\n");
+        if (tc.estimatedDuration() != null && !tc.estimatedDuration().isBlank()) {
+            sb.append("Estimated Duration: ").append(tc.estimatedDuration()).append("\n");
+        }
+        if (tc.description() != null && !tc.description().isBlank()) {
+            sb.append("\nDescription:\n").append(tc.description()).append("\n");
+        }
+
+        List<String> preConds = parseJsonArraySafe(tc.preConditions());
+        if (!preConds.isEmpty()) {
+            sb.append("\nPre-conditions:\n");
+            IntStream.range(0, preConds.size())
+                    .forEach(i -> sb.append(i + 1).append(". ").append(preConds.get(i)).append("\n"));
+        }
+
+        List<String> steps = parseJsonArraySafe(tc.testSteps());
+        if (!steps.isEmpty()) {
+            sb.append("\nTest Steps:\n");
+            IntStream.range(0, steps.size())
+                    .forEach(i -> sb.append(i + 1).append(". ").append(steps.get(i)).append("\n"));
+        }
+
+        List<String> expected = parseJsonArraySafe(tc.expectedResults());
+        if (!expected.isEmpty()) {
+            sb.append("\nExpected Results:\n");
+            IntStream.range(0, expected.size())
+                    .forEach(i -> sb.append(i + 1).append(". ").append(expected.get(i)).append("\n"));
+        }
+
+        return sb.toString().trim();
+    }
+
+    private List<String> parseJsonArraySafe(String json) {
+        if (json == null || json.isBlank()) return List.of();
+        try {
+            JsonNode node = mapper.readTree(json);
+            if (!node.isArray()) return List.of();
+            List<String> items = new ArrayList<>();
+            for (JsonNode item : node) items.add(item.asText());
+            return items;
+        } catch (Exception e) {
+            return List.of();
+        }
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────────

@@ -1,0 +1,25 @@
+You are matching imported Jira test cases to AI-generated test cases for the same feature.
+
+AI-generated test cases:
+{{AI_CASES_JSON}}
+
+Imported ETR test cases from Jira:
+{{ETR_CASES_JSON}}
+
+For each ETR test case, find the best-matching AI-generated test case (if any).
+A strong match means both test cases verify the same user behaviour or acceptance criterion, even if the wording differs.
+
+Rules:
+- confidence 80-100: clear functional overlap — the ETR test and the AI case cover the same scenario
+- confidence 40-79: partial overlap — related but not the same scenario; surface for manual review
+- confidence 0-39: no meaningful match — treat as a new test case
+
+Return ONLY a JSON array with no surrounding text or markdown fences:
+[{
+  "etrKey": "ETR-8519",
+  "matchedAiId": "BTC-AURORA-25-01",
+  "confidence": 87,
+  "reasoning": "Both verify BFF URL construction and double-slash prevention"
+}]
+
+Use null for matchedAiId when no AI case reaches confidence >= 40.

@@ -115,11 +115,15 @@ public class QaTestPlanService {
             // Persist the Jira test plan ticket key
             store.updateJiraKey(issueKey, tpRef.key());
 
-            // Fetch the test plan ticket description to use as analysis text
+            // Fetch the test plan ticket description to use as analysis text.
+            // Only treat it as a real analysis if it contains substantial content
+            // (> 200 chars). A short description like "Test Plan for AURORA-XXX" is
+            // just a placeholder and should not suppress AI analysis.
             JiraService.JiraIssueDetail tpDetail = jiraService.fetchIssueDetail(tpRef.key());
             String tpDescription = tpDetail != null ? tpDetail.description() : null;
-            if (tpDescription != null && !tpDescription.isBlank()) {
-                LOG.infof("QaTestPlanService: importing description from %s as analysis for %s", tpRef.key(), issueKey);
+            if (tpDescription != null && tpDescription.length() > 200) {
+                LOG.infof("QaTestPlanService: importing description from %s as analysis for %s (length=%d)",
+                        tpRef.key(), issueKey, tpDescription.length());
                 store.saveAnalysis(issueKey, tpDescription, specificationsJson, specHash, driftDetected);
 
                 store.findByKey(issueKey).ifPresent(plan ->
@@ -129,6 +133,8 @@ public class QaTestPlanService {
                 );
                 return store.findByKey(issueKey).orElseThrow();
             }
+            LOG.infof("QaTestPlanService: Jira test plan %s description too short (%d chars) — falling through to AI analysis",
+                    tpRef.key(), tpDescription != null ? tpDescription.length() : 0);
         }
 
         // ── Fallback: run AI analysis ──────────────────────────────────────────
@@ -298,9 +304,9 @@ public class QaTestPlanService {
             JiraService.JiraIssueDetail tpDetail = jiraService.fetchIssueDetail(tpRef.key());
             String tpDescription = tpDetail != null ? tpDetail.description() : null;
 
-            if (tpDescription == null || tpDescription.isBlank()) {
-                LOG.infof("QaTestPlanService.syncTestPlansFromJira: %s — Jira test plan %s has no description; jira_issue_key stored only",
-                        feature.issueKey(), tpRef.key());
+            if (tpDescription == null || tpDescription.length() <= 200) {
+                LOG.infof("QaTestPlanService.syncTestPlansFromJira: %s — Jira test plan %s description too short (%d chars); jira_issue_key stored only",
+                        feature.issueKey(), tpRef.key(), tpDescription != null ? tpDescription.length() : 0);
                 continue;
             }
 

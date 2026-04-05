@@ -6,6 +6,7 @@ import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.QaTestCase;
 import com.eneve.agent.model.QaTestCaseGenerationRequest;
+import com.eneve.agent.qa.QaTestCaseService;
 import com.eneve.agent.qa.QaTestCaseStore;
 import com.eneve.agent.qa.QaTestPlanStore;
 import jakarta.annotation.security.RolesAllowed;
@@ -40,6 +41,7 @@ public class QaTestCaseResource {
 
     private static final Logger LOG = Logger.getLogger(QaTestCaseResource.class);
 
+    @Inject QaTestCaseService caseService;
     @Inject QaTestCaseStore caseStore;
     @Inject QaTestPlanStore planStore;
     @Inject JobQueue jobQueue;
@@ -136,6 +138,102 @@ public class QaTestCaseResource {
         } catch (Exception e) {
             LOG.errorf("QaTestCaseResource.updateJiraKey: %s: %s", id, e.getMessage());
             return serverError("Failed to update Jira key: " + e.getMessage());
+        }
+    }
+
+    // ─── Sync to Jira ─────────────────────────────────────────────────────────
+
+    /**
+     * Pushes all test cases for the plan to Jira.
+     *
+     * <p>For each test case:
+     * <ul>
+     *   <li>If it already has a {@code jiraIssueKey} → update the existing Jira issue.</li>
+     *   <li>Otherwise → create a new Jira issue and persist the returned key.</li>
+     * </ul>
+     *
+     * <p>Returns a summary: {@code {"created": N, "updated": M, "failed": K}}.
+     */
+    @POST
+    @Path("/sync-to-jira")
+    public Response syncToJira(@PathParam("planId") String planId) {
+        if (planStore.findById(planId).isEmpty()) return notFound("Test plan not found: " + planId);
+        try {
+            QaTestCaseService.SyncResult result = caseService.syncToJira(planId);
+            auditService.log("QA", "TESTCASES_SYNCED_TO_JIRA", "qa_test_plan", planId,
+                    Map.of("created", String.valueOf(result.created()),
+                           "updated", String.valueOf(result.updated()),
+                           "failed", String.valueOf(result.failed())));
+            return Response.ok(Map.of(
+                    "created", result.created(),
+                    "updated", result.updated(),
+                    "failed",  result.failed()
+            )).build();
+        } catch (IllegalStateException e) {
+            return badRequest(e.getMessage());
+        } catch (Exception e) {
+            LOG.errorf("QaTestCaseResource.syncToJira: planId=%s: %s", planId, e.getMessage());
+            return serverError("Jira sync failed: " + e.getMessage());
+        }
+    }
+
+    // ─── Import from Jira ─────────────────────────────────────────────────────
+
+    /**
+     * Fetches ETR test cases from Jira for all child stories in the plan and
+     * either inserts them directly (no AI cases yet) or AI-matches them against
+     * existing AI-generated cases.
+     *
+     * <p>Body: {@code {"etrProjectKey": "ETR"}} — optional; falls back to scope
+     * setting then global {@code xray.test-project-key}.
+     *
+     * <p>Returns:
+     * <pre>{@code
+     * {
+     *   "autoLinked": 18,
+     *   "newInserted": 6,
+     *   "storiesSearched": 8,
+     *   "suggestions": [
+     *     { "etrKey": "ETR-8530", "etrTitle": "...", "matchedAiId": "BTC-...",
+     *       "confidence": 62, "reasoning": "..." }
+     *   ]
+     * }
+     * }</pre>
+     */
+    @POST
+    @Path("/import-from-jira")
+    public Response importFromJira(@PathParam("planId") String planId,
+                                   Map<String, String> body) {
+        if (planStore.findById(planId).isEmpty()) return notFound("Test plan not found: " + planId);
+        String etrProjectKey = body != null ? body.getOrDefault("etrProjectKey", "") : "";
+        try {
+            QaTestCaseService.ImportResult result = caseService.importFromJira(planId, etrProjectKey, null);
+            List<Map<String, Object>> suggestions = result.suggestions().stream()
+                    .map(s -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("etrKey",       s.etrKey());
+                        m.put("etrTitle",     s.etrTitle());
+                        m.put("matchedAiId",  s.matchedAiId());
+                        m.put("confidence",   s.confidence());
+                        m.put("reasoning",    s.reasoning());
+                        return m;
+                    })
+                    .toList();
+            auditService.log("QA", "TESTCASES_IMPORTED_FROM_JIRA", "qa_test_plan", planId,
+                    Map.of("autoLinked",      String.valueOf(result.autoLinked()),
+                           "newInserted",     String.valueOf(result.newInserted()),
+                           "storiesSearched", String.valueOf(result.storiesSearched())));
+            return Response.ok(Map.of(
+                    "autoLinked",      result.autoLinked(),
+                    "newInserted",     result.newInserted(),
+                    "storiesSearched", result.storiesSearched(),
+                    "suggestions",     suggestions
+            )).build();
+        } catch (IllegalStateException e) {
+            return badRequest(e.getMessage());
+        } catch (Exception e) {
+            LOG.errorf("QaTestCaseResource.importFromJira: planId=%s: %s", planId, e.getMessage());
+            return serverError("Import failed: " + e.getMessage());
         }
     }
 

@@ -23,7 +23,9 @@ public record ScopeRecord(
         String userstoryIssuetype,
         Instant createdAt,
         /** {@code "po"} for product/roadmap scopes, {@code "qa"} for QA test-plan scopes. */
-        String scopeType
+        String scopeType,
+        /** Optional Jira project key used to import ETR test cases (e.g. {@code "ETR"}). */
+        String etrProjectKey
 ) {
     /** Convenience accessor — returns the first label, or empty string if none. */
     public String primaryLabel() {

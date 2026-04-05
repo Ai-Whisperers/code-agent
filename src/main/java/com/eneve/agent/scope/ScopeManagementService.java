@@ -73,12 +73,18 @@ public class ScopeManagementService {
     public CreateScopeResult createScope(String name, List<String> labels,
                                           String epicIssuetype, String featureIssuetype,
                                           String userstoryIssuetype, String scopeType) {
+        return createScope(name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, scopeType, null);
+    }
+
+    public CreateScopeResult createScope(String name, List<String> labels,
+                                          String epicIssuetype, String featureIssuetype,
+                                          String userstoryIssuetype, String scopeType, String etrProjectKey) {
         String epic    = blankFallback(epicIssuetype,     "roadmap.jira.epic-issuetype",       "Epic");
         String feature = blankFallback(featureIssuetype,  "roadmap.jira.feature-issuetype",    "Story");
         String story   = blankFallback(userstoryIssuetype,"roadmap.jira.userstory-issuetype",  "Sub-task");
         String type    = (scopeType != null && !scopeType.isBlank()) ? scopeType : "po";
 
-        ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story, type);
+        ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story, type, etrProjectKey);
         int itemsSynced = syncScope(scope.id());
         auditService.log("SCOPE", "SCOPE_CREATED", "scope", scope.id(),
                 Map.of("name", name, "labels", labels, "itemsSynced", itemsSynced, "scopeType", type));
@@ -93,16 +99,24 @@ public class ScopeManagementService {
     public ScopeRecord updateScope(String id, String name, List<String> labels,
                                     String epicIssuetype, String featureIssuetype,
                                     String userstoryIssuetype) {
+        return updateScope(id, name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, null);
+    }
+
+    public ScopeRecord updateScope(String id, String name, List<String> labels,
+                                    String epicIssuetype, String featureIssuetype,
+                                    String userstoryIssuetype, String etrProjectKey) {
         ScopeRecord existing = scopeStore.findById(id)
                 .orElseThrow(() -> new ScopeNotFoundException(id));
 
         String epic    = blankFallback(epicIssuetype,    existing.epicIssuetype());
         String feature = blankFallback(featureIssuetype, existing.featureIssuetype());
         String story   = blankFallback(userstoryIssuetype, existing.userstoryIssuetype());
+        String etr     = (etrProjectKey != null && !etrProjectKey.isBlank())
+                ? etrProjectKey.trim() : existing.etrProjectKey();
 
         List<String> effectiveLabels = (labels != null && !labels.isEmpty()) ? labels : existing.labels();
 
-        scopeStore.update(id, name, effectiveLabels, epic, feature, story);
+        scopeStore.update(id, name, effectiveLabels, epic, feature, story, etr);
         ScopeRecord updated = scopeStore.findById(id).orElseThrow(() -> new ScopeNotFoundException(id));
         auditService.log("SCOPE", "SCOPE_UPDATED", "scope", id,
                 Map.of("name", name, "labels", effectiveLabels));

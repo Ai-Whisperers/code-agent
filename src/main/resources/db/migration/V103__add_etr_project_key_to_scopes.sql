@@ -1,0 +1,1 @@
+ALTER TABLE scopes ADD COLUMN IF NOT EXISTS etr_project_key VARCHAR(50);

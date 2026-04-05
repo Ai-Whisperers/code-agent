@@ -3,6 +3,7 @@ package com.eneve.agent.scope;
 import com.eneve.agent.agent.store.ScopeStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.QaReadinessResponse;
+import com.eneve.agent.model.ScopeRecord;
 import com.eneve.agent.scope.ScopeExceptions.ScopeNotFoundException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -97,8 +98,9 @@ public class QaReadinessService {
      */
     public List<JiraService.JiraIssueDetail> fetchQAReadyFeatures(String scopeId, String label) {
         ScopeRecord scope = scopeStore.findById(scopeId)
-                .orElseThrow(ScopeNotFoundException::new);
+                .orElseThrow(() -> new ScopeNotFoundException(scopeId));
         if (label == null || label.isBlank()) return List.of();
         String featureIssuetype = scope.featureIssuetype() != null ? scope.featureIssuetype() : "Story";
         return jiraService.searchQAFeaturesByLabels(List.of(label), featureIssuetype);
     }
+}
