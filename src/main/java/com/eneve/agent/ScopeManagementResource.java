@@ -7,6 +7,7 @@ import com.eneve.agent.scope.ScopeManagementService;
 import jakarta.annotation.security.RolesAllowed;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
+import jakarta.ws.rs.QueryParam;
 import jakarta.ws.rs.core.MediaType;
 import jakarta.ws.rs.core.Response;
 import org.jboss.logging.Logger;
@@ -34,8 +35,8 @@ public class ScopeManagementResource {
     // ─── CRUD ─────────────────────────────────────────────────────────────────
 
     @GET
-    public Response listScopes() {
-        List<Map<String, Object>> result = managementService.listScopes().stream()
+    public Response listScopes(@QueryParam("type") String type) {
+        List<Map<String, Object>> result = managementService.listScopesByType(type).stream()
                 .map(s -> scopeResponse(s, null))
                 .collect(Collectors.toList());
         return Response.ok(result).build();
@@ -52,11 +53,15 @@ public class ScopeManagementResource {
             if (hasInvalidChars(lbl)) return badRequest("label contains invalid characters");
         }
 
+        String scopeType = strOf(body, "scopeType");
+        if (scopeType.isBlank()) scopeType = "po";
+
         CreateScopeResult result = managementService.createScope(
                 name, labels,
                 strOf(body, "epicIssuetype"),
                 strOf(body, "featureIssuetype"),
-                strOf(body, "userstoryIssuetype"));
+                strOf(body, "userstoryIssuetype"),
+                scopeType);
 
         Map<String, Object> resp = scopeResponse(result.scope(), result.itemsSynced());
         if (result.itemsSynced() == 0) {
@@ -265,6 +270,7 @@ public class ScopeManagementResource {
         r.put("featureIssuetype",   scope.featureIssuetype());
         r.put("userstoryIssuetype", scope.userstoryIssuetype());
         r.put("createdAt",          scope.createdAt());
+        r.put("scopeType",          scope.scopeType() != null ? scope.scopeType() : "po");
         if (itemsSynced != null) r.put("itemsSynced", itemsSynced);
         return r;
     }

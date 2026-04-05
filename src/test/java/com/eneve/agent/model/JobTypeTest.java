@@ -10,7 +10,7 @@ class JobTypeTest {
     void enumHasExpectedValues() {
         JobType[] values = JobType.values();
         
-        assertEquals(23, values.length);
+        assertEquals(26, values.length);
         assertEquals(JobType.FIX,                        values[0]);
         assertEquals(JobType.REVIEW,                     values[1]);
         assertEquals(JobType.FIX_PR,                     values[2]);
@@ -34,6 +34,9 @@ class JobTypeTest {
         assertEquals(JobType.TECH_DEBT,                  values[20]);
         assertEquals(JobType.REWRITE,                    values[21]);
         assertEquals(JobType.SERVICE_DESK_TRIAGE,        values[22]);
+        assertEquals(JobType.QA_TESTPLAN_ANALYSIS,       values[23]);
+        assertEquals(JobType.QA_TESTPLAN_CONVERSION,     values[24]);
+        assertEquals(JobType.QA_TESTCASE_GENERATION,     values[25]);
     }
 
     @Test
@@ -61,6 +64,9 @@ class JobTypeTest {
         assertEquals("TECH_DEBT",                  JobType.TECH_DEBT.name());
         assertEquals("REWRITE",                    JobType.REWRITE.name());
         assertEquals("SERVICE_DESK_TRIAGE",        JobType.SERVICE_DESK_TRIAGE.name());
+        assertEquals("QA_TESTPLAN_ANALYSIS",       JobType.QA_TESTPLAN_ANALYSIS.name());
+        assertEquals("QA_TESTPLAN_CONVERSION",     JobType.QA_TESTPLAN_CONVERSION.name());
+        assertEquals("QA_TESTCASE_GENERATION",     JobType.QA_TESTCASE_GENERATION.name());
     }
 
     @Test
@@ -88,6 +94,9 @@ class JobTypeTest {
         assertEquals(JobType.TECH_DEBT,                  JobType.valueOf("TECH_DEBT"));
         assertEquals(JobType.REWRITE,                    JobType.valueOf("REWRITE"));
         assertEquals(JobType.SERVICE_DESK_TRIAGE,        JobType.valueOf("SERVICE_DESK_TRIAGE"));
+        assertEquals(JobType.QA_TESTPLAN_ANALYSIS,       JobType.valueOf("QA_TESTPLAN_ANALYSIS"));
+        assertEquals(JobType.QA_TESTPLAN_CONVERSION,     JobType.valueOf("QA_TESTPLAN_CONVERSION"));
+        assertEquals(JobType.QA_TESTCASE_GENERATION,     JobType.valueOf("QA_TESTCASE_GENERATION"));
     }
 
     @Test
@@ -127,6 +136,9 @@ class JobTypeTest {
         assertEquals(20, JobType.TECH_DEBT.ordinal());
         assertEquals(21, JobType.REWRITE.ordinal());
         assertEquals(22, JobType.SERVICE_DESK_TRIAGE.ordinal());
+        assertEquals(23, JobType.QA_TESTPLAN_ANALYSIS.ordinal());
+        assertEquals(24, JobType.QA_TESTPLAN_CONVERSION.ordinal());
+        assertEquals(25, JobType.QA_TESTCASE_GENERATION.ordinal());
     }
 
     @Test

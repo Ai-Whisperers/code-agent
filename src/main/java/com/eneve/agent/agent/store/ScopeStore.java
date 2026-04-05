@@ -22,14 +22,21 @@ public class ScopeStore {
     public ScopeRecord create(String name, List<String> labels,
                                String epicIssuetype, String featureIssuetype,
                                String userstoryIssuetype) {
+        return create(name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, "po");
+    }
+
+    public ScopeRecord create(String name, List<String> labels,
+                               String epicIssuetype, String featureIssuetype,
+                               String userstoryIssuetype, String scopeType) {
         String id = UUID.randomUUID().toString();
 
         // Use the first label as the legacy label column value (backward-compat)
         String primaryLabel = labels != null && !labels.isEmpty() ? labels.get(0) : "";
+        String type = (scopeType != null && !scopeType.isBlank()) ? scopeType : "po";
 
         String sqlScope = """
-                INSERT INTO scopes (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype)
-                VALUES (?::uuid, ?, ?, ?, ?, ?)
+                INSERT INTO scopes (id, name, label, epic_issuetype, feature_issuetype, userstory_issuetype, scope_type)
+                VALUES (?::uuid, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection()) {
             conn.setAutoCommit(false);
@@ -41,6 +48,7 @@ public class ScopeStore {
                     ps.setString(4, epicIssuetype);
                     ps.setString(5, featureIssuetype);
                     ps.setString(6, userstoryIssuetype);
+                    ps.setString(7, type);
                     ps.executeUpdate();
                 }
                 replaceLabels(conn, id, labels);
@@ -58,7 +66,7 @@ public class ScopeStore {
 
     public Optional<ScopeRecord> findById(String id) {
         String sqlScope = """
-                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
                 FROM scopes WHERE id = ?::uuid
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -78,7 +86,7 @@ public class ScopeStore {
 
     public List<ScopeRecord> findAll() {
         String sqlScope = """
-                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
                 FROM scopes ORDER BY created_at DESC
                 """;
         List<ScopeRecord> results = new ArrayList<>();
@@ -92,6 +100,28 @@ public class ScopeStore {
             }
         } catch (SQLException e) {
             LOG.errorf("ScopeStore: failed to list scopes: %s", e.getMessage());
+        }
+        return results;
+    }
+
+    public List<ScopeRecord> findAllByType(String scopeType) {
+        String sqlScope = """
+                SELECT id, name, epic_issuetype, feature_issuetype, userstory_issuetype, created_at, scope_type
+                FROM scopes WHERE scope_type = ? ORDER BY created_at DESC
+                """;
+        List<ScopeRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sqlScope)) {
+            ps.setString(1, scopeType);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    String id = rs.getString("id");
+                    List<String> labels = loadLabels(conn, id);
+                    results.add(mapRow(rs, labels));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("ScopeStore: failed to list scopes by type %s: %s", scopeType, e.getMessage());
         }
         return results;
     }
@@ -239,7 +269,8 @@ public class ScopeStore {
                 rs.getString("epic_issuetype"),
                 rs.getString("feature_issuetype"),
                 rs.getString("userstory_issuetype"),
-                rs.getTimestamp("created_at").toInstant()
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getString("scope_type")
         );
     }
 }

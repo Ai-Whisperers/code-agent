@@ -7,6 +7,7 @@ import com.eneve.agent.audit.AuditService;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.ScopeRecord;
+import com.eneve.agent.qa.QaTestPlanService;
 import com.eneve.agent.scope.ScopeExceptions.*;
 import com.eneve.agent.settings.SettingsService;
 import io.agroal.api.AgroalDataSource;
@@ -35,6 +36,7 @@ public class ScopeManagementService {
     @Inject ScopeItemStore scopeItemStore;
     @Inject CustomerRegistryStore customerRegistryStore;
     @Inject JiraService jiraService;
+    @Inject QaTestPlanService qaTestPlanService;
     @Inject AuditService auditService;
     @Inject SettingsService settings;
     @Inject AgroalDataSource dataSource;
@@ -44,6 +46,11 @@ public class ScopeManagementService {
 
     public List<ScopeRecord> listScopes() {
         return scopeStore.findAll();
+    }
+
+    public List<ScopeRecord> listScopesByType(String scopeType) {
+        if (scopeType == null || scopeType.isBlank()) return scopeStore.findAll();
+        return scopeStore.findAllByType(scopeType);
     }
 
     public ScopeRecord getScope(String id) {
@@ -60,14 +67,21 @@ public class ScopeManagementService {
     public CreateScopeResult createScope(String name, List<String> labels,
                                           String epicIssuetype, String featureIssuetype,
                                           String userstoryIssuetype) {
+        return createScope(name, labels, epicIssuetype, featureIssuetype, userstoryIssuetype, "po");
+    }
+
+    public CreateScopeResult createScope(String name, List<String> labels,
+                                          String epicIssuetype, String featureIssuetype,
+                                          String userstoryIssuetype, String scopeType) {
         String epic    = blankFallback(epicIssuetype,     "roadmap.jira.epic-issuetype",       "Epic");
         String feature = blankFallback(featureIssuetype,  "roadmap.jira.feature-issuetype",    "Story");
         String story   = blankFallback(userstoryIssuetype,"roadmap.jira.userstory-issuetype",  "Sub-task");
+        String type    = (scopeType != null && !scopeType.isBlank()) ? scopeType : "po";
 
-        ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story);
+        ScopeRecord scope = scopeStore.create(name, labels, epic, feature, story, type);
         int itemsSynced = syncScope(scope.id());
         auditService.log("SCOPE", "SCOPE_CREATED", "scope", scope.id(),
-                Map.of("name", name, "labels", labels, "itemsSynced", itemsSynced));
+                Map.of("name", name, "labels", labels, "itemsSynced", itemsSynced, "scopeType", type));
         return new CreateScopeResult(scope, itemsSynced);
     }
 
@@ -139,6 +153,13 @@ public class ScopeManagementService {
         List<com.eneve.agent.model.ScopeItem> items = fetchItemsFromJira(scopeId, scope);
         scopeItemStore.replaceAll(scopeId, items);
         cleanupOrphanedData(scopeId);
+
+        // For QA scopes: detect "is tested by" Jira links and auto-populate test plans
+        if ("qa".equalsIgnoreCase(scope.scopeType())) {
+            LOG.infof("ScopeManagementService.syncScope: QA scope %s — running Jira test plan link detection", scopeId);
+            qaTestPlanService.syncTestPlansFromJira(scopeId);
+        }
+
         LOG.infof("ScopeManagementService.syncScope: stored %d items for scope %s", items.size(), scopeId);
         auditService.log("SCOPE", "SCOPE_SYNCED", "scope", scopeId,
                 Map.of("itemsSynced", items.size()));
@@ -294,19 +315,20 @@ public class ScopeManagementService {
         // ── Build item list ──────────────────────────────────────────────────
 
         List<com.eneve.agent.model.ScopeItem> items = new ArrayList<>();
+        String scopeType = scope.scopeType() != null ? scope.scopeType() : "po";
 
         for (int ei = 0; ei < epics.size(); ei++) {
             JiraService.JiraIssueDetail epic = epics.get(ei);
             items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, epic.key(), "EPIC",
                     null, null, epic.summary(), epic.status(), null, epic.updatedAt(),
-                    epic.assignee(), epic.reporter(), null, null, null));
+                    epic.assignee(), epic.reporter(), null, null, null, scopeType));
 
             List<JiraService.JiraIssueDetail> features = featuresByEpic.get(ei);
             for (JiraService.JiraIssueDetail feature : features) {
                 items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, feature.key(), "FEATURE",
                         epic.key(), null, feature.summary(), feature.status(), null, feature.updatedAt(),
                         feature.assignee(), feature.reporter(),
-                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd()));
+                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd(), scopeType));
 
                 int featureIdx = allEpicFeatures.indexOf(feature);
                 List<JiraService.JiraIssueDetail> stories = featureIdx >= 0
@@ -315,7 +337,7 @@ public class ScopeManagementService {
                     items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, story.key(), "USERSTORY",
                             feature.key(), epic.key(), story.summary(), story.status(), null, story.updatedAt(),
                             story.assignee(), story.reporter(),
-                            story.sprintName(), story.sprintStart(), story.sprintEnd()));
+                            story.sprintName(), story.sprintStart(), story.sprintEnd(), scopeType));
                 }
             }
         }
@@ -327,7 +349,7 @@ public class ScopeManagementService {
 
             items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, virtualEpicKey, "EPIC",
                     null, null, "Technical / Unparented Work", null, null, null,
-                    null, null, null, null, null));
+                    null, null, null, null, null, scopeType));
 
             List<CompletableFuture<List<JiraService.JiraIssueDetail>>> orphanStoryFutures = orphanedFeatures.stream()
                     .map(f -> CompletableFuture.supplyAsync(
@@ -343,13 +365,13 @@ public class ScopeManagementService {
                 items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, feature.key(), "FEATURE",
                         virtualEpicKey, null, feature.summary(), feature.status(), null, feature.updatedAt(),
                         feature.assignee(), feature.reporter(),
-                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd()));
+                        feature.sprintName(), feature.sprintStart(), feature.sprintEnd(), scopeType));
 
                 for (JiraService.JiraIssueDetail story : orphanStoriesByFeature.get(fi)) {
                     items.add(new com.eneve.agent.model.ScopeItem(null, scopeId, story.key(), "USERSTORY",
                             feature.key(), virtualEpicKey, story.summary(), story.status(), null, story.updatedAt(),
                             story.assignee(), story.reporter(),
-                            story.sprintName(), story.sprintStart(), story.sprintEnd()));
+                            story.sprintName(), story.sprintStart(), story.sprintEnd(), scopeType));
                 }
             }
         }

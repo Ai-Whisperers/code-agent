@@ -21,5 +21,7 @@ public sealed interface JobPayload
                 PromoteRequest, SelfAnalysisRequest,
                 GenerateArchitectureRequest, GenerateCloudArchitectureRequest,
                 KnowledgeGraphRequest, TechDebtRequest,
-                RewriteRequest, ServiceDeskTriageRequest {
+                RewriteRequest, ServiceDeskTriageRequest,
+                QaTestPlanAnalysisRequest, QaTestPlanConversionRequest,
+                QaTestCaseGenerationRequest {
 }

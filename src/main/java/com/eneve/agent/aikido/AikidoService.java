@@ -436,8 +436,6 @@ public class AikidoService {
 
                 String containerRepoName = issue.path("container_repo_name").asText("").toLowerCase();
                 if (!containerRepoName.isBlank() && ctrMapping.containsKey(containerRepoName)) {
-                    LOG.infof("Aikido routing [drop]: group %d container '%s' in mapping but codeRepo not tracked — dropping",
-                            groupId, containerRepoName);
                     continue;
                 }
 

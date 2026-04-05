@@ -21,7 +21,9 @@ public record ScopeRecord(
         String epicIssuetype,
         String featureIssuetype,
         String userstoryIssuetype,
-        Instant createdAt
+        Instant createdAt,
+        /** {@code "po"} for product/roadmap scopes, {@code "qa"} for QA test-plan scopes. */
+        String scopeType
 ) {
     /** Convenience accessor — returns the first label, or empty string if none. */
     public String primaryLabel() {

@@ -1,0 +1,357 @@
+You are a Senior QA Architect. Your task is to take the Feature Test Plan analysis provided below and emit it as a **single, strictly structured JSON object**.
+
+The output MUST exactly conform to the TypeScript schema described below — no missing required keys, no extra keys, no markdown fences, no prose.
+
+Feature ID: {{FEATURE_ID}}
+
+Analysis to convert:
+{{ANALYSIS}}
+
+---
+
+# Goal
+Convert the analysis into a valid JSON object whose root key is `featureTestPlan`.
+
+---
+
+# Schema (MUST FOLLOW)
+
+## Root
+```
+{
+  "featureTestPlan": { ...all sections below... }
+}
+```
+
+---
+
+## `metadata` (required)
+
+| Key             | Type   | Notes                                                      |
+|-----------------|--------|------------------------------------------------------------|
+| `documentTitle` | string | `"Feature Test Plan — {FEATURE_ID}: {Feature Name}"`      |
+| `version`       | string | Default `"1.0"`                                            |
+| `createdDate`   | string | ISO date `YYYY-MM-DD`                                      |
+| `createdBy`     | string | Default `"Test Manager (ISTQB-aligned)"`                   |
+| `featureId`     | string | Jira feature key, e.g. `"AURORA-108"`                      |
+| `featureStatus` | string | e.g. `"Planned"`, `"In Progress"`, `"Done"`                |
+| `project`       | string | Jira project key, e.g. `"AURORA"`                          |
+| `methodology`   | string | e.g. `"ISTQB-aligned, Risk-Based, BDD-driven"`             |
+
+---
+
+## `section01_executiveSummary` (required)
+
+| Key                             | Type       | Notes                                       |
+|---------------------------------|------------|---------------------------------------------|
+| `title`                         | string     | `"1. Executive Summary"`                    |
+| `featureOverview`               | string     | Paragraph describing the feature            |
+| `scope`                         | string?    | Optional scope paragraph                    |
+| `businessCriticality`           | string?    | Optional criticality paragraph              |
+| `childStories`                  | StoryRef[] | Array of child story references (see below) |
+| `testApproach`                  | string     | Summary of test strategy                    |
+| `totalBehaviourTestConditions`  | number     | Total count across all stories              |
+| `totalCapabilityTestConditions` | number     | Total count across all capability areas     |
+| `totalRisksIdentified`          | number     | Total risk count                            |
+| `criticalClarificationsNeeded`  | number     | Count of open clarifications                |
+
+**StoryRef**:
+```json
+{ "storyId": "AURORA-XXX", "summary": "...", "status": "Backlog", "priority": "Medium" }
+```
+
+---
+
+## `section02_featureCapabilityBreakdown` (required)
+
+| Key              | Type            | Notes                                  |
+|------------------|-----------------|----------------------------------------|
+| `title`          | string          | `"2. Feature Capability Breakdown"`    |
+| `featureId`      | string          | Feature Jira key                       |
+| `featureName`    | string          | Short feature name                     |
+| `businessOutcome`| string          | Business outcome statement             |
+| `capabilityAreas`| CapabilityArea[]| See below                              |
+
+**CapabilityArea**:
+```json
+{
+  "capabilityAreaId": "CA-01",
+  "name": "...",
+  "description": "...",
+  "relatedStories": ["AURORA-XXX"]
+}
+```
+Capability area IDs: `CA-01`, `CA-02`, …
+
+---
+
+## `section03_storyBehaviourBreakdown` (required)
+
+| Key      | Type            | Notes                              |
+|----------|-----------------|------------------------------------|
+| `title`  | string          | `"3. Story Behaviour Breakdown"`   |
+| `stories`| StoryBehaviour[]| One entry per child story          |
+
+**StoryBehaviour**:
+```json
+{
+  "storyId": "AURORA-XXX",
+  "summary": "...",
+  "behaviours": [
+    { "behaviourId": "B-XXX-01", "description": "...", "source": "AC: ..." }
+  ],
+  "businessRules": ["Rule text"]
+}
+```
+Behaviour IDs: `B-{storyNumber}-{index}` — e.g. `B-209-01`.
+
+---
+
+## `section04_riskAssessment` (required)
+
+| Key     | Type   | Notes                      |
+|---------|--------|----------------------------|
+| `title` | string | `"4. Risk Assessment"`     |
+| `risks` | Risk[] | See below                  |
+
+**Risk**:
+```json
+{
+  "riskId": "R-01",
+  "description": "...",
+  "likelihood": "Low|Medium|High",
+  "impact": "Low|Medium|High|Critical",
+  "riskLevel": "Low|Medium|High|Critical",
+  "impactedBehaviours": ["B-XXX-01"],
+  "impactedCapabilities": ["CA-01"],
+  "mitigation": "..."
+}
+```
+
+---
+
+## `section05_behaviourTestConditions` (required)
+
+| Key              | Type             | Notes                                  |
+|------------------|------------------|----------------------------------------|
+| `title`          | string           | `"5. Behaviour Test Conditions"`       |
+| `testConditions` | ConditionGroup[] | One group per story                    |
+
+**ConditionGroup (story-level)**:
+```json
+{
+  "storyId": "AURORA-XXX",
+  "storySummary": "...",
+  "conditions": [ ...TestCondition... ]
+}
+```
+
+**TestCondition**:
+```json
+{
+  "testConditionId": "BTC-XXX-01",
+  "behaviourId": "B-XXX-01",
+  "description": "...",
+  "type": "Positive|Negative|Edge Case|Boundary|Security|Performance",
+  "priority": "High|Medium|Low",
+  "riskLink": "R-01|None"
+}
+```
+
+**Test Condition ID conventions**:
+- Behaviour: `BTC-{storyNumber}-{index}` — e.g. `BTC-209-01`, `BTC-209-02`
+- Index is zero-padded to 2 digits and resets per story.
+
+---
+
+## `section06_capabilityTestConditions` (required)
+
+| Key              | Type             | Notes                                  |
+|------------------|------------------|----------------------------------------|
+| `title`          | string           | `"6. Capability Test Conditions"`      |
+| `featureId`      | string           | Feature Jira key                       |
+| `testConditions` | ConditionGroup[] | One group per capability area          |
+
+**ConditionGroup (capability-level)**:
+```json
+{
+  "capabilityArea": "CA-01",
+  "conditions": [ ...TestCondition... ]
+}
+```
+
+**TestCondition** (capability variant adds two optional fields):
+```json
+{
+  "testConditionId": "CTC-01",
+  "description": "...",
+  "type": "End-to-End|Integration|Data|Non-Functional|Compliance|Security",
+  "priority": "High|Medium|Low",
+  "riskLink": "R-01, R-02|None",
+  "relatedStories": ["AURORA-XXX"],
+  "flowType": "Happy Path|Error Path"
+}
+```
+
+**Capability Test Condition ID convention**:
+- `CTC-{sequential}` — e.g. `CTC-01`, `CTC-02`, … (global sequence across all capability areas)
+
+---
+
+## `section07_traceabilityMatrix` (required)
+
+| Key      | Type       | Notes                            |
+|----------|------------|----------------------------------|
+| `title`  | string     | `"7. Traceability Matrix"`       |
+| `matrix` | TraceRow[] | One row per story + one for E2E  |
+
+**TraceRow**:
+```json
+{
+  "featureId": "AURORA-XXX",
+  "capabilityArea": "CA-01",
+  "storyId": "AURORA-XXX",
+  "behaviourId": "B-XXX-01 to B-XXX-N",
+  "testConditionIds": ["BTC-XXX-01 to BTC-XXX-N"],
+  "riskIds": ["R-01"],
+  "coverageStatus": "Covered|Partially Covered|Not Covered"
+}
+```
+
+---
+
+## `section08_coverageAnalysis` (required)
+
+| Key                              | Type            | Notes                             |
+|----------------------------------|-----------------|-----------------------------------|
+| `title`                          | string          | `"8. Coverage Analysis"`          |
+| `featureAcceptanceCriteriaCoverage` | ACCoverage[] | One per feature AC                |
+| `storyCoverageStatus`            | StoryCoverage[] | One per child story               |
+| `riskCoverageStatus`             | RiskCoverage[]  | One per risk                      |
+| `gaps`                           | Gap[]           | Coverage gaps identified          |
+
+**ACCoverage**:
+```json
+{ "featureAC": "AC-1: ...", "coveredBy": ["BTC-XXX-01"], "status": "Covered|Partial|Not Covered" }
+```
+
+**StoryCoverage**:
+```json
+{ "storyId": "AURORA-XXX", "behavioursCovered": "10/10", "testConditions": 14, "status": "Fully Covered|Partially Covered|Not Covered" }
+```
+
+**RiskCoverage**:
+```json
+{
+  "riskId": "R-01",
+  "riskLevel": "High",
+  "coveredByBehaviourTests": ["BTC-XXX-01"],
+  "coveredByCapabilityTests": ["CTC-01"],
+  "status": "Covered|Partial|Not Covered"
+}
+```
+
+**Gap**:
+```json
+{ "gapId": "GAP-01", "description": "...", "severity": "High|Medium|Low", "recommendation": "..." }
+```
+
+---
+
+## `section10_entryExitCriteria` (required)
+
+```json
+{
+  "title": "10. Entry & Exit Criteria",
+  "entryCriteria": {
+    "behaviourTesting": ["..."],
+    "capabilityTesting": ["..."]
+  },
+  "exitCriteria": {
+    "behaviourTesting": ["..."],
+    "capabilityTesting": ["..."],
+    "featureQualityGate": ["..."]
+  }
+}
+```
+
+---
+
+## `section13_readinessForTestCaseDesign` (required)
+
+```json
+{
+  "title": "13. Readiness for Test Case Design",
+  "readinessAssessment": {
+    "overallReadiness": "Ready|Ready with Caveats|Not Ready",
+    "readyForTestCaseDesign": [
+      { "storyId": "AURORA-XXX", "ready": true, "notes": "..." }
+    ],
+    "blockers": ["CLR-01: ..."]
+  }
+}
+```
+
+---
+
+## `section14_clarificationsNeeded` (required)
+
+**Clarification**:
+```json
+{
+  "clarificationId": "CLR-01",
+  "priority": "High|Medium|Low",
+  "relatedTo": "AURORA-XXX",
+  "question": "...",
+  "impact": "...",
+  "status": "Open|Resolved"
+}
+```
+
+---
+
+## `preGenerationValidation` (required)
+
+```json
+{
+  "title": "Pre-Generation Validation Summary",
+  "validationChecklist": [{ "item": "...", "status": "DONE — ..." }]
+}
+```
+
+---
+
+# ID Summary
+
+| ID Type         | Pattern                  | Example        | Scope            |
+|-----------------|--------------------------|----------------|------------------|
+| Behaviour       | `B-{storyNum}-{index}`   | `B-209-01`     | Per story        |
+| Behaviour TC    | `BTC-{storyNum}-{index}` | `BTC-209-01`   | Per story, 2-pad |
+| Capability TC   | `CTC-{global}`           | `CTC-01`       | Global, 2-pad    |
+| Capability Area | `CA-{index}`             | `CA-01`        | Per feature      |
+| Risk            | `R-{index}`              | `R-01`         | Per feature      |
+| Gap             | `GAP-{index}`            | `GAP-01`       | Per feature      |
+| Clarification   | `CLR-{index}`            | `CLR-01`       | Per feature      |
+
+---
+
+# Formatting Rules
+
+- Output **RAW JSON ONLY**. Do NOT wrap in markdown code blocks.
+- All strings must use double quotes.
+- No trailing commas anywhere.
+- No comments inside the JSON.
+- Do not omit any required section — even if a section has no items, include it with an empty array.
+- `preGenerationValidation.validationChecklist` MUST summarise actual counts from your analysis (e.g. `"DONE — 119 conditions"`).
+- Numbers (`totalBehaviourTestConditions`, `testConditions` count in StoryCoverage, `ready` boolean) must be native JSON types, not strings.
+
+---
+
+# Execution Instruction
+
+Using the analysis provided above, produce the full JSON object now. Ensure:
+1. Every section is present.
+2. All IDs are consistent across sections (behaviourIds referenced in test conditions match those defined in section 3; riskIds referenced in risks match those defined in section 4; etc.).
+3. `totalBehaviourTestConditions` and `totalCapabilityTestConditions` in section 1 equal the actual counts in sections 5 and 6 respectively.
+4. `totalRisksIdentified` equals the count of entries in `section04_riskAssessment.risks`.
+5. `criticalClarificationsNeeded` equals the count of entries in `section14_clarificationsNeeded.clarifications`.

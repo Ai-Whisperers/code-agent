@@ -23,5 +23,7 @@ public record ScopeItem(
         String reporter,
         String sprintName,
         Instant sprintStart,
-        Instant sprintEnd
+        Instant sprintEnd,
+        /** {@code "po"} or {@code "qa"} — denormalised from the parent {@code scopes.scope_type}. */
+        String scopeType
 ) {}

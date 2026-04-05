@@ -487,6 +487,12 @@ public class JobStore {
                         objectMapper.readValue(payloadJson, RewriteRequest.class));
                 case SERVICE_DESK_TRIAGE -> new JobRecord(jobId,
                         objectMapper.readValue(payloadJson, ServiceDeskTriageRequest.class));
+                case QA_TESTPLAN_ANALYSIS -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, QaTestPlanAnalysisRequest.class));
+                case QA_TESTPLAN_CONVERSION -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, QaTestPlanConversionRequest.class));
+                case QA_TESTCASE_GENERATION -> new JobRecord(jobId,
+                        objectMapper.readValue(payloadJson, QaTestCaseGenerationRequest.class));
                 case CHAT -> null;
             };
         } catch (Exception e) {
@@ -509,12 +515,15 @@ public class JobStore {
 
     private static String extractJiraKey(JobRecord job) {
         return switch (job.getPayload()) {
-            case RunFixRequest r      -> r.jiraKey();
-            case ReviewPrRequest r    -> r.jiraKey();
-            case FixPrRequest r       -> r.jiraKey();
-            case JiraReviewRequest r  -> r.issueKey();
-            case PromoteRequest r     -> r.jiraKey();
-            default                   -> null;
+            case RunFixRequest r                 -> r.jiraKey();
+            case ReviewPrRequest r               -> r.jiraKey();
+            case FixPrRequest r                  -> r.jiraKey();
+            case JiraReviewRequest r             -> r.issueKey();
+            case PromoteRequest r                -> r.jiraKey();
+            case QaTestPlanAnalysisRequest r     -> r.issueKey();
+            case QaTestPlanConversionRequest r   -> r.issueKey();
+            case QaTestCaseGenerationRequest r   -> r.issueKey();
+            default                              -> null;
         };
     }
 

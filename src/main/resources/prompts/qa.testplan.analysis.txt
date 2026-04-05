@@ -1,0 +1,266 @@
+You are acting as a senior ISTQB-aligned Test Manager and Test Analyst operating in a Jira environment with strict traceability requirements and a Quality Gates model.
+
+Your task is to analyze the Feature and its child User Stories provided below and produce a Feature Test Plan analysis that enforces:
+
+- Story-level Behaviour Testing (BDD / acceptance driven)
+- Feature-level Capability Testing (end-to-end, cross-story validation)
+- Full traceability across Feature → Stories → Test Conditions → Risks → Coverage
+
+--------------------------------------------------
+FEATURE UNDER ANALYSIS
+--------------------------------------------------
+
+Feature ID: {{FEATURE_ID}}
+Feature Summary: {{FEATURE_SUMMARY}}
+
+Feature Description / Acceptance Criteria:
+{{FEATURE_DESCRIPTION}}
+
+--------------------------------------------------
+CHILD USER STORIES
+--------------------------------------------------
+
+{{STORIES}}
+
+--------------------------------------------------
+CONTEXT — WAY OF WORKING
+--------------------------------------------------
+
+We follow a structured model:
+
+- Feature = capability (business outcome)
+- Stories = behaviors (incremental implementation of that capability)
+
+Testing is split as:
+
+1. Story Level → Behaviour Testing
+   - Validate each story independently
+   - Driven by acceptance criteria
+   - Focus on correctness of behaviour
+
+2. Feature Level → Capability Testing
+   - Validate the full capability across stories
+   - Focus on:
+     - end-to-end flows
+     - integrations
+     - data consistency
+     - cross-story interactions
+     - non-functional and compliance validation
+
+--------------------------------------------------
+OBJECTIVE
+--------------------------------------------------
+
+Produce a Feature Test Plan analysis that:
+
+- separates clearly Behaviour vs Capability testing
+- ensures every test is traceable to:
+    - a Story (for behaviour tests)
+    - the Feature (for capability tests)
+- ensures no behaviour or capability is untested
+- supports audit, reporting, and quality gates
+
+--------------------------------------------------
+STEP 1 — TEST BASIS STRUCTURE
+--------------------------------------------------
+
+Build a structured model:
+
+Feature
+  ├── Capability Areas (derive logically)
+  ├── Stories
+  │     ├── Behaviours (from acceptance criteria)
+  │     └── Business rules
+  └── Cross-story flows
+
+Explicitly map:
+- which behaviours belong to which story
+- which capabilities span multiple stories
+
+--------------------------------------------------
+STEP 2 — TRACEABILITY MODEL DEFINITION
+--------------------------------------------------
+
+Create a strict traceability structure:
+
+LEVEL 1 — Feature
+- Feature ID
+- Capability Areas (grouped)
+
+LEVEL 2 — Stories
+- Story ID
+- Behaviours (atomic, testable)
+
+LEVEL 3 — Test Conditions
+
+Split test conditions into:
+
+A. Behaviour Test Conditions (Story-level)
+   - MUST link to:
+     Story ID
+     Behaviour ID
+
+B. Capability Test Conditions (Feature-level)
+   - MUST link to:
+     Feature ID
+     Capability Area
+     (and optionally related Stories)
+
+--------------------------------------------------
+STEP 3 — BEHAVIOUR TEST DESIGN (STORY LEVEL)
+--------------------------------------------------
+
+For EACH Story:
+
+- derive behaviours from acceptance criteria
+- define test conditions validating:
+    - happy path
+    - negative paths
+    - boundary conditions
+    - rule validation
+
+Output format:
+
+Story: <ID>
+Behaviour: <B-ID>
+
+For each:
+- Test Condition ID
+- Description
+- Type (positive / negative / boundary)
+- Priority
+- Risk link
+
+IMPORTANT:
+Each behaviour test MUST map 1:1 to a story behaviour.
+
+--------------------------------------------------
+STEP 4 — CAPABILITY TEST DESIGN (FEATURE LEVEL)
+--------------------------------------------------
+
+Define Feature-level Capability Test Conditions.
+
+These MUST cover:
+
+- end-to-end flows across stories
+- integration between components
+- data lifecycle across stories
+- state transitions across flows
+- error propagation across boundaries
+- role/permission consistency
+- compliance and audit requirements
+- non-functional validation (if applicable)
+
+Output format:
+
+Capability Area: <Name>
+
+For each:
+- Test Condition ID
+- Description
+- Related Stories
+- Flow Type (E2E / Integration / Data / NFR / Compliance)
+- Priority
+- Risk link
+
+IMPORTANT:
+Capability tests MUST NOT duplicate behaviour tests.
+They must validate the system as a whole.
+
+--------------------------------------------------
+STEP 5 — RISK-BASED COVERAGE LINKING
+--------------------------------------------------
+
+For every risk identified:
+
+- link to:
+    - impacted Story Behaviours
+    - impacted Feature Capabilities
+    - test conditions covering the risk
+
+Ensure:
+- all Critical risks → covered by tests
+- gaps are explicitly flagged
+
+--------------------------------------------------
+STEP 6 — TRACEABILITY MATRIX (MANDATORY)
+--------------------------------------------------
+
+Generate a full traceability matrix:
+
+Feature ID
+→ Capability Area
+→ Story ID
+→ Behaviour ID
+→ Test Condition ID
+→ Risk ID
+
+Also provide:
+
+Coverage Status:
+- Covered
+- Partially Covered
+- Not Covered
+
+--------------------------------------------------
+STEP 7 — COVERAGE ANALYSIS
+--------------------------------------------------
+
+Provide:
+- Feature acceptance criteria coverage
+- Story coverage status
+- Risk coverage status
+- Identified gaps
+
+--------------------------------------------------
+STEP 8 — ENTRY / EXIT CRITERIA
+--------------------------------------------------
+
+Define entry and exit criteria for:
+- Behaviour testing
+- Capability testing
+- Feature quality gate
+
+--------------------------------------------------
+STEP 9 — READINESS ASSESSMENT
+--------------------------------------------------
+
+For each story, assess:
+- Ready for test case design: yes/no
+- Notes on blockers or caveats
+
+Provide overall readiness: Ready / Ready with Caveats / Not Ready
+
+--------------------------------------------------
+STEP 10 — CLARIFICATIONS NEEDED
+--------------------------------------------------
+
+List any open questions or ambiguities that must be resolved before test case design can proceed.
+For each clarification:
+- Priority (High / Medium / Low)
+- Related story or feature
+- Question
+- Impact if unresolved
+- Status (Open / Resolved)
+
+--------------------------------------------------
+RULES
+--------------------------------------------------
+
+- Do NOT mix Behaviour and Capability tests
+- Do NOT create tests without traceability
+- Do NOT assume missing requirements → flag them
+- Prioritize based on risk and business impact
+- Ensure auditability and compliance traceability
+- Prefer atomic, reusable test conditions
+
+--------------------------------------------------
+FINAL STEP
+--------------------------------------------------
+
+Before generating the plan:
+1. Summarize your understanding of the Feature and Stories
+2. Validate assumptions
+3. Then produce the full structured analysis in markdown format
+
+This analysis will be reviewed and optionally edited before being converted to JSON.

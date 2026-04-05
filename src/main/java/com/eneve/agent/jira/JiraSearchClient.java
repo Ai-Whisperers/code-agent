@@ -116,6 +116,90 @@ class JiraSearchClient {
         return searchIssues(jql, 100);
     }
 
+    /** Search for features (not epics) with the given labels. Used for QA scope feature discovery. */
+    List<JiraService.JiraIssueDetail> searchQAFeaturesByLabels(List<String> labels, String featureIssuetype) {
+        if (labels == null || labels.isEmpty()) return List.of();
+        String labelsIn = labels.stream()
+                .map(l -> "\"" + JiraHttpClient.escapeJson(l) + "\"")
+                .collect(Collectors.joining(", "));
+        String jql = "issuetype = \"" + JiraHttpClient.escapeJson(featureIssuetype) + "\" AND labels in (" + labelsIn + ") ORDER BY created ASC";
+        return searchIssues(jql, 500);
+    }
+
+    /**
+     * Returns all issue keys linked to {@code issueKey} via a "test" relationship
+     * (inward "is tested by" / outward "tests").
+     *
+     * <p>Jira Clouds represent the relationship in one of two ways depending on which
+     * end of the link was used to create it:
+     * <ul>
+     *   <li>The test-plan ticket appears as {@code inwardIssue} when the link type's
+     *       {@code inward} name contains "tested by".</li>
+     *   <li>The test-plan ticket appears as {@code outwardIssue} when the link type's
+     *       {@code outward} name contains "tests".</li>
+     * </ul>
+     * Both cases are handled here. The raw issuelinks array is logged at INFO level
+     * so mismatches can be diagnosed.
+     */
+    List<JiraService.JiraIssueRef> fetchIsTestedByLinks(String issueKey) {
+        String json = http.get(
+                "/rest/api/3/issue/" + JiraHttpClient.escapeJson(issueKey) + "?fields=issuelinks",
+                "fetch issue links " + issueKey);
+        if (json == null) return List.of();
+        try {
+            var root = mapper.readTree(json);
+            var links = root.path("fields").path("issuelinks");
+            if (!links.isArray()) {
+                LOG.infof("JIRA fetchIsTestedByLinks: no issuelinks field for %s", issueKey);
+                return List.of();
+            }
+
+            // Log the raw issuelinks so link-type names can be verified in the server log
+            LOG.infof("JIRA fetchIsTestedByLinks: %d raw link(s) for %s — %s",
+                    links.size(), issueKey, links.toString());
+
+            var results = new ArrayList<JiraService.JiraIssueRef>();
+            for (var link : links) {
+                var typeNode     = link.path("type");
+                String inward    = typeNode.path("inward").asText("").toLowerCase();
+                String outward   = typeNode.path("outward").asText("").toLowerCase();
+
+                // Case 1 – test plan is in the inwardIssue slot
+                //   type.inward = "is tested by"  →  the OTHER issue is in inwardIssue
+                if (inward.contains("tested by") && !link.path("inwardIssue").isMissingNode()) {
+                    var node = link.path("inwardIssue");
+                    String key = node.path("key").asText("");
+                    if (!key.isBlank()) {
+                        LOG.infof("JIRA fetchIsTestedByLinks: %s → inwardIssue %s", issueKey, key);
+                        results.add(new JiraService.JiraIssueRef(key,
+                                node.path("fields").path("summary").asText("")));
+                        continue;
+                    }
+                }
+
+                // Case 2 – test plan is in the outwardIssue slot
+                //   type.outward = "tests"  →  the OTHER issue is in outwardIssue
+                if ((outward.contains("tests") || outward.contains("tested by"))
+                        && !link.path("outwardIssue").isMissingNode()) {
+                    var node = link.path("outwardIssue");
+                    String key = node.path("key").asText("");
+                    if (!key.isBlank()) {
+                        LOG.infof("JIRA fetchIsTestedByLinks: %s → outwardIssue %s", issueKey, key);
+                        results.add(new JiraService.JiraIssueRef(key,
+                                node.path("fields").path("summary").asText("")));
+                    }
+                }
+            }
+
+            LOG.infof("JIRA fetchIsTestedByLinks: resolved %d test plan link(s) for %s",
+                    results.size(), issueKey);
+            return results;
+        } catch (Exception e) {
+            LOG.warnf("Failed to parse issue links for %s: %s", issueKey, e.getMessage());
+            return List.of();
+        }
+    }
+
     List<JiraService.JiraIssueDetail> searchStoriesForFeature(String featureKey) {
         return searchStoriesForFeature(featureKey, settings.get("roadmap.jira.userstory-issuetype", "Sub-task"));
     }

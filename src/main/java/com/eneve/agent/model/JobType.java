@@ -35,7 +35,13 @@ public enum JobType {
     /** Classifies an incoming Jira Service Desk ticket as QUESTION, REQUEST, BUG_REPORT, or OUTAGE_REPORT
      *  (Stage 1: Haiku) and, for bugs and outages, performs a deep AI root-cause analysis
      *  (Stage 2: Sonnet) using the knowledge index. Results are posted as internal (agent-only) comments. */
-    SERVICE_DESK_TRIAGE;
+    SERVICE_DESK_TRIAGE,
+    /** Runs the qa.testplan.analysis Claude call for a feature; stores markdown in qa_test_plans.analysis_text. */
+    QA_TESTPLAN_ANALYSIS,
+    /** Runs the qa.testplan.formatter Claude call; parses JSON, extracts KPIs, stores in qa_test_plans.plan_json. */
+    QA_TESTPLAN_CONVERSION,
+    /** Generates test cases for all child stories of a feature plan; stores rows in qa_test_cases. */
+    QA_TESTCASE_GENERATION;
 
     /**
      * Default dispatch priority on a 1–100 scale (higher = dispatched first).
@@ -68,6 +74,9 @@ public enum JobType {
             case SELF_ANALYSIS         ->  10;
             case REWRITE               ->  55;
             case SERVICE_DESK_TRIAGE   ->  55;
+            case QA_TESTPLAN_ANALYSIS  ->  28;
+            case QA_TESTPLAN_CONVERSION->  27;
+            case QA_TESTCASE_GENERATION->  26;
         };
     }
 }

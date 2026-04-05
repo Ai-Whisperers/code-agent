@@ -130,6 +130,18 @@ public class JobRecord {
         this(jobId, request, JobType.SERVICE_DESK_TRIAGE);
     }
 
+    public JobRecord(String jobId, QaTestPlanAnalysisRequest request) {
+        this(jobId, request, JobType.QA_TESTPLAN_ANALYSIS);
+    }
+
+    public JobRecord(String jobId, QaTestPlanConversionRequest request) {
+        this(jobId, request, JobType.QA_TESTPLAN_CONVERSION);
+    }
+
+    public JobRecord(String jobId, QaTestCaseGenerationRequest request) {
+        this(jobId, request, JobType.QA_TESTCASE_GENERATION);
+    }
+
     public String getJobId() { return jobId; }
     public JobType getJobType() { return jobType; }
 

@@ -4,6 +4,9 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
+import com.eneve.agent.model.QaTestCaseGenerationRequest;
+import com.eneve.agent.model.QaTestPlanAnalysisRequest;
+import com.eneve.agent.model.QaTestPlanConversionRequest;
 import com.eneve.agent.planner.JobCompletedEvent;
 import com.eneve.agent.settings.SettingsService;
 import io.quarkus.runtime.ShutdownEvent;
@@ -307,7 +310,9 @@ public class JobQueue {
                  GENERATE_TESTS, GENERATE_DOCS, SELF_ANALYSIS,
                  GENERATE_ARCHITECTURE, GENERATE_CLOUD_ARCHITECTURE,
                  KNOWLEDGE_GRAPH, TECH_DEBT, REWRITE,
-                 SERVICE_DESK_TRIAGE                                           -> backgroundSemaphore;
+                 SERVICE_DESK_TRIAGE,
+                 QA_TESTPLAN_ANALYSIS, QA_TESTPLAN_CONVERSION,
+                 QA_TESTCASE_GENERATION                                         -> backgroundSemaphore;
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY                -> reviewSemaphore;
         };
     }
@@ -375,6 +380,12 @@ public class JobQueue {
             case QUALITY_REPORT -> new JobRecord(newJobId, original.getQualityReportRequest());
             case REVIEW_EPIC, REVIEW_FEATURE, REVIEW_USERSTORY ->
                     new JobRecord(newJobId, original.getJiraReviewRequest(), original.getJobType());
+            case QA_TESTPLAN_ANALYSIS -> original.getPayload() instanceof QaTestPlanAnalysisRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case QA_TESTPLAN_CONVERSION -> original.getPayload() instanceof QaTestPlanConversionRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case QA_TESTCASE_GENERATION -> original.getPayload() instanceof QaTestCaseGenerationRequest r
+                    ? new JobRecord(newJobId, r) : null;
             default -> null;
         };
         if (newJob == null) return null;

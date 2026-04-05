@@ -81,12 +81,14 @@ public class ScopeItemStore {
     /** Returns all items for a scope ordered by issue type then key. */
     public List<ScopeItem> findByScope(String scopeId) {
         String sql = """
-                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
-                       summary, jira_status, synced_at, jira_modified_at,
-                       assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM scope_items
-                WHERE scope_id = ?::uuid
-                ORDER BY issue_type, issue_key
+                SELECT si.id, si.scope_id, si.issue_key, si.issue_type, si.parent_key, si.grandparent_key,
+                       si.summary, si.jira_status, si.synced_at, si.jira_modified_at,
+                       si.assignee, si.reporter, si.sprint_name, si.sprint_start, si.sprint_end,
+                       s.scope_type
+                FROM scope_items si
+                JOIN scopes s ON s.id = si.scope_id
+                WHERE si.scope_id = ?::uuid
+                ORDER BY si.issue_type, si.issue_key
                 """;
         List<ScopeItem> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
@@ -107,12 +109,14 @@ public class ScopeItemStore {
      */
     public List<ScopeItem> findSprintItems(String scopeId) {
         String sql = """
-                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
-                       summary, jira_status, synced_at, jira_modified_at,
-                       assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM scope_items
-                WHERE scope_id = ?::uuid AND sprint_name IS NOT NULL
-                ORDER BY sprint_start NULLS LAST, issue_type, issue_key
+                SELECT si.id, si.scope_id, si.issue_key, si.issue_type, si.parent_key, si.grandparent_key,
+                       si.summary, si.jira_status, si.synced_at, si.jira_modified_at,
+                       si.assignee, si.reporter, si.sprint_name, si.sprint_start, si.sprint_end,
+                       s.scope_type
+                FROM scope_items si
+                JOIN scopes s ON s.id = si.scope_id
+                WHERE si.scope_id = ?::uuid AND si.sprint_name IS NOT NULL
+                ORDER BY si.sprint_start NULLS LAST, si.issue_type, si.issue_key
                 """;
         List<ScopeItem> results = new ArrayList<>();
         try (Connection conn = dataSource.getConnection();
@@ -147,11 +151,13 @@ public class ScopeItemStore {
     /** Returns a single item by scope and issue key. */
     public Optional<ScopeItem> findByScopeAndIssueKey(String scopeId, String issueKey) {
         String sql = """
-                SELECT id, scope_id, issue_key, issue_type, parent_key, grandparent_key,
-                       summary, jira_status, synced_at, jira_modified_at,
-                       assignee, reporter, sprint_name, sprint_start, sprint_end
-                FROM scope_items
-                WHERE scope_id = ?::uuid AND issue_key = ?
+                SELECT si.id, si.scope_id, si.issue_key, si.issue_type, si.parent_key, si.grandparent_key,
+                       si.summary, si.jira_status, si.synced_at, si.jira_modified_at,
+                       si.assignee, si.reporter, si.sprint_name, si.sprint_start, si.sprint_end,
+                       s.scope_type
+                FROM scope_items si
+                JOIN scopes s ON s.id = si.scope_id
+                WHERE si.scope_id = ?::uuid AND si.issue_key = ?
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -291,7 +297,8 @@ public class ScopeItemStore {
                 rs.getString("reporter"),
                 rs.getString("sprint_name"),
                 sprintStart    != null ? sprintStart.toInstant()    : null,
-                sprintEnd      != null ? sprintEnd.toInstant()      : null
+                sprintEnd      != null ? sprintEnd.toInstant()      : null,
+                rs.getString("scope_type")
         );
     }
 }

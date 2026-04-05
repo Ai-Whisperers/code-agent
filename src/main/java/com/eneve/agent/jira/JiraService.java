@@ -151,6 +151,18 @@ public class JiraService {
         return search.searchFeaturesByLabels(labels, issuetype);
     }
 
+    public List<JiraIssueDetail> searchQAFeaturesByLabels(List<String> labels, String featureIssuetype) {
+        return search.searchQAFeaturesByLabels(labels, featureIssuetype);
+    }
+
+    /**
+     * Returns all issues linked to {@code issueKey} via an "is tested by" relationship.
+     * Useful for auto-detecting an existing Jira test plan ticket for a feature.
+     */
+    public List<JiraIssueRef> fetchIsTestedByLinks(String issueKey) {
+        return search.fetchIsTestedByLinks(issueKey);
+    }
+
     public List<JiraIssueDetail> previewIssuesByLabels(List<String> labels) {
         return search.previewIssuesByLabels(labels);
     }

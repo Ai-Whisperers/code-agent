@@ -1,9 +1,12 @@
 package com.eneve.agent.scope;
 
+import com.eneve.agent.agent.store.ScopeStore;
+import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.QaReadinessResponse;
 import com.eneve.agent.scope.ScopeExceptions.ScopeNotFoundException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
 
 import java.util.List;
 import java.util.Map;
@@ -17,7 +20,11 @@ import java.util.Map;
 @ApplicationScoped
 public class QaReadinessService {
 
+    private static final Logger LOG = Logger.getLogger(QaReadinessService.class);
+
     @Inject ScopeEvaluationService evaluationService;
+    @Inject ScopeStore scopeStore;
+    @Inject JiraService jiraService;
 
     /**
      * Builds the QA readiness response for the given scope.
@@ -81,4 +88,17 @@ public class QaReadinessService {
 
         return new QaReadinessResponse(summary, realItems);
     }
-}
+
+    /**
+     * Fetches QA-ready features for a scope (features with the QGStoryDone label).
+     * Uses the feature-level issuetype, not epic-level, to correctly search for individual features.
+     *
+     * @throws ScopeNotFoundException if the scope does not exist
+     */
+    public List<JiraService.JiraIssueDetail> fetchQAReadyFeatures(String scopeId, String label) {
+        ScopeRecord scope = scopeStore.findById(scopeId)
+                .orElseThrow(ScopeNotFoundException::new);
+        if (label == null || label.isBlank()) return List.of();
+        String featureIssuetype = scope.featureIssuetype() != null ? scope.featureIssuetype() : "Story";
+        return jiraService.searchQAFeaturesByLabels(List.of(label), featureIssuetype);
+    }

@@ -283,5 +283,33 @@
       "SIMILAR_TICKETS_SECTION",
       "RELATED_OPEN_ISSUES_SECTION"
     ]
+  },
+  "qa.testplan.analysis": {
+    "description": "ISTQB-aligned test plan analysis for a Jira feature and its user stories — produces a markdown analysis document",
+    "placeholders": [
+      "FEATURE_ID",
+      "FEATURE_SUMMARY",
+      "FEATURE_DESCRIPTION",
+      "STORIES"
+    ]
+  },
+  "qa.testplan.formatter": {
+    "description": "Converts a test plan analysis into the strict featureTestPlan JSON schema for the QA test plan viewer",
+    "placeholders": [
+      "FEATURE_ID",
+      "ANALYSIS"
+    ]
+  },
+  "qa.testcase.formatter": {
+    "description": "Generates structured test cases in strict JSON for a single user story, using the test plan's risk and gap context",
+    "placeholders": [
+      "FEATURE_KEY",
+      "FEATURE_TITLE",
+      "STORY_KEY",
+      "STORY_TITLE",
+      "STORY_DESCRIPTION",
+      "DEPENDENCIES",
+      "RISK_REFERENCES"
+    ]
   }
 }
