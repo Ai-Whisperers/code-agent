@@ -135,6 +135,7 @@ public class ChatService {
                             && effectiveContext.customerIds() != null
                             && !effectiveContext.customerIds().isEmpty());
                 boolean isAskMode = "ask".equals(request.mode());
+                boolean isChatMode = !isAskMode && !"plan".equals(request.mode());
                 String baseSystemPrompt = buildSystemPrompt(
                         request.productId(),
                         effectiveContext,
@@ -142,7 +143,7 @@ public class ChatService {
                         hasCustomer);
                 String systemPrompt = isAskMode
                         ? baseSystemPrompt + "\n\n**IMPORTANT — Ask Mode:** You are operating in Ask mode. "
-                                + "You may only read and answer — never create, update, or delete Jira issues, "
+                            + "You may only read and answer — never create, update, or delete Jira issues, "
                                 + "Confluence pages, or any other resource."
                         : baseSystemPrompt;
                 List<ToolUnion> tools = isAskMode
@@ -166,30 +167,18 @@ public class ChatService {
                         event -> {
                             // Handle Done events specially for plan generation
                             if (event instanceof ChatEvent.Done) {
-                                String userMessage = request.message().toLowerCase();
-                                boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
-                                
-                                if (shouldGeneratePlan) {
-                                    // Generate plan first, then emit Done event
+                                // Only generate a plan when the user explicitly selected Plan mode.
+                                // In Chat or Ask mode the model is instructed to redirect the user
+                                // to Plan mode instead of silently creating plans.
+                                if ("plan".equals(request.mode())) {
                                     checkAndGeneratePlan(request, conversationId, finalWorkspace, emitter, event);
-                                    // checkAndGeneratePlan will emit the plan event, then Done, then complete
                                 } else {
-                                    // No plan needed, emit Done and complete normally
                                     emitter.emit(event);
                                     emitter.complete();
                                 }
                             } else {
                                 // For all other events, emit normally
                                 emitter.emit(event);
-                                
-                                // Check for plan generation opportunity during text streaming (for early detection)
-                                if (event instanceof ChatEvent.TextDelta) {
-                                    // Log plan generation check but don't actually generate until Done
-                                    String userMessage = request.message().toLowerCase();
-                                    boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
-                                    LOG.infof("Plan generation check - mode: %s, shouldGenerate: %s, eventType: %s", 
-                                        request.mode(), shouldGeneratePlan, event.getClass().getSimpleName());
-                                }
                                 
                                 // Complete stream on error
                                 if (event instanceof ChatEvent.Error) {
@@ -521,17 +510,16 @@ public class ChatService {
     private void checkAndGeneratePlan(ChatRequest request, String conversationId, WorkspaceContext workspace, 
                                     io.smallrye.mutiny.subscription.MultiEmitter<? super ChatEvent> emitter, ChatEvent currentEvent) {
         try {
-            // Check if user explicitly requested plan mode or message contains plan triggers
-            String userMessage = request.message().toLowerCase();
-            boolean shouldGeneratePlan = "plan".equals(request.mode()) || containsPlanTriggers(userMessage);
-            
-            LOG.infof("Plan generation check - mode: %s, shouldGenerate: %s, eventType: %s", 
-                request.mode(), shouldGeneratePlan, currentEvent.getClass().getSimpleName());
-            
-            if (shouldGeneratePlan && currentEvent instanceof ChatEvent.Done) {
-                LOG.infof("Checking for existing plan for conversation: %s", conversationId);
-                
-                // First check if a plan already exists for this conversation
+            // Only reached when mode == "plan"; guard against unexpected calls
+            if (!(currentEvent instanceof ChatEvent.Done)) {
+                emitter.emit(currentEvent);
+                emitter.complete();
+                return;
+            }
+
+            LOG.infof("Checking for existing plan for conversation: %s", conversationId);
+
+            // First check if a plan already exists for this conversation
                 var existingPlans = planStore.findByConversationId(conversationId);
                 ExecutionPlan plan = null;
                 boolean isNewPlan = false;
@@ -617,32 +605,9 @@ public class ChatService {
                     // Complete the stream even if plan creation failed
                     emitter.complete();
                 }
-            } else if (currentEvent instanceof ChatEvent.Done && shouldGeneratePlan) {
-                LOG.infof("Plan generation skipped - not a Done event");
-                emitter.complete();
-            }
         } catch (Exception e) {
             LOG.warnf("Failed to generate plan for conversation %s: %s", conversationId, e.getMessage());
         }
-    }
-
-    
-    /**
-     * Checks if the user message contains keywords that suggest plan generation is appropriate.
-     */
-    private boolean containsPlanTriggers(String message) {
-        String[] triggers = {
-            "implement", "create", "build", "develop", "add feature", "fix bug", 
-            "refactor", "update", "change", "modify", "enhance", "improve"
-        };
-        
-        for (String trigger : triggers) {
-            if (message.contains(trigger)) {
-                return true;
-            }
-        }
-        
-        return false;
     }
 
     /**
