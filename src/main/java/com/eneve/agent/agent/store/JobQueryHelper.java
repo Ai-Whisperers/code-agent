@@ -155,7 +155,9 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs WHERE status = ? ORDER BY created_at ASC
                 """;
         List<JobRecord> results = new ArrayList<>();
@@ -195,20 +197,20 @@ class JobQueryHelper {
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + " pr_author, workspace, repo_slug, priority, coverage_data,"
                 + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + " promotion_job_id, workspace_path"
+                + " promotion_job_id, workspace_path, restart_from_job_id, restart_iteration, additional_iterations, parent_job_id, depth"
                 + " FROM ("
                 + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + "          pr_author, workspace, repo_slug, priority, coverage_data,"
                 + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + "          promotion_job_id, workspace_path"
+                + "          promotion_job_id, workspace_path, restart_from_job_id, restart_iteration, additional_iterations, parent_job_id, depth"
                 + "   FROM jobs WHERE aikido_issue_id = ?" + repoFilter
                 + "   UNION ALL"
                 + "   SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + "          summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + "          pr_author, workspace, repo_slug, priority, coverage_data,"
                 + "          aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + "          promotion_job_id, workspace_path"
+                + "          promotion_job_id, workspace_path, restart_from_job_id, restart_iteration, additional_iterations, parent_job_id, depth"
                 + "   FROM job_history WHERE aikido_issue_id = ?" + repoFilter
                 + " ) combined"
                 + " ORDER BY created_at DESC LIMIT 1";
@@ -350,7 +352,9 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs
                 WHERE job_type = 'REVIEW'
                   AND status IN ('PENDING','QUEUED','RUNNING')
@@ -373,7 +377,9 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs
                 WHERE job_type IN ('REVIEW_EPIC','REVIEW_FEATURE','REVIEW_USERSTORY')
                   AND status = 'QUEUED'
@@ -426,14 +432,18 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
                 UNION ALL
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM job_history WHERE pr_id = ? AND workspace = ? AND repo_slug = ?
                 ORDER BY created_at DESC
                 """;
@@ -465,14 +475,18 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs WHERE pr_id = ?
                 UNION ALL
                 SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM job_history WHERE pr_id = ?
                 ORDER BY created_at DESC
                 """;
@@ -495,14 +509,18 @@ class JobQueryHelper {
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                            pr_author, workspace, repo_slug, priority, coverage_data,
                            aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id, workspace_path
+                           promotion_job_id, workspace_path,
+                           restart_from_job_id, restart_iteration, additional_iterations,
+                           parent_job_id, depth
                     FROM jobs WHERE pr_url LIKE ?
                     UNION ALL
                     SELECT job_id, job_type, status, request_payload, created_at, updated_at,
                            summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                            pr_author, workspace, repo_slug, priority, coverage_data,
                            aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                           promotion_job_id, workspace_path
+                           promotion_job_id, workspace_path,
+                           restart_from_job_id, restart_iteration, additional_iterations,
+                           parent_job_id, depth
                     FROM job_history WHERE pr_url LIKE ?
                     ORDER BY created_at DESC
                     """;
@@ -529,7 +547,9 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM jobs
                 WHERE jira_key IS NOT NULL
                 UNION ALL
@@ -537,7 +557,9 @@ class JobQueryHelper {
                        summary, error_message, pr_url, pr_id, files_changed, lines_changed,
                        pr_author, workspace, repo_slug, priority, coverage_data,
                        aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                       promotion_job_id, workspace_path
+                       promotion_job_id, workspace_path,
+                       restart_from_job_id, restart_iteration, additional_iterations,
+                       parent_job_id, depth
                 FROM job_history
                 WHERE jira_key IS NOT NULL
                 ORDER BY created_at DESC

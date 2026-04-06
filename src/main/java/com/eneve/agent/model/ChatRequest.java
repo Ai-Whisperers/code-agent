@@ -23,5 +23,8 @@ public record ChatRequest(
         String mode,
 
         @Schema(description = "Optional conversation context including customers, products, and issues")
-        ConversationContext conversationContext
+        ConversationContext conversationContext,
+
+        @Schema(description = "Optional thinking override: true=force on, false=force off, null=use server default")
+        Boolean thinking
 ) {}

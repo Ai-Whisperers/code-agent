@@ -5,6 +5,7 @@ import com.anthropic.errors.RateLimitException;
 import com.anthropic.models.messages.*;
 import com.eneve.agent.agent.TokenBudgetTracker;
 import com.eneve.agent.agent.model.AiCallRecord;
+import com.eneve.agent.agent.service.JobConfigService;
 import com.eneve.agent.agent.service.PromptTemplateService;
 import com.eneve.agent.agent.store.AiCallStore;
 import com.eneve.agent.agent.store.CloudAccountStore;
@@ -72,6 +73,7 @@ public class LogAnalysisService {
     @Inject TokenBudgetTracker tokenBudgetTracker;
     @Inject ObjectMapper objectMapper;
     @Inject PromptTemplateService promptTemplates;
+    @Inject JobConfigService jobConfigService;
 
     // ── Public entry point ────────────────────────────────────────────────────
 
@@ -309,7 +311,7 @@ public class LogAnalysisService {
     private TriageResult callHaikuTriage(FingerprintGroup group, String customerId,
                                           String envName, LogAnalysisConfig cfg) {
         String prompt = buildTriagePrompt(group, customerId, envName, cfg);
-        String modelName = settings.get("anthropic.fast-model", "claude-haiku-4-5");
+        String modelName = jobConfigService.getConfig("LOG_ANALYSIS_TRIAGE").effectiveModel();
 
         MessageCreateParams params = MessageCreateParams.builder()
                 .model(Model.of(modelName))
@@ -439,7 +441,7 @@ public class LogAnalysisService {
         LogAnalysisFinding finding = findingsStore.findById(findingId)
                 .orElseThrow(() -> new IllegalArgumentException("Finding not found: " + findingId));
 
-        String modelName = settings.get("anthropic.model", "claude-sonnet-4-5");
+        String modelName = jobConfigService.getConfig("LOG_ANALYSIS_DEEP").effectiveModel();
         String prompt = buildDeepAnalysisPrompt(finding);
 
         MessageCreateParams params = MessageCreateParams.builder()

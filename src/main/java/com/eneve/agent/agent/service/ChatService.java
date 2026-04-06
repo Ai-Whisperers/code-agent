@@ -162,6 +162,7 @@ public class ChatService {
                         conversationId,
                         "CHAT",
                         CHAT_MAX_ITERATIONS,
+                        request.thinking(),
                         event -> {
                             // Handle Done events specially for plan generation
                             if (event instanceof ChatEvent.Done) {

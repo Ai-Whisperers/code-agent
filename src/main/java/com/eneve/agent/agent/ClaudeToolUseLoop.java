@@ -35,6 +35,8 @@ import com.anthropic.models.messages.StopReason;
 import com.anthropic.models.messages.ToolResultBlockParam;
 import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.ToolUseBlockParam;
+import com.anthropic.models.messages.ThinkingBlock;
+import com.anthropic.models.messages.ThinkingBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
 import com.eneve.agent.agent.store.JobCheckpointStore;
@@ -45,6 +47,7 @@ import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
 import com.eneve.agent.workspace.WorkspaceContext;
 
+import com.eneve.agent.agent.service.JobConfigService;
 import com.eneve.agent.settings.SettingsService;
 import org.jboss.logging.Logger;
 
@@ -96,6 +99,9 @@ public class ClaudeToolUseLoop {
 
     @Inject
     ToolResultSummaryService summaryService;
+
+    @Inject
+    JobConfigService jobConfigService;
 
     /** Circuit-breaker limit: disable compaction for the remainder of the job after this many consecutive failures. */
     private static final int MAX_COMPACTION_FAILURES = 3;
@@ -261,13 +267,13 @@ public class ClaudeToolUseLoop {
                          List<ToolUnion> tools, List<MessageParam> initialMessages,
                          String jobId, String jobType, int startIteration, int iterationCap,
                          String parentJobId, int depth) {
-        String modelName = settings.get(
-                "anthropic.model." + jobType.toLowerCase(),
-                settings.get("anthropic.model", "claude-sonnet-4-20250514"));
-        long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
+        JobConfigService.JobConfigView jobConfig = jobConfigService.getConfig(jobType);
+        String modelName = jobConfig.effectiveModel();
+        long maxTokens = jobConfig.effectiveMaxTokens();
         long compactionThreshold = compactionService.compactionThreshold(maxTokens);
         boolean checkpointEnabled = Boolean.parseBoolean(
                 settings.get("agent.checkpoint.enabled", "true"));
+        boolean thinkingActive = jobConfig.thinkingEnabled() && jobConfig.effectiveThinkingBudget() > 0;
         List<MessageParam> messages = new ArrayList<>(initialMessages);
         int compactionFailures = 0;
 
@@ -286,14 +292,20 @@ public class ClaudeToolUseLoop {
                 messages = summaryService.summarizeOldResults(messages);
             }
 
-            MessageCreateParams params = MessageCreateParams.builder()
+            MessageCreateParams.Builder paramsBuilder = MessageCreateParams.builder()
                     .model(Model.of(modelName))
                     .maxTokens(maxTokens)
                     .cacheControl(CacheControlEphemeral.builder().build())
                     .system(systemPrompt)
                     .messages(messages)
-                    .tools(tools)
-                    .build();
+                    .tools(tools);
+            if (thinkingActive) {
+                paramsBuilder.putAdditionalBodyProperty("thinking",
+                        com.anthropic.core.JsonValue.from(Map.of(
+                                "type", "enabled",
+                                "budget_tokens", jobConfig.effectiveThinkingBudget())));
+            }
+            MessageCreateParams params = paramsBuilder.build();
 
             long startNs = System.nanoTime();
             Message response;
@@ -370,7 +382,14 @@ public class ClaudeToolUseLoop {
 
             // Reconstruct assistant blocks and tool results in original response order
             for (ContentBlock block : response.content()) {
-                if (block.isText()) {
+                if (block.isThinking()) {
+                    ThinkingBlock tb = block.asThinking();
+                    assistantBlocks.add(ContentBlockParam.ofThinking(
+                            ThinkingBlockParam.builder()
+                                    .thinking(tb.thinking())
+                                    .signature(tb.signature())
+                                    .build()));
+                } else if (block.isText()) {
                     textAccumulator.append(block.asText().text());
                     assistantBlocks.add(ContentBlockParam.ofText(block.asText().toParam()));
                 } else if (block.isToolUse()) {
@@ -514,8 +533,24 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .contentOfBlockParams(userContentBlocks)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, null, eventSink,
                 null, 0);
+        return messages;
+    }
+
+    public List<MessageParam> runStreaming(String systemPrompt, WorkspaceContext workspace,
+                                           List<ToolUnion> tools, List<ContentBlockParam> userContentBlocks,
+                                           List<MessageParam> priorHistory,
+                                           String jobId, String jobType, int iterationCap,
+                                           Boolean thinkingOverride,
+                                           Consumer<ChatEvent> eventSink) {
+        List<MessageParam> messages = new ArrayList<>(priorHistory);
+        messages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .contentOfBlockParams(userContentBlocks)
+                .build());
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, thinkingOverride,
+                eventSink, null, 0);
         return messages;
     }
 
@@ -539,7 +574,7 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .content(initialUserMessage)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, null, eventSink,
                 null, 0);
         return messages;
     }
@@ -553,21 +588,29 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .content(initialUserMessage)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, null, eventSink,
                 null, 0);
     }
 
     private void doRunStreaming(String systemPrompt, WorkspaceContext workspace,
                                 List<ToolUnion> tools, List<MessageParam> messages,
                                 String jobId, String jobType, int iterationCap,
+                                Boolean thinkingOverride,
                                 Consumer<ChatEvent> eventSink,
                                 String parentJobId, int depth) {
-        String modelName = settings.get(
-                "anthropic.model." + jobType.toLowerCase(),
-                settings.get("anthropic.model", "claude-sonnet-4-20250514"));
-        long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
+        JobConfigService.JobConfigView jobConfig = jobConfigService.getConfig(jobType);
+        String modelName = jobConfig.effectiveModel();
+        long maxTokens = jobConfig.effectiveMaxTokens();
         long compactionThreshold = compactionService.compactionThreshold(maxTokens);
         int compactionFailures = 0;
+        boolean thinkingActive;
+        if (thinkingOverride != null) {
+            thinkingActive = thinkingOverride
+                    && !JobConfigService.TIER_FAST.equals(jobConfig.modelTier())
+                    && jobConfig.thinkingSupported();
+        } else {
+            thinkingActive = jobConfig.thinkingEnabled() && jobConfig.effectiveThinkingBudget() > 0;
+        }
         try {
             for (int iteration = 0; iteration < iterationCap; iteration++) {
                 LOG.infof("Streaming agent loop iteration %d/%d", iteration + 1, iterationCap);
@@ -578,14 +621,20 @@ public class ClaudeToolUseLoop {
                     messages.addAll(summarized);
                 }
 
-                MessageCreateParams params = MessageCreateParams.builder()
+                MessageCreateParams.Builder streamParamsBuilder = MessageCreateParams.builder()
                         .model(Model.of(modelName))
                         .maxTokens(maxTokens)
                         .cacheControl(CacheControlEphemeral.builder().build())
                         .system(systemPrompt)
                         .messages(messages)
-                        .tools(tools)
-                        .build();
+                        .tools(tools);
+                if (thinkingActive) {
+                    streamParamsBuilder.putAdditionalBodyProperty("thinking",
+                            com.anthropic.core.JsonValue.from(Map.of(
+                                    "type", "enabled",
+                                    "budget_tokens", jobConfig.effectiveThinkingBudget())));
+                }
+                MessageCreateParams params = streamParamsBuilder.build();
 
                 // Stream the response, accumulating into a full Message for tool processing.
                 // Text deltas are emitted immediately as they arrive so the browser sees them
@@ -608,6 +657,11 @@ public class ClaudeToolUseLoop {
                                 String text = delta.asText().text();
                                 if (text != null && !text.isEmpty()) {
                                     eventSink.accept(new ChatEvent.TextDelta(text));
+                                }
+                            } else if (delta.isThinking()) {
+                                String thinking = delta.asThinking().thinking();
+                                if (thinking != null && !thinking.isEmpty()) {
+                                    eventSink.accept(new ChatEvent.ThinkingDelta(thinking));
                                 }
                             }
                         }
@@ -668,7 +722,14 @@ public class ClaudeToolUseLoop {
                 List<String> toolNamesList = new ArrayList<>();
 
                 for (ContentBlock block : response.content()) {
-                    if (block.isText()) {
+                    if (block.isThinking()) {
+                        ThinkingBlock stb = block.asThinking();
+                        assistantBlocks.add(ContentBlockParam.ofThinking(
+                                ThinkingBlockParam.builder()
+                                        .thinking(stb.thinking())
+                                        .signature(stb.signature())
+                                        .build()));
+                    } else if (block.isText()) {
                         assistantBlocks.add(ContentBlockParam.ofText(block.asText().toParam()));
                     } else if (block.isToolUse()) {
                         ToolUseBlock tb = block.asToolUse();
