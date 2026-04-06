@@ -37,6 +37,8 @@ public class AgentTriggerQualityReportTool implements ToolExecutor {
         return false;
     }
 
+    @Override public boolean isDestructive() { return true; }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String workspaceName = (String) input.get("workspace");

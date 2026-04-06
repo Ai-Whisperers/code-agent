@@ -43,14 +43,14 @@ class ScopeResourceTest {
 
     private static final String SCOPE_ID = "rm-001";
     private static final ScopeRecord SAMPLE_SCOPE =
-            new ScopeRecord(SCOPE_ID, "Q1 Scope", List.of("scope-q1"), "Epic", "Story", "Sub-task", Instant.now());
+            new ScopeRecord(SCOPE_ID, "Q1 Scope", List.of("scope-q1"), "Epic", "Story", "Sub-task", Instant.now(), "po", null);
 
     // ── GET /api/scope ──────────────────────────────────────────────────────
 
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void listScopes_returns200WithList() {
-        when(managementService.listScopes()).thenReturn(List.of(SAMPLE_SCOPE));
+        when(managementService.listScopesByType(any())).thenReturn(List.of(SAMPLE_SCOPE));
 
         given()
             .when()
@@ -148,7 +148,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void createScope_validInput_returns201WithWarningOnEmptyEpics() {
-        when(managementService.createScope("My Scope", List.of("my-label"), "", "", ""))
+        when(managementService.createScope("My Scope", List.of("my-label"), "", "", "", "po", ""))
                 .thenReturn(new CreateScopeResult(SAMPLE_SCOPE, 0));
 
         given()
@@ -166,7 +166,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void createScope_withEpics_returnsItemsSynced() {
-        when(managementService.createScope("My Scope", List.of("my-label"), "", "", ""))
+        when(managementService.createScope("My Scope", List.of("my-label"), "", "", "", "po", ""))
                 .thenReturn(new CreateScopeResult(SAMPLE_SCOPE, 3));
 
         given()
@@ -185,7 +185,7 @@ class ScopeResourceTest {
     @Test
     @TestSecurity(user = "staff", roles = {"app_staff"})
     void updateScope_notFound_returns404() {
-        when(managementService.updateScope(eq("unknown"), anyString(), anyList(), any(), any(), any()))
+        when(managementService.updateScope(eq("unknown"), anyString(), anyList(), any(), any(), any(), any()))
                 .thenThrow(new ScopeNotFoundException("unknown"));
 
         given()

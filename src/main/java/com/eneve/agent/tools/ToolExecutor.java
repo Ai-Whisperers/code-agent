@@ -20,6 +20,21 @@ public interface ToolExecutor {
     }
 
     /**
+     * Returns true when this tool has irreversible side effects on external persistent state
+     * (e.g. file writes, job submissions, third-party system mutations). Destructive tools are
+     * always run serially and generate a WARN-level log entry on each invocation.
+     *
+     * <p>A tool that returns {@code true} here must also return {@code false} from
+     * {@link #isReadOnly()}; the two flags are mutually exclusive.
+     *
+     * <p>Future: check this flag inside {@link #isAuthorized} to enforce a blocking gate for
+     * strict read-only execution modes.
+     */
+    default boolean isDestructive() {
+        return false;
+    }
+
+    /**
      * Authorization gate called by the agent loop before every tool execution.
      *
      * <p>Returns {@code true} if this tool is permitted to execute in the given workspace

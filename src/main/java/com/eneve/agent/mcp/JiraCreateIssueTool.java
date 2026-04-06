@@ -38,6 +38,8 @@ public class JiraCreateIssueTool implements ToolExecutor {
         return false;
     }
 
+    @Override public boolean isDestructive() { return true; }
+
     @SuppressWarnings("unchecked")
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {

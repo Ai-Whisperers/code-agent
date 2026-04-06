@@ -93,12 +93,24 @@ public record JobStatusResponse(
         boolean scytaleEnabled,
 
         @Schema(description = "Job ID of the SOC2 promotion (cherry-pick to main) job, if one has been created")
-        String promotionJobId
+        String promotionJobId,
+
+        @Schema(description = "True when a checkpoint exists for this job and it can be restarted")
+        boolean hasCheckpoint,
+
+        @Schema(description = "Iteration number stored in the latest checkpoint (0-based)")
+        int checkpointIteration,
+
+        @Schema(description = "Configured maximum iterations for this job type")
+        int iterationCap
 ) {
     public static JobStatusResponse from(JobRecord record, int queuePosition,
                                          int criticalDays, int highDays,
                                          List<String> bugIssueTypes,
-                                         boolean scytaleEnabled) {
+                                         boolean scytaleEnabled,
+                                         boolean hasCheckpoint,
+                                         int checkpointIteration,
+                                         int iterationCap) {
         String sourceBranch = null;
         String targetBranch = null;
         String jiraKey = null;
@@ -185,8 +197,20 @@ public record JobStatusResponse(
                 soc2Protected,
                 record.getScytaleEvidenceRef(),
                 scytaleEnabled,
-                record.getPromotionJobId()
+                record.getPromotionJobId(),
+                hasCheckpoint,
+                checkpointIteration,
+                iterationCap
         );
+    }
+
+    /** Overload without checkpoint fields for callers that don't have checkpoint context. */
+    public static JobStatusResponse from(JobRecord record, int queuePosition,
+                                         int criticalDays, int highDays,
+                                         List<String> bugIssueTypes,
+                                         boolean scytaleEnabled) {
+        return from(record, queuePosition, criticalDays, highDays, bugIssueTypes,
+                scytaleEnabled, false, 0, 0);
     }
 
     /** Backward-compatible overload used by the search listing (no SLA computation needed). */
@@ -201,7 +225,8 @@ public record JobStatusResponse(
                 null, null, null,
                 workspace, repoSlug,
                 null, null, null, null, null, "NOT_APPLICABLE",
-                null, false, null, false, null
+                null, false, null, false, null,
+                false, 0, 0
         );
     }
 }

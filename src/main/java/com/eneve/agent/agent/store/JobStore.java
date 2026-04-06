@@ -55,8 +55,9 @@ public class JobStore {
                     (job_id, job_type, status, request_payload, created_at, updated_at,
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
                      pr_author, workspace, repo_slug, priority, coverage_data,
-                     aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?)
+                     aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
+                     restart_from_job_id, restart_iteration, additional_iterations)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -88,6 +89,9 @@ public class JobStore {
             } else {
                 ps.setNull(23, java.sql.Types.TIMESTAMP_WITH_TIMEZONE);
             }
+            setNullable(ps, 24, job.getRestartFromJobId());
+            ps.setInt(25, job.getRestartIteration());
+            ps.setInt(26, job.getAdditionalIterations());
             ps.executeUpdate();
             cache.put(job.getJobId(), job);
         } catch (SQLException e) {
@@ -364,7 +368,8 @@ public class JobStore {
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + " pr_author, workspace, repo_slug, priority, coverage_data,"
                 + " aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,"
-                + " promotion_job_id, workspace_path"
+                + " promotion_job_id, workspace_path,"
+                + " restart_from_job_id, restart_iteration, additional_iterations"
                 + " FROM " + table + " WHERE job_id = ?";
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -438,6 +443,15 @@ public class JobStore {
             job.setWorkspacePath(rs.getString("workspace_path"));
         } catch (Exception e) {
             LOG.warnf("Failed to read Aikido/SLA fields for job %s (non-fatal): %s", jobId, e.getMessage());
+        }
+        try {
+            job.setRestartFromJobId(rs.getString("restart_from_job_id"));
+            int restartIteration = rs.getInt("restart_iteration");
+            if (!rs.wasNull()) job.setRestartIteration(restartIteration);
+            int additionalIterations = rs.getInt("additional_iterations");
+            if (!rs.wasNull()) job.setAdditionalIterations(additionalIterations);
+        } catch (Exception e) {
+            LOG.warnf("Failed to read restart fields for job %s (non-fatal): %s", jobId, e.getMessage());
         }
         return job;
     }

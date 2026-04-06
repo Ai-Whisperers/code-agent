@@ -35,6 +35,9 @@ public class RequestFixTool implements ToolExecutor {
         return "request_fix";
     }
 
+    @Override public boolean isReadOnly()    { return false; }
+    @Override public boolean isDestructive() { return true;  }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String jobId = workspace != null ? workspace.getMetadata("jobId") : null;

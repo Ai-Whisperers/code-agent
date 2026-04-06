@@ -1,12 +1,20 @@
 package com.eneve.agent.agent;
 
 import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.model.FixPrRequest;
+import com.eneve.agent.model.GenerateDocsRequest;
+import com.eneve.agent.model.GenerateTestsRequest;
+import com.eneve.agent.model.HookJobRequest;
 import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.model.JobType;
 import com.eneve.agent.model.QaTestCaseGenerationRequest;
 import com.eneve.agent.model.QaTestPlanAnalysisRequest;
 import com.eneve.agent.model.QaTestPlanConversionRequest;
+import com.eneve.agent.model.ReplyCommentRequest;
+import com.eneve.agent.model.RewriteRequest;
+import com.eneve.agent.model.RunFixRequest;
+import com.eneve.agent.model.SelfAnalysisRequest;
 import com.eneve.agent.planner.JobCompletedEvent;
 import com.eneve.agent.settings.SettingsService;
 import io.quarkus.runtime.ShutdownEvent;
@@ -395,6 +403,72 @@ public class JobQueue {
         jobStore.put(newJob);
         submit(newJob);
         LOG.infof("Job %s (%s) rerun as new job %s", original.getJobId(), original.getJobType(), newJobId);
+        return newJobId;
+    }
+
+    private static final java.util.Set<JobType> RESTARTABLE_JOB_TYPES = java.util.Set.of(
+            JobType.FIX, JobType.FIX_PR, JobType.FIX_COMMENT, JobType.HOOK,
+            JobType.REWRITE, JobType.GENERATE_TESTS, JobType.GENERATE_DOCS,
+            JobType.SELF_ANALYSIS
+    );
+
+    /**
+     * Restart a FAILED job from its last saved checkpoint by creating a new job record
+     * with a fresh UUID but pointing back to the original job via {@code restartFromJobId}.
+     *
+     * <p>The handler will detect {@code restartFromJobId} and use
+     * {@link com.eneve.agent.agent.handlers.CheckpointAwareJobSupport} to restore workspace
+     * and conversation state before resuming the agent loop.
+     *
+     * @param original             the FAILED job to restart
+     * @param checkpointIteration  the iteration stored in the checkpoint
+     * @param additionalIterations extra iterations granted by the user (0 for default remaining cap)
+     * @return new job ID, or {@code null} if the job type cannot be restarted
+     */
+    public String restartJob(JobRecord original, int checkpointIteration, int additionalIterations) {
+        if (original.getStatus() != com.eneve.agent.model.JobStatus.FAILED) {
+            LOG.warnf("restartJob called on non-FAILED job %s (status=%s) — ignoring",
+                    original.getJobId(), original.getStatus());
+            return null;
+        }
+        if (!RESTARTABLE_JOB_TYPES.contains(original.getJobType())) {
+            return null;
+        }
+
+        String newJobId = java.util.UUID.randomUUID().toString();
+        // Build new record with same payload as original, using getPayload() to avoid deprecated typed getters
+        JobRecord newJob = switch (original.getJobType()) {
+            case FIX -> original.getPayload() instanceof RunFixRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case FIX_PR -> original.getPayload() instanceof FixPrRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case FIX_COMMENT -> original.getPayload() instanceof ReplyCommentRequest r
+                    ? new JobRecord(newJobId, r, JobType.FIX_COMMENT) : null;
+            case HOOK -> original.getPayload() instanceof HookJobRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case REWRITE -> original.getPayload() instanceof RewriteRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case GENERATE_TESTS -> original.getPayload() instanceof GenerateTestsRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case GENERATE_DOCS -> original.getPayload() instanceof GenerateDocsRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            case SELF_ANALYSIS -> original.getPayload() instanceof SelfAnalysisRequest r
+                    ? new JobRecord(newJobId, r) : null;
+            default -> null;
+        };
+        if (newJob == null) return null;
+
+        newJob.setWorkspace(original.getWorkspace());
+        newJob.setRepoSlug(original.getRepoSlug());
+        newJob.setPriority(original.getPriority());
+        newJob.setRestartFromJobId(original.getJobId());
+        newJob.setRestartIteration(checkpointIteration);
+        newJob.setAdditionalIterations(additionalIterations);
+
+        jobStore.put(newJob);
+        submit(newJob);
+        LOG.infof("Job %s (%s) restarted from iteration %d as new job %s (additionalIterations=%d)",
+                original.getJobId(), original.getJobType(), checkpointIteration, newJobId, additionalIterations);
         return newJobId;
     }
 

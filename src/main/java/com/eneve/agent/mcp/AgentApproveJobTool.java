@@ -37,6 +37,8 @@ public class AgentApproveJobTool implements ToolExecutor {
         return false;
     }
 
+    @Override public boolean isDestructive() { return true; }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String jobId = (String) input.get("jobId");

@@ -36,6 +36,7 @@ import com.anthropic.models.messages.ToolUseBlock;
 import com.anthropic.models.messages.ToolUseBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
+import com.eneve.agent.agent.store.JobCheckpointStore;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -79,6 +80,9 @@ public class ClaudeToolUseLoop {
 
     @Inject
     SettingsService settings;
+
+    @Inject
+    JobCheckpointStore checkpointStore;
 
     void onShutdown(@Observes ShutdownEvent event) {
         PARALLEL_TOOL_EXECUTOR.shutdown();
@@ -136,22 +140,61 @@ public class ClaudeToolUseLoop {
                 jobId, jobType, maxIterationsOverride);
     }
 
+    /**
+     * Resume the agentic loop from a previously saved checkpoint.
+     *
+     * <p>The {@code priorMessages} list is the full conversation state serialised at the
+     * checkpoint (initial user message + all assistant/tool-result pairs up to that point).
+     * The loop starts at {@code startIteration} and runs for at most
+     * {@code remainingCap} more iterations.
+     *
+     * @param priorMessages   full message list from the checkpoint (will be used as the
+     *                        initial state; the loop continues appending to it)
+     * @param startIteration  zero-based iteration to resume from
+     *                        ({@code = (priorMessages.size() - 1) / 2})
+     * @param remainingCap    maximum number of additional iterations to allow
+     */
+    public String resume(String systemPrompt, WorkspaceContext workspace,
+                         List<ToolUnion> tools,
+                         List<MessageParam> priorMessages, int startIteration,
+                         int remainingCap, String jobId, String jobType) {
+        return doRun(systemPrompt, workspace, tools, priorMessages, jobId, jobType,
+                startIteration, remainingCap);
+    }
+
+    /** Overload of {@link #resume} using the default tool set. */
+    public String resume(String systemPrompt, WorkspaceContext workspace,
+                         List<MessageParam> priorMessages, int startIteration,
+                         int remainingCap, String jobId, String jobType) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(), priorMessages,
+                jobId, jobType, startIteration, remainingCap);
+    }
+
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
                          String jobId, String jobType, int iterationCap) {
+        List<MessageParam> initialMessages = new ArrayList<>();
+        initialMessages.add(MessageParam.builder()
+                .role(MessageParam.Role.USER)
+                .content(initialUserMessage)
+                .build());
+        return doRun(systemPrompt, workspace, tools, initialMessages, jobId, jobType, 0, iterationCap);
+    }
+
+    private String doRun(String systemPrompt, WorkspaceContext workspace,
+                         List<ToolUnion> tools, List<MessageParam> initialMessages,
+                         String jobId, String jobType, int startIteration, int iterationCap) {
         String modelName = settings.get(
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         long compressionThreshold = Long.parseLong(
                 settings.get("agent.context.compression-threshold", "160000"));
-        List<MessageParam> messages = new ArrayList<>();
-        messages.add(MessageParam.builder()
-                .role(MessageParam.Role.USER)
-                .content(initialUserMessage)
-                .build());
+        boolean checkpointEnabled = Boolean.parseBoolean(
+                settings.get("agent.checkpoint.enabled", "true"));
+        List<MessageParam> messages = new ArrayList<>(initialMessages);
 
-        for (int iteration = 0; iteration < iterationCap; iteration++) {
+        for (int iteration = startIteration; iteration < startIteration + iterationCap; iteration++) {
             LOG.infof("Agent loop iteration %d/%d", iteration + 1, iterationCap);
 
             MessageCreateParams params = MessageCreateParams.builder()
@@ -284,6 +327,11 @@ public class ClaudeToolUseLoop {
                     .contentOfBlockParams(toolResults)
                     .build());
 
+            // Persist a checkpoint so the job can be restarted from this iteration if it fails.
+            if (checkpointEnabled) {
+                saveCheckpoint(workspace, jobId, jobType, iteration, messages);
+            }
+
             if (response.stopReason().isPresent()
                     && response.stopReason().get() == StopReason.END_TURN
                     && !hasToolUse) {
@@ -292,8 +340,32 @@ public class ClaudeToolUseLoop {
             }
         }
 
-        LOG.warnf("Agent loop hit max iterations (%d)", iterationCap);
+        LOG.warnf("Agent loop hit max iterations (%d)", startIteration + iterationCap);
         return "Agent loop reached maximum iterations without completing. Partial work may exist.";
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Checkpoint helpers
+    // ──────────────────────────────────────────────────────────────────────
+
+    private void saveCheckpoint(WorkspaceContext workspace, String jobId, String jobType,
+                                 int iteration, List<MessageParam> messages) {
+        if (jobId == null) return;
+        String sha = "";
+        if (workspace != null) {
+            try {
+                sha = workspace.commitCheckpoint(jobId, iteration);
+            } catch (Exception e) {
+                LOG.warnf("Checkpoint git commit/push failed for job %s iteration %d (non-fatal): %s",
+                        jobId, iteration + 1, e.getMessage());
+            }
+        }
+        try {
+            checkpointStore.save(jobId, iteration, messages, sha);
+        } catch (Exception e) {
+            LOG.warnf("Checkpoint DB save failed for job %s iteration %d (non-fatal): %s",
+                    jobId, iteration + 1, e.getMessage());
+        }
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -477,6 +549,39 @@ public class ClaudeToolUseLoop {
                     }
                 }
 
+                // Parallel pre-pass: if every tool in this batch is read-only and none requires
+                // special-case handling (ask_clarification emits a ClarificationRequest event and
+                // cannot be routed through dispatchTool), execute them all concurrently and collect
+                // results into a map keyed by tool-use id.  The downstream loop then emits ToolEnd
+                // events in response order regardless of which tool finished first.
+                //
+                // The noneMatch(ask_clarification) guard is intentional: ask_clarification.isReadOnly()
+                // returns true, so without this guard it would enter the parallel branch and bypass the
+                // ClarificationRequest event emission below. doRun() has no such special case and
+                // therefore does not need the guard.
+                boolean canParallelize = toolUseBlocks.size() > 1
+                        && toolUseBlocks.stream().noneMatch(t -> "ask_clarification".equals(t.name()))
+                        && toolUseBlocks.stream().allMatch(t -> {
+                            ToolExecutor ex = toolRegistry.get(t.name());
+                            return ex != null && ex.isReadOnly();
+                        });
+
+                Map<String, String> toolResultMap;
+                if (canParallelize) {
+                    LOG.debugf("Streaming: executing %d read-only tools in parallel", toolUseBlocks.size());
+                    List<CompletableFuture<Map.Entry<String, String>>> futures = toolUseBlocks.stream()
+                            .map(t -> CompletableFuture.supplyAsync(
+                                    () -> Map.entry(t.id(), dispatchTool(t, workspace)),
+                                    PARALLEL_TOOL_EXECUTOR))
+                            .toList();
+                    CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
+                    toolResultMap = futures.stream()
+                            .map(CompletableFuture::join)
+                            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+                } else {
+                    toolResultMap = null; // results dispatched inline in the loop below
+                }
+
                 for (ToolUseBlock toolUse : toolUseBlocks) {
                     toolNamesList.add(toolUse.name());
                     LOG.infof("Streaming tool call: %s (id=%s)", toolUse.name(), toolUse.id());
@@ -504,7 +609,10 @@ public class ClaudeToolUseLoop {
                         continue;
                     }
 
-                    String result = dispatchTool(toolUse, workspace);
+                    // Use pre-computed result from parallel batch, or dispatch now if sequential.
+                    String result = (toolResultMap != null)
+                            ? toolResultMap.get(toolUse.id())
+                            : dispatchTool(toolUse, workspace);
 
                     eventSink.accept(new ChatEvent.ToolEnd(toolUse.name(), result));
 
@@ -731,6 +839,10 @@ public class ClaudeToolUseLoop {
             LOG.warnf("Tool %s denied by isAuthorized check for workspace %s",
                     toolUse.name(), workspace != null ? workspace.getRoot() : "null");
             return "UNAUTHORIZED: Tool " + toolUse.name() + " is not permitted in the current context.";
+        }
+
+        if (executor.isDestructive()) {
+            LOG.warnf("Destructive tool call: %s (id=%s)", toolUse.name(), toolUse.id());
         }
 
         try {

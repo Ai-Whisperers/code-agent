@@ -41,6 +41,11 @@ public class JobRecord {
     private volatile String scytaleEvidenceRef;
     private volatile Instant scytaleUploadedAt;
 
+    // Restart tracking — set when this job is a restart of a previously failed job
+    private volatile String restartFromJobId;
+    private volatile int restartIteration;
+    private volatile int additionalIterations;
+
     private JobRecord(String jobId, JobPayload payload, JobType jobType) {
         this.jobId = jobId;
         this.payload = payload;
@@ -240,4 +245,14 @@ public class JobRecord {
 
     public Instant getScytaleUploadedAt() { return scytaleUploadedAt; }
     public void setScytaleUploadedAt(Instant scytaleUploadedAt) { this.scytaleUploadedAt = scytaleUploadedAt; }
+
+    public String getRestartFromJobId() { return restartFromJobId; }
+    public void setRestartFromJobId(String restartFromJobId) { this.restartFromJobId = restartFromJobId; }
+
+    public int getRestartIteration() { return restartIteration; }
+    public void setRestartIteration(int restartIteration) { this.restartIteration = restartIteration; }
+
+    /** Extra iterations granted by the user when restarting (added on top of remaining budget). */
+    public int getAdditionalIterations() { return additionalIterations; }
+    public void setAdditionalIterations(int additionalIterations) { this.additionalIterations = additionalIterations; }
 }

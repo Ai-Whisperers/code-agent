@@ -314,6 +314,102 @@ public class WorkspaceContext implements AutoCloseable {
     }
 
     /**
+     * Commits any pending changes as an agent checkpoint and force-pushes the commit to a
+     * single, stable remote ref ({@code refs/heads/agent/checkpoint/<jobId>}).
+     *
+     * <p>Only one remote branch is maintained per job (force-push), so there is no branch
+     * proliferation regardless of how many iterations the agent runs. The returned SHA is
+     * stored in {@code job_checkpoints} and is the canonical reference used to restore the
+     * workspace on restart.
+     *
+     * @param jobId     job ID used to name the checkpoint branch
+     * @param iteration zero-based iteration number (used in the commit message only)
+     * @return the full commit SHA after the commit+push, or the current HEAD SHA if there
+     *         was nothing new to commit
+     * @throws IOException          if a git command fails
+     * @throws InterruptedException if the thread is interrupted
+     */
+    public String commitCheckpoint(String jobId, int iteration)
+            throws IOException, InterruptedException {
+        runGit(5, "add", "-A");
+        String status = runGitOutput(1, "status", "--porcelain");
+        if (!status.isBlank()) {
+            runGit(5, "commit", "-m",
+                    "agent-checkpoint: job " + jobId + " iteration " + (iteration + 1));
+        }
+        String sha = runGitOutput(1, "rev-parse", "HEAD").trim();
+        runGit(5, "push", "-f", "origin",
+                "HEAD:refs/heads/agent/checkpoint/" + jobId);
+        LOG.infof("Checkpointed job %s iteration %d at commit %s", jobId, iteration + 1, sha);
+        return sha;
+    }
+
+    /**
+     * Variant of {@link #commitCheckpoint(String, int)} for multi-repo workspaces where the
+     * agent operates inside a subdirectory identified by {@code repoSlug}.
+     */
+    public String commitCheckpoint(String repoSlug, String jobId, int iteration)
+            throws IOException, InterruptedException {
+        if (repoSlug == null || repoSlug.isBlank()) {
+            return commitCheckpoint(jobId, iteration);
+        }
+        Path repoDir = requireSubdir(repoSlug);
+        runGitInDir(repoDir, 5, "add", "-A");
+        String status = runGitOutputInDir(repoDir, 1, "status", "--porcelain");
+        if (!status.isBlank()) {
+            runGitInDir(repoDir, 5, "commit", "-m",
+                    "agent-checkpoint: job " + jobId + " iteration " + (iteration + 1));
+        }
+        String sha = runGitOutputInDir(repoDir, 1, "rev-parse", "HEAD").trim();
+        runGitInDir(repoDir, 5, "push", "-f", "origin",
+                "HEAD:refs/heads/agent/checkpoint/" + jobId);
+        LOG.infof("Checkpointed job %s (repo %s) iteration %d at commit %s",
+                jobId, repoSlug, iteration + 1, sha);
+        return sha;
+    }
+
+    /**
+     * Checks out a specific commit SHA in detached-HEAD mode so the agent can continue
+     * working from a previously checkpointed state.
+     *
+     * @param sha the commit SHA to check out
+     * @throws IOException          if the git command fails
+     * @throws InterruptedException if the thread is interrupted
+     */
+    public void checkoutCommit(String sha) throws IOException, InterruptedException {
+        runGit(2, "checkout", sha);
+        LOG.infof("Checked out checkpoint commit %s (detached HEAD)", sha);
+    }
+
+    /**
+     * Variant of {@link #checkoutCommit(String)} for multi-repo workspaces.
+     */
+    public void checkoutCommit(String repoSlug, String sha) throws IOException, InterruptedException {
+        if (repoSlug == null || repoSlug.isBlank()) {
+            checkoutCommit(sha);
+            return;
+        }
+        Path repoDir = requireSubdir(repoSlug);
+        runGitInDir(repoDir, 2, "checkout", sha);
+        LOG.infof("Checked out checkpoint commit %s in repo %s (detached HEAD)", sha, repoSlug);
+    }
+
+    /**
+     * Deletes the remote checkpoint branch for the given job, if it exists.
+     * Called on terminal state cleanup.
+     */
+    public void deleteCheckpointBranch(String jobId) {
+        try {
+            runGit(5, "push", "origin", "--delete",
+                    "refs/heads/agent/checkpoint/" + jobId);
+            LOG.infof("Deleted remote checkpoint branch for job %s", jobId);
+        } catch (Exception e) {
+            LOG.warnf("Could not delete checkpoint branch for job %s (non-fatal): %s",
+                    jobId, e.getMessage());
+        }
+    }
+
+    /**
      * Cherry-pick a list of commit SHAs onto the current branch in order.
      * Uses {@code --allow-empty} so identical fixup commits do not abort the promotion.
      *

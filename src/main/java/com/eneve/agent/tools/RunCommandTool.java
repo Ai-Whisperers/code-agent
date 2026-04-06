@@ -28,6 +28,9 @@ public class RunCommandTool implements ToolExecutor {
         return "run_command";
     }
 
+    @Override public boolean isReadOnly()    { return false; }
+    @Override public boolean isDestructive() { return true;  }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String command = (String) input.get("command");

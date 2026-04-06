@@ -37,6 +37,8 @@ public class XrayCreateTestExecutionTool implements ToolExecutor {
         return false;
     }
 
+    @Override public boolean isDestructive() { return true; }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String projectKey = (String) input.get("projectKey");

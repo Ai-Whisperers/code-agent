@@ -10,6 +10,7 @@ import com.eneve.agent.model.CommentChatRequest;
 import com.eneve.agent.model.JobDiffResponse;
 import com.eneve.agent.model.JobStatusResponse;
 import com.eneve.agent.model.RejectRequest;
+import com.eneve.agent.model.RestartJobRequest;
 
 import io.smallrye.common.annotation.Blocking;
 import io.smallrye.mutiny.Multi;
@@ -495,6 +496,38 @@ public class JobsResource {
         try {
             String newJobId = runFixService.rerunJob(jobId);
             return Response.ok(Map.of("status", "queued", "jobId", newJobId, "originalJobId", jobId)).build();
+        } catch (JobNotFoundException e) {
+            return Response.status(404).entity(Map.of("error", e.getMessage())).build();
+        } catch (JobConflictException e) {
+            return Response.status(409).entity(Map.of("error", e.getMessage())).build();
+        }
+    }
+
+    @POST
+    @Path("/{jobId}/restart")
+    @RolesAllowed({"app_developer", "app_admin"})
+    @Operation(
+            operationId = "restartJob",
+            summary = "Restart a failed job from its last checkpoint",
+            description = "Resumes a FAILED job from the last saved checkpoint instead of starting from scratch. "
+                    + "Returns 409 if no checkpoint exists (use /rerun instead)."
+    )
+    @APIResponses({
+            @APIResponse(responseCode = "202", description = "Restart job queued",
+                    content = @Content(schema = @Schema(example =
+                            "{\"status\": \"queued\", \"jobId\": \"...\", \"originalJobId\": \"...\"}"))),
+            @APIResponse(responseCode = "404", description = "Job not found"),
+            @APIResponse(responseCode = "409", description = "Job is not FAILED or has no checkpoint")
+    })
+    public Response restartJob(
+            @Parameter(description = "UUID of the FAILED job to restart", required = true)
+            @PathParam("jobId") String jobId,
+            RestartJobRequest body) {
+        try {
+            int additionalIterations = (body != null) ? body.additionalIterations() : 0;
+            String newJobId = runFixService.restartJob(jobId, additionalIterations);
+            return Response.accepted(
+                    Map.of("status", "queued", "jobId", newJobId, "originalJobId", jobId)).build();
         } catch (JobNotFoundException e) {
             return Response.status(404).entity(Map.of("error", e.getMessage())).build();
         } catch (JobConflictException e) {

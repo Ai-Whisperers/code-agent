@@ -45,6 +45,7 @@ public class RunFixService {
     @Inject AgentRunner agentRunner;
     @Inject JobQueue jobQueue;
     @Inject JobStore jobStore;
+    @Inject com.eneve.agent.agent.store.JobCheckpointStore checkpointStore;
     @Inject JiraService jiraService;
     @Inject AikidoService aikidoService;
     @Inject AuditService auditService;
@@ -452,6 +453,45 @@ public class RunFixService {
         return newJobId;
     }
 
+    /**
+     * Restart a FAILED job from its last saved checkpoint.
+     *
+     * <p>Unlike {@link #rerunJob}, which starts completely from scratch, this method resumes
+     * the agent loop from the iteration and workspace state captured at the last checkpoint.
+     * An optional {@code additionalIterations} value extends the remaining budget beyond the
+     * default ({@code originalCap - checkpointIteration}).
+     *
+     * @param jobId                the ID of the FAILED job to restart
+     * @param additionalIterations extra iterations to add on top of the remaining default budget
+     * @return the new job ID
+     * @throws JobNotFoundException  if the job does not exist
+     * @throws JobConflictException  if the job is not FAILED, has no checkpoint, or its type
+     *                               cannot be restarted
+     */
+    public String restartJob(String jobId, int additionalIterations) {
+        JobRecord job = jobStore.get(jobId)
+                .orElseThrow(() -> new JobNotFoundException("Job not found: " + jobId));
+
+        if (job.getStatus() != JobStatus.FAILED) {
+            throw new JobConflictException(
+                    "Job cannot be restarted. Only FAILED jobs support restart. Current status: "
+                            + job.getStatus());
+        }
+        com.eneve.agent.agent.model.JobCheckpoint checkpoint = checkpointStore.load(jobId)
+                .orElseThrow(() -> new JobConflictException(
+                        "No checkpoint found for job " + jobId + ". Use Rerun to start from scratch."));
+
+        String newJobId = jobQueue.restartJob(job, checkpoint.iteration(), additionalIterations);
+        if (newJobId == null) {
+            throw new JobConflictException("Job type cannot be restarted: " + job.getJobType());
+        }
+        auditService.log("JOBS", "JOB_RESTART", "job", jobId,
+                Map.of("newJobId", newJobId,
+                       "checkpointIteration", checkpoint.iteration(),
+                       "additionalIterations", additionalIterations));
+        return newJobId;
+    }
+
     public Map<String, Object> health() {
         return Map.of(
                 "status", "UP",
@@ -675,8 +715,22 @@ public class RunFixService {
         String bugTypes  = soc2Policy.bugIssueTypes();
         boolean scytaleEnabled = !settings.get("scytale.api.key", "").isBlank();
         List<String> bugList = Arrays.asList(bugTypes.split("\\s*,\\s*"));
+
+        // Populate checkpoint fields for FAILED jobs of restartable types
+        boolean hasCheckpoint = false;
+        int checkpointIteration = 0;
+        int iterationCap = Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50"));
+        if (job.getStatus() == JobStatus.FAILED) {
+            var checkpoint = checkpointStore.load(jobId);
+            if (checkpoint.isPresent()) {
+                hasCheckpoint = true;
+                checkpointIteration = checkpoint.get().iteration();
+            }
+        }
+
         return JobStatusResponse.from(job, jobQueue.getQueuePosition(jobId),
-                criticalDays, highDays, bugList, scytaleEnabled);
+                criticalDays, highDays, bugList, scytaleEnabled,
+                hasCheckpoint, checkpointIteration, iterationCap);
     }
 
 

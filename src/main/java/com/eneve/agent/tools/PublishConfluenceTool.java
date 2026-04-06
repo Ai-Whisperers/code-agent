@@ -28,6 +28,9 @@ public class PublishConfluenceTool implements ToolExecutor {
         return "publish_confluence";
     }
 
+    @Override public boolean isReadOnly()    { return false; }
+    @Override public boolean isDestructive() { return true;  }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         if (!confluenceService.isEnabled()) {

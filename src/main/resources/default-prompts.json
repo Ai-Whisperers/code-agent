@@ -311,5 +311,11 @@
       "DEPENDENCIES",
       "RISK_REFERENCES"
     ]
+  },
+  "context-compaction": {
+    "description": "Prompt sent to Claude when the conversation history is compacted to free context window space. The response replaces older messages with a structured summary so long-running jobs can continue without hitting the context limit.",
+    "placeholders": [
+      "CUSTOM_INSTRUCTIONS"
+    ]
   }
 }

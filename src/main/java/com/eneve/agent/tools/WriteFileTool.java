@@ -21,6 +21,9 @@ public class WriteFileTool implements ToolExecutor {
         return "write_file";
     }
 
+    @Override public boolean isReadOnly()    { return false; }
+    @Override public boolean isDestructive() { return true;  }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String path = (String) input.get("path");

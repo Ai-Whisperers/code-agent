@@ -34,6 +34,8 @@ public class ConfluenceUpdatePageTool implements ToolExecutor {
         return false;
     }
 
+    @Override public boolean isDestructive() { return true; }
+
     @Override
     public String execute(WorkspaceContext workspace, Map<String, Object> input) {
         String pageId = (String) input.get("pageId");
