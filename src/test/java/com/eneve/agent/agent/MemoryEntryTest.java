@@ -1,5 +1,6 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.model.MemoryEntry;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;

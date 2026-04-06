@@ -369,7 +369,12 @@ public class JobStore {
 
     // ── Private helpers ───────────────────────────────────────────────────────
 
+    private static final Set<String> ALLOWED_JOB_TABLES = Set.of("jobs", "job_history");
+
     private Optional<JobRecord> loadFromTable(String table, String jobId) {
+        if (!ALLOWED_JOB_TABLES.contains(table)) {
+            throw new IllegalArgumentException("Invalid table name: " + table);
+        }
         String sql = "SELECT job_id, job_type, status, request_payload, created_at, updated_at,"
                 + " summary, error_message, pr_url, pr_id, files_changed, lines_changed,"
                 + " pr_author, workspace, repo_slug, priority, coverage_data,"
