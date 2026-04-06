@@ -3,10 +3,12 @@ package com.eneve.agent.workspace;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
@@ -28,6 +30,8 @@ public class WorkspaceContext implements AutoCloseable {
     private final Path root;
     private final Map<String, String> metadata = new HashMap<>();
     private final Map<String, Path> clonedRepos = new HashMap<>(); // repoSlug -> subdirectory path
+    // Tracks the mtime at the time each file was last read; used by EditFileTool for staleness checks.
+    private final Map<String, FileTime> fileReadTimestamps = new ConcurrentHashMap<>();
     private boolean planManaged;
     private boolean keepOnClose;
     private String userId;
@@ -659,6 +663,29 @@ public class WorkspaceContext implements AutoCloseable {
             throw new IOException("Git command failed (exit " + proc.exitValue() + "): " + output);
         }
         return output;
+    }
+
+    /**
+     * Records the current last-modified time for {@code absolutePath}.
+     * Called by {@code ReadFileTool} after each successful file read so that
+     * {@code EditFileTool} can detect concurrent modifications (staleness check).
+     */
+    public void recordFileRead(Path absolutePath) {
+        try {
+            FileTime mtime = Files.getLastModifiedTime(absolutePath);
+            fileReadTimestamps.put(absolutePath.toString(), mtime);
+        } catch (IOException ignored) {
+            // Non-fatal: if we can't stat the file the staleness check will simply
+            // treat it as unread, causing EditFileTool to ask for a re-read.
+        }
+    }
+
+    /**
+     * Returns the {@link FileTime} recorded when this file was last read via
+     * {@code read_file}, or {@code null} if it has never been read in this workspace session.
+     */
+    public FileTime getFileReadTime(Path absolutePath) {
+        return fileReadTimestamps.get(absolutePath.toString());
     }
 
     /**

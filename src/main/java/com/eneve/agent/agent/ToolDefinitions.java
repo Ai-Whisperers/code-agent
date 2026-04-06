@@ -72,8 +72,10 @@ public final class ToolDefinitions {
         return List.of(
                 ToolUnion.ofTool(WorkspaceToolSchemas.readFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.writeFile()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.editFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.runCommand()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.listFiles()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.globFiles()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.fetchUrl()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.lookupCustomerContext())
@@ -88,6 +90,7 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.runCommand()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.listFiles()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.globFiles()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.fetchUrl()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.searchKnowledgeBase()),
                 ToolUnion.ofTool(KnowledgeToolSchemas.lookupCustomerContext()),
@@ -99,7 +102,9 @@ public final class ToolDefinitions {
         return List.of(
                 ToolUnion.ofTool(WorkspaceToolSchemas.readFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.writeFile()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.editFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.listFiles()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.globFiles()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.searchCode()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
@@ -254,10 +259,12 @@ public final class ToolDefinitions {
         return List.of(
                 ToolUnion.ofTool(WorkspaceToolSchemas.readFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.writeFile()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.editFile()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.searchCode()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.semanticSearch()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.queryCodeGraph()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.listFiles()),
+                ToolUnion.ofTool(WorkspaceToolSchemas.globFiles()),
                 ToolUnion.ofTool(WorkspaceToolSchemas.runCommand()),
                 ToolUnion.ofTool(AwsToolSchemas.awsCloudWatchLogs()),
                 ToolUnion.ofTool(SelfAnalysisToolSchemas.readDb())

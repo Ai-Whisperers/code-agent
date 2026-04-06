@@ -36,7 +36,9 @@ public class ReadFileTool implements ToolExecutor {
             if (Files.isDirectory(resolved)) {
                 return "ERROR: Path is a directory, not a file: " + path;
             }
-            return Files.readString(resolved);
+            String content = Files.readString(resolved);
+            workspace.recordFileRead(resolved);
+            return content;
         } catch (SecurityException e) {
             return "ERROR: " + e.getMessage();
         } catch (IOException e) {

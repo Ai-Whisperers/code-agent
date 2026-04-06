@@ -180,6 +180,64 @@ public final class WorkspaceToolSchemas {
                 .build();
     }
 
+    public static Tool globFiles() {
+        return Tool.builder()
+                .name("glob_files")
+                .description("Find files in the repository by name pattern using glob syntax. "
+                        + "Returns matching file paths sorted by last-modified time (most recent first), "
+                        + "capped at 100 results. "
+                        + "Use this when you need to find files by name or extension rather than by content. "
+                        + "Examples: '**/*.java' finds all Java files, 'src/**/*.ts' finds TypeScript files under src/.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("pattern", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Glob pattern to match against file paths, e.g. '**/*.java', 'src/**/*.ts', '**/test/**'"
+                                )))
+                                .putAdditionalProperty("path", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Directory to search in (default: repository root)"
+                                )))
+                                .build())
+                        .addRequired("pattern")
+                        .build())
+                .build();
+    }
+
+    public static Tool editFile() {
+        return Tool.builder()
+                .name("edit_file")
+                .description("Apply a targeted string-replacement edit to a file in the repository. "
+                        + "Safer and more token-efficient than write_file for partial changes. "
+                        + "You MUST call read_file on the target file before using this tool. "
+                        + "The edit will fail if old_string is not found, or if it matches more than once and replace_all is false. "
+                        + "To create a new file, set old_string to an empty string and the file must not already exist.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("file_path", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Relative path to the file from the repository root"
+                                )))
+                                .putAdditionalProperty("old_string", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The exact text to replace. Use empty string to create a new file."
+                                )))
+                                .putAdditionalProperty("new_string", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "The text to replace old_string with. Must differ from old_string."
+                                )))
+                                .putAdditionalProperty("replace_all", JsonValue.from(Map.of(
+                                        "type", "boolean",
+                                        "description", "If true, replace all occurrences of old_string. If false (default), exactly one occurrence must exist."
+                                )))
+                                .build())
+                        .addRequired("file_path")
+                        .addRequired("old_string")
+                        .addRequired("new_string")
+                        .build())
+                .build();
+    }
+
     public static Tool fetchUrl() {
         return Tool.builder()
                 .name("fetch_url")
