@@ -129,7 +129,8 @@ public class LearningExtractor {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    prompt, null));
+                    prompt, null,
+                    null, 0));
             LOG.warnf("Learning extraction failed: %s", e.getMessage());
             return Optional.empty();
         }
@@ -152,7 +153,8 @@ public class LearningExtractor {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                prompt, responseText.isBlank() ? null : responseText));
+                prompt, responseText.isBlank() ? null : responseText,
+                null, 0));
 
         LOG.debugf("Learning extraction response: '%s'", responseText);
 

@@ -132,7 +132,9 @@ public class GenerateArchitectureHandler implements JobHandler {
                                 + "Explore the codebase, then write docs/architecture.dsl.",
                         maxIterations,
                         job.getJobId(),
-                        job.getJobType().name());
+                        job.getJobType().name(),
+                        job.getParentJobId(),
+                        job.getDepth());
             } catch (Exception e) {
                 failJob(job, "Agent loop error: " + e.getMessage());
                 return;

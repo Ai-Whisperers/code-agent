@@ -331,7 +331,7 @@ public class LogAnalysisService {
             aiCallStore.save(new AiCallRecord(
                     null, null, "LOG_ANALYSIS_TRIAGE", modelName, null,
                     0, 0, 0, 0, null, null, durationMs,
-                    true, e.getMessage(), Instant.now(), prompt, null));
+                    true, e.getMessage(), Instant.now(), prompt, null, null, 0));
             LOG.warnf("LogAnalysisService: Haiku triage call failed: %s", e.getMessage());
             return null;
         }
@@ -353,7 +353,7 @@ public class LogAnalysisService {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now(), prompt, responseText));
+                false, null, Instant.now(), prompt, responseText, null, 0));
 
         return parseTriageResponse(responseText);
     }
@@ -462,7 +462,7 @@ public class LogAnalysisService {
             aiCallStore.save(new AiCallRecord(
                     null, null, "LOG_ANALYSIS_DEEP", modelName, null,
                     0, 0, 0, 0, null, null, durationMs,
-                    true, e.getMessage(), Instant.now(), prompt, null));
+                    true, e.getMessage(), Instant.now(), prompt, null, null, 0));
             LOG.warnf("LogAnalysisService: deep analysis call failed for finding %d: %s", findingId, e.getMessage());
             return null;
         }
@@ -484,7 +484,7 @@ public class LogAnalysisService {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now(), prompt, analysisText));
+                false, null, Instant.now(), prompt, analysisText, null, 0));
 
         if (analysisText != null && !analysisText.isBlank()) {
             findingsStore.saveDeepAnalysis(findingId, analysisText);

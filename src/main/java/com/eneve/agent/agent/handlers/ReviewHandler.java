@@ -311,7 +311,8 @@ public class ReviewHandler implements JobHandler {
                         "Please review the pull request diff provided in the system prompt. "
                                 + "Use the read_file and list_files tools to examine surrounding context "
                                 + "when needed. Provide your complete review as the specified JSON structure.",
-                        job.getJobId(), job.getJobType().name());
+                        job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failReview(job, "Agent review loop error: " + e.getMessage());
                 return;

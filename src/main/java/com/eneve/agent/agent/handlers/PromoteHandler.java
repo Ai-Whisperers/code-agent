@@ -232,6 +232,8 @@ public class PromoteHandler implements JobHandler {
             String reviewJobId = UUID.randomUUID().toString();
             JobRecord reviewJob = new JobRecord(reviewJobId, reviewRequest);
             reviewJob.setAikidoIssueId(request.aikidoIssueId());
+            reviewJob.setParentJobId(promoteJob.getJobId());
+            reviewJob.setDepth(promoteJob.getDepth() + 1);
             jobStore.put(reviewJob);
 
             if (jobQueue.submit(reviewJob)) {

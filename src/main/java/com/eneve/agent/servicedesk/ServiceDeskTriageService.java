@@ -121,7 +121,7 @@ public class ServiceDeskTriageService {
             aiCallStore.save(new AiCallRecord(
                     null, null, "SERVICE_DESK_TRIAGE", modelName, null,
                     0, 0, 0, 0, null, null, durationMs,
-                    true, e.getMessage(), Instant.now(), prompt, null));
+                    true, e.getMessage(), Instant.now(), prompt, null, null, 0));
             LOG.warnf("ServiceDeskTriageService: Haiku triage call failed for %s: %s",
                     request.issueKey(), e.getMessage());
             return null;
@@ -137,7 +137,7 @@ public class ServiceDeskTriageService {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now(), prompt, responseText));
+                false, null, Instant.now(), prompt, responseText, null, 0));
 
         return parseTriageResponse(responseText);
     }
@@ -212,7 +212,8 @@ public class ServiceDeskTriageService {
             aiCallStore.save(new AiCallRecord(
                     null, null, "SERVICE_DESK_DEEP_ANALYSIS", modelName, null,
                     0, 0, 0, 0, null, null, durationMs,
-                    true, e.getMessage(), Instant.now(), prompt, null));
+                    true, e.getMessage(), Instant.now(), prompt, null,
+                    null, 0));
             LOG.warnf("ServiceDeskTriageService: deep analysis call failed for %s: %s",
                     request.issueKey(), e.getMessage());
             return;
@@ -228,7 +229,8 @@ public class ServiceDeskTriageService {
                 usage.cacheCreationInputTokens().orElse(0L),
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
-                false, null, Instant.now(), prompt, analysisText));
+                false, null, Instant.now(), prompt, analysisText,
+                null, 0));
 
         if (analysisText != null && !analysisText.isBlank()) {
             findingsStore.saveDeepAnalysis(findingId, analysisText, similarKeys);

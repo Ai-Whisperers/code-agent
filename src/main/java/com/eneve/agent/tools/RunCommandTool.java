@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.eneve.agent.settings.SettingsService;
+import com.eneve.agent.tools.ShellCommandValidator.ValidationResult;
 import com.eneve.agent.util.ProcessHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 
@@ -19,6 +20,9 @@ public class RunCommandTool implements ToolExecutor {
 
     @Inject
     GuardrailConfig guardrails;
+
+    @Inject
+    ShellCommandValidator validator;
 
     @Inject
     SettingsService settings;
@@ -38,8 +42,9 @@ public class RunCommandTool implements ToolExecutor {
             return "ERROR: 'command' parameter is required";
         }
 
-        if (!isAllowed(command)) {
-            return "ERROR: Command not allowed. Allowed prefixes: " + guardrails.getAllowedCommands();
+        ValidationResult validation = validator.validate(command, guardrails.getAllowedCommands());
+        if (!validation.allowed()) {
+            return "ERROR: Command blocked [" + validation.ruleId() + "]: " + validation.message();
         }
 
         try {
@@ -75,9 +80,4 @@ public class RunCommandTool implements ToolExecutor {
         }
     }
 
-    private boolean isAllowed(String command) {
-        String trimmed = command.trim();
-        return guardrails.getAllowedCommands().stream()
-                .anyMatch(allowed -> trimmed.startsWith(allowed));
-    }
 }

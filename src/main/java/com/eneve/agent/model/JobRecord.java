@@ -46,6 +46,10 @@ public class JobRecord {
     private volatile int restartIteration;
     private volatile int additionalIterations;
 
+    // Call-tree tracing — links child jobs back to the job that spawned them
+    private volatile String parentJobId;
+    private volatile int depth;
+
     private JobRecord(String jobId, JobPayload payload, JobType jobType) {
         this.jobId = jobId;
         this.payload = payload;
@@ -255,4 +259,10 @@ public class JobRecord {
     /** Extra iterations granted by the user when restarting (added on top of remaining budget). */
     public int getAdditionalIterations() { return additionalIterations; }
     public void setAdditionalIterations(int additionalIterations) { this.additionalIterations = additionalIterations; }
+
+    public String getParentJobId() { return parentJobId; }
+    public void setParentJobId(String parentJobId) { this.parentJobId = parentJobId; }
+
+    public int getDepth() { return depth; }
+    public void setDepth(int depth) { this.depth = depth; }
 }

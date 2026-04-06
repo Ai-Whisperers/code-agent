@@ -207,7 +207,8 @@ public class PlannerService {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    prompt, null));
+                    prompt, null,
+                    null, 0));
             LOG.errorf("PlannerService Claude call failed: %s", e.getMessage());
             return null;
         }
@@ -230,7 +231,8 @@ public class PlannerService {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                prompt, responseText));
+                prompt, responseText,
+                null, 0));
 
         LOG.infof("Plan generated — tokens: in=%d, out=%d, duration=%dms",
                 usage.inputTokens(), usage.outputTokens(), durationMs);

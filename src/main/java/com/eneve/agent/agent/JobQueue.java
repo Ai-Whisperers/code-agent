@@ -400,6 +400,8 @@ public class JobQueue {
         newJob.setWorkspace(original.getWorkspace());
         newJob.setRepoSlug(original.getRepoSlug());
         newJob.setPriority(original.getPriority());
+        newJob.setParentJobId(original.getJobId());
+        newJob.setDepth(original.getDepth() + 1);
         jobStore.put(newJob);
         submit(newJob);
         LOG.infof("Job %s (%s) rerun as new job %s", original.getJobId(), original.getJobType(), newJobId);
@@ -464,6 +466,8 @@ public class JobQueue {
         newJob.setRestartFromJobId(original.getJobId());
         newJob.setRestartIteration(checkpointIteration);
         newJob.setAdditionalIterations(additionalIterations);
+        newJob.setParentJobId(original.getJobId());
+        newJob.setDepth(original.getDepth() + 1);
 
         jobStore.put(newJob);
         submit(newJob);

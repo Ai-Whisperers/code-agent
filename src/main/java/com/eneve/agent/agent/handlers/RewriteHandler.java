@@ -143,7 +143,8 @@ public class RewriteHandler implements JobHandler {
                         ToolDefinitions.all(), request.prompt() != null ? request.prompt()
                                 : "Complete the rewrite step described in the system prompt. "
                                 + "Read from source/, write to target/.",
-                        job.getJobId(), JobType.REWRITE.name());
+                        job.getJobId(), JobType.REWRITE.name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failFix(job, "Agent loop error: " + e.getMessage());
                 return;

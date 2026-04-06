@@ -116,7 +116,8 @@ public class IntentClassifier {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    prompt, null));
+                    prompt, null,
+                    null, 0));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -138,7 +139,8 @@ public class IntentClassifier {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                prompt, responseText.isBlank() ? null : responseText));
+                prompt, responseText.isBlank() ? null : responseText,
+                null, 0));
 
         LOG.infof("Intent classification response: '%s'", responseText);
 

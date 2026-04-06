@@ -204,7 +204,8 @@ public class PrSummaryGenerator {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    prompt, null));
+                    prompt, null,
+                    null, 0));
             LOG.errorf("PR summary Claude call failed: %s", e.getMessage());
             return null;
         }
@@ -227,7 +228,8 @@ public class PrSummaryGenerator {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                prompt, responseText));
+                prompt, responseText,
+                null, 0));
         LOG.infof("PR summary generated — tokens: in=%d, out=%d, duration=%dms",
                 usage.inputTokens(), usage.outputTokens(), durationMs);
 

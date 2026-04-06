@@ -102,7 +102,8 @@ public class ReplyHandler implements JobHandler {
                         ToolDefinitions.readOnly(),
                         "A developer has replied to your review comment. "
                                 + "Please read the conversation and respond helpfully.",
-                        job.getJobId(), job.getJobType().name());
+                        job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failReply(job, "Agent reply loop error: " + e.getMessage());
                 return;

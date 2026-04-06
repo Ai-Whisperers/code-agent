@@ -159,7 +159,8 @@ public class GenerateTestsHandler implements JobHandler {
             String summary;
             try {
                 summary = toolUseLoop.run(systemPrompt, workspace,
-                        generateTestsMaxIterations, job.getJobId(), job.getJobType().name());
+                        generateTestsMaxIterations, job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failGenerateTests(job, "Agent loop error: " + e.getMessage());
                 return;

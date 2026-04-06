@@ -110,7 +110,8 @@ public class FixCommentHandler implements JobHandler {
                         ToolDefinitions.all(),
                         "A developer has requested that you implement the fix from your review comment. "
                                 + "Read the relevant code, apply the fix, and run tests.",
-                        job.getJobId(), job.getJobType().name());
+                        job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failFixComment(job, request, "Agent fix loop error: " + e.getMessage());
                 return;
@@ -246,6 +247,8 @@ public class FixCommentHandler implements JobHandler {
 
             String reviewJobId = UUID.randomUUID().toString();
             JobRecord reviewJob = new JobRecord(reviewJobId, reviewRequest);
+            reviewJob.setParentJobId(fixJob.getJobId());
+            reviewJob.setDepth(fixJob.getDepth() + 1);
             jobStore.put(reviewJob);
 
             if (jobQueue.submit(reviewJob)) {

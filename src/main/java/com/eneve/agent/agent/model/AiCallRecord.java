@@ -19,5 +19,7 @@ public record AiCallRecord(
         String errorMessage,
         Instant createdAt,
         String promptText,
-        String responseText
+        String responseText,
+        String parentJobId,
+        int depth
 ) {}

@@ -113,7 +113,15 @@ public class ClaudeToolUseLoop {
                       List<ToolUnion> tools, String initialUserMessage,
                       String jobId, String jobType) {
         return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType,
-                Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")));
+                Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")), null, 0);
+    }
+
+    /** Variant of {@link #run} that carries call-tree tracing metadata. */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      List<ToolUnion> tools, String initialUserMessage,
+                      String jobId, String jobType, String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType,
+                Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")), parentJobId, depth);
     }
 
     /**
@@ -123,7 +131,17 @@ public class ClaudeToolUseLoop {
     public String run(String systemPrompt, WorkspaceContext workspace,
                       List<ToolUnion> tools, String initialUserMessage,
                       int maxIterationsOverride, String jobId, String jobType) {
-        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType, maxIterationsOverride);
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType,
+                maxIterationsOverride, null, 0);
+    }
+
+    /** Variant of {@link #run} that carries call-tree tracing metadata. */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      List<ToolUnion> tools, String initialUserMessage,
+                      int maxIterationsOverride, String jobId, String jobType,
+                      String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, tools, initialUserMessage, jobId, jobType,
+                maxIterationsOverride, parentJobId, depth);
     }
 
     /**
@@ -134,7 +152,18 @@ public class ClaudeToolUseLoop {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(),
                 "Please complete the task described in the system prompt. "
                         + "Start by listing the repository structure, then proceed.",
-                jobId, jobType, Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")));
+                jobId, jobType, Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")),
+                null, 0);
+    }
+
+    /** Variant of {@link #run} that carries call-tree tracing metadata. */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      String jobId, String jobType, String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(),
+                "Please complete the task described in the system prompt. "
+                        + "Start by listing the repository structure, then proceed.",
+                jobId, jobType, Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50")),
+                parentJobId, depth);
     }
 
     /**
@@ -146,7 +175,17 @@ public class ClaudeToolUseLoop {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(),
                 "Please complete the task described in the system prompt. "
                         + "Start by listing the repository structure, then proceed.",
-                jobId, jobType, maxIterationsOverride);
+                jobId, jobType, maxIterationsOverride, null, 0);
+    }
+
+    /** Variant of {@link #run} that carries call-tree tracing metadata. */
+    public String run(String systemPrompt, WorkspaceContext workspace,
+                      int maxIterationsOverride, String jobId, String jobType,
+                      String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(),
+                "Please complete the task described in the system prompt. "
+                        + "Start by listing the repository structure, then proceed.",
+                jobId, jobType, maxIterationsOverride, parentJobId, depth);
     }
 
     /**
@@ -168,7 +207,17 @@ public class ClaudeToolUseLoop {
                          List<MessageParam> priorMessages, int startIteration,
                          int remainingCap, String jobId, String jobType) {
         return doRun(systemPrompt, workspace, tools, priorMessages, jobId, jobType,
-                startIteration, remainingCap);
+                startIteration, remainingCap, null, 0);
+    }
+
+    /** Variant of {@link #resume} that carries call-tree tracing metadata. */
+    public String resume(String systemPrompt, WorkspaceContext workspace,
+                         List<ToolUnion> tools,
+                         List<MessageParam> priorMessages, int startIteration,
+                         int remainingCap, String jobId, String jobType,
+                         String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, tools, priorMessages, jobId, jobType,
+                startIteration, remainingCap, parentJobId, depth);
     }
 
     /** Overload of {@link #resume} using the default tool set. */
@@ -176,23 +225,35 @@ public class ClaudeToolUseLoop {
                          List<MessageParam> priorMessages, int startIteration,
                          int remainingCap, String jobId, String jobType) {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(), priorMessages,
-                jobId, jobType, startIteration, remainingCap);
+                jobId, jobType, startIteration, remainingCap, null, 0);
+    }
+
+    /** Overload of {@link #resume} using the default tool set with call-tree tracing metadata. */
+    public String resume(String systemPrompt, WorkspaceContext workspace,
+                         List<MessageParam> priorMessages, int startIteration,
+                         int remainingCap, String jobId, String jobType,
+                         String parentJobId, int depth) {
+        return doRun(systemPrompt, workspace, ToolDefinitions.all(), priorMessages,
+                jobId, jobType, startIteration, remainingCap, parentJobId, depth);
     }
 
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, String initialUserMessage,
-                         String jobId, String jobType, int iterationCap) {
+                         String jobId, String jobType, int iterationCap,
+                         String parentJobId, int depth) {
         List<MessageParam> initialMessages = new ArrayList<>();
         initialMessages.add(MessageParam.builder()
                 .role(MessageParam.Role.USER)
                 .content(initialUserMessage)
                 .build());
-        return doRun(systemPrompt, workspace, tools, initialMessages, jobId, jobType, 0, iterationCap);
+        return doRun(systemPrompt, workspace, tools, initialMessages, jobId, jobType,
+                0, iterationCap, parentJobId, depth);
     }
 
     private String doRun(String systemPrompt, WorkspaceContext workspace,
                          List<ToolUnion> tools, List<MessageParam> initialMessages,
-                         String jobId, String jobType, int startIteration, int iterationCap) {
+                         String jobId, String jobType, int startIteration, int iterationCap,
+                         String parentJobId, int depth) {
         String modelName = settings.get(
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
@@ -230,7 +291,8 @@ public class ClaudeToolUseLoop {
                         0, 0, 0, 0,
                         null, null, durationMs,
                         true, e.getMessage(), Instant.now(),
-                        messages.isEmpty() ? null : contentToText(messages.get(messages.size() - 1)), null));
+                        messages.isEmpty() ? null : contentToText(messages.get(messages.size() - 1)), null,
+                        parentJobId, depth));
                 throw e;
             }
             long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -335,7 +397,8 @@ public class ClaudeToolUseLoop {
                     stopReason, toolNamesCsv, durationMs,
                     false, null, Instant.now(),
                     messages.isEmpty() ? null : contentToText(messages.get(messages.size() - 1)),
-                    responseTextLog.isBlank() ? null : responseTextLog));
+                    responseTextLog.isBlank() ? null : responseTextLog,
+                    parentJobId, depth));
 
             messages.add(MessageParam.builder()
                     .role(MessageParam.Role.ASSISTANT)
@@ -436,7 +499,8 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .contentOfBlockParams(userContentBlocks)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink);
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+                null, 0);
         return messages;
     }
 
@@ -460,7 +524,8 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .content(initialUserMessage)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink);
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+                null, 0);
         return messages;
     }
 
@@ -473,13 +538,15 @@ public class ClaudeToolUseLoop {
                 .role(MessageParam.Role.USER)
                 .content(initialUserMessage)
                 .build());
-        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink);
+        doRunStreaming(systemPrompt, workspace, tools, messages, jobId, jobType, iterationCap, eventSink,
+                null, 0);
     }
 
     private void doRunStreaming(String systemPrompt, WorkspaceContext workspace,
                                 List<ToolUnion> tools, List<MessageParam> messages,
                                 String jobId, String jobType, int iterationCap,
-                                Consumer<ChatEvent> eventSink) {
+                                Consumer<ChatEvent> eventSink,
+                                String parentJobId, int depth) {
         String modelName = settings.get(
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
@@ -692,7 +759,8 @@ public class ClaudeToolUseLoop {
                         usage.cacheReadInputTokens().orElse(0L),
                         stopReason, toolNamesCsv, durationMs,
                         false, null, Instant.now(),
-                        null, null));
+                        null, null,
+                        parentJobId, depth));
 
                 messages.add(MessageParam.builder()
                         .role(MessageParam.Role.ASSISTANT)

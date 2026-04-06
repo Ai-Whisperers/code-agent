@@ -85,6 +85,8 @@ public class RequestFixTool implements ToolExecutor {
 
         String fixCommentJobId = UUID.randomUUID().toString();
         JobRecord fixCommentJob = new JobRecord(fixCommentJobId, replyRequest, JobType.FIX_COMMENT);
+        fixCommentJob.setParentJobId(job.getJobId());
+        fixCommentJob.setDepth(job.getDepth() + 1);
         jobStore.put(fixCommentJob);
 
         if (!jobQueue.submit(fixCommentJob)) {

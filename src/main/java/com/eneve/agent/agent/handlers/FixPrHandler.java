@@ -151,7 +151,8 @@ public class FixPrHandler implements JobHandler {
             String summary;
             try {
                 summary = toolUseLoop.run(systemPrompt, workspace,
-                        job.getJobId(), job.getJobType().name());
+                        job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failFixPr(job, "Agent loop error: " + e.getMessage());
                 return;

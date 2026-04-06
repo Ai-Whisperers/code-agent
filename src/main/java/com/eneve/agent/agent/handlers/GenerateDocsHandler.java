@@ -127,7 +127,8 @@ public class GenerateDocsHandler implements JobHandler {
                 summary = toolUseLoop.run(systemPrompt, workspace, tools,
                         "Please generate comprehensive documentation for this repository. "
                                 + "Start by exploring the project structure, then create all doc files.",
-                        generateDocsMaxIterations, job.getJobId(), job.getJobType().name());
+                        generateDocsMaxIterations, job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failGenerateDocs(job, "Agent loop error: " + e.getMessage());
                 return;

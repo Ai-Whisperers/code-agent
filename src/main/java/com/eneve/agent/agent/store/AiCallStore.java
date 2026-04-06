@@ -35,8 +35,8 @@ public class AiCallStore {
                     (job_id, job_type, model, iteration,
                      input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
                      stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
-                     prompt_text, response_text)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     prompt_text, response_text, parent_job_id, depth)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """;
         try (Connection conn = dataSource.getConnection();
              PreparedStatement ps = conn.prepareStatement(sql)) {
@@ -60,6 +60,8 @@ public class AiCallStore {
             ps.setTimestamp(14, Timestamp.from(record.createdAt() != null ? record.createdAt() : Instant.now()));
             setNullableString(ps, 15, record.promptText());
             setNullableString(ps, 16, record.responseText());
+            setNullableString(ps, 17, record.parentJobId());
+            ps.setInt(18, record.depth());
             ps.executeUpdate();
         } catch (SQLException e) {
             LOG.errorf("Failed to store AI call record: %s", e.getMessage());
@@ -71,7 +73,7 @@ public class AiCallStore {
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
                        stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
-                       prompt_text, response_text
+                       prompt_text, response_text, parent_job_id, depth
                 FROM ai_calls WHERE job_id = ?
                 ORDER BY iteration ASC NULLS FIRST, created_at ASC
                 """;
@@ -90,13 +92,49 @@ public class AiCallStore {
         return results;
     }
 
+    /**
+     * Returns all AI calls belonging to the given root job and every descendant job
+     * in the parent_job_id hierarchy, ordered by depth then creation time.
+     */
+    public List<AiCallRecord> findCallTree(String rootJobId) {
+        String sql = """
+                WITH RECURSIVE job_tree AS (
+                    SELECT job_id, parent_job_id, depth FROM jobs WHERE job_id = ?
+                    UNION ALL
+                    SELECT j.job_id, j.parent_job_id, j.depth
+                    FROM jobs j
+                    JOIN job_tree jt ON j.parent_job_id = jt.job_id
+                )
+                SELECT ac.id, ac.job_id, ac.job_type, ac.model, ac.iteration,
+                       ac.input_tokens, ac.output_tokens, ac.cache_creation_input_tokens, ac.cache_read_input_tokens,
+                       ac.stop_reason, ac.tool_names, ac.duration_ms, ac.is_error, ac.error_message, ac.created_at,
+                       ac.prompt_text, ac.response_text, ac.parent_job_id, ac.depth
+                FROM ai_calls ac
+                JOIN job_tree jt ON ac.job_id = jt.job_id
+                ORDER BY jt.depth ASC, ac.created_at ASC
+                """;
+        List<AiCallRecord> results = new ArrayList<>();
+        try (Connection conn = dataSource.getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setString(1, rootJobId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    results.add(mapRow(rs));
+                }
+            }
+        } catch (SQLException e) {
+            LOG.errorf("Failed to query call tree for rootJobId %s: %s", rootJobId, e.getMessage());
+        }
+        return results;
+    }
+
     public List<AiCallRecord> getRecentCalls(int limit, int offset, String jobType,
                                               Instant from, Instant to) {
         StringBuilder sql = new StringBuilder("""
                 SELECT id, job_id, job_type, model, iteration,
                        input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens,
                        stop_reason, tool_names, duration_ms, is_error, error_message, created_at,
-                       NULL AS prompt_text, NULL AS response_text
+                       NULL AS prompt_text, NULL AS response_text, parent_job_id, depth
                 FROM ai_calls WHERE 1=1
                 """);
         List<Object> params = new ArrayList<>();
@@ -397,7 +435,9 @@ public class AiCallStore {
                 rs.getString("error_message"),
                 ts != null ? ts.toInstant() : null,
                 rs.getString("prompt_text"),
-                rs.getString("response_text")
+                rs.getString("response_text"),
+                rs.getString("parent_job_id"),
+                rs.getInt("depth")
         );
     }
 

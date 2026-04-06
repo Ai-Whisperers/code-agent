@@ -366,7 +366,7 @@ public class QaTestPlanService {
                     usage.cacheReadInputTokens().orElse(0L),
                     stopReason, null, durationMs,
                     truncated, truncated ? "Response truncated by max_tokens limit" : null,
-                    Instant.now(), prompt, responseText));
+                    Instant.now(), prompt, responseText, null, 0));
             savedToStore = true;
 
             if (truncated) {
@@ -384,7 +384,7 @@ public class QaTestPlanService {
                 aiCallStore.save(new AiCallRecord(
                         null, jobId, jobType, modelName, null,
                         0, 0, 0, 0, null, null, durationMs,
-                        true, e.getMessage(), Instant.now(), prompt, null));
+                        true, e.getMessage(), Instant.now(), prompt, null, null, 0));
             }
             if (e instanceof RuntimeException re) throw re;
             throw new RuntimeException("Claude call failed [" + contextId + "]: " + e.getMessage(), e);

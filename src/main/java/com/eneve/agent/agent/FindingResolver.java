@@ -174,7 +174,8 @@ public class FindingResolver {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                promptText, batchResponseText));
+                promptText, batchResponseText,
+                null, 0));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
         LOG.infof("Batch resolution: %d findings checked in %dms (tokens: in=%d out=%d)",
@@ -275,7 +276,8 @@ public class FindingResolver {
                     0, 0, 0, 0,
                     null, null, durationMs,
                     true, e.getMessage(), Instant.now(),
-                    prompt, null));
+                    prompt, null,
+                    null, 0));
             throw e;
         }
         long durationMs = (System.nanoTime() - startNs) / 1_000_000;
@@ -297,7 +299,8 @@ public class FindingResolver {
                 usage.cacheReadInputTokens().orElse(0L),
                 stopReason, null, durationMs,
                 false, null, Instant.now(),
-                prompt, responseText.isBlank() ? null : responseText));
+                prompt, responseText.isBlank() ? null : responseText,
+                null, 0));
         tokenBudgetTracker.recordUsage(usage.inputTokens(), usage.outputTokens());
 
         return responseText.toUpperCase(Locale.ROOT).contains("YES");

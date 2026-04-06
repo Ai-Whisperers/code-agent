@@ -91,7 +91,8 @@ public class BuildAndLintHelper {
                         "AGENT_DIFF", diff));
 
                 try {
-                    toolUseLoop.run(retryPrompt, workspace, 30, jobId, jobType);
+                    toolUseLoop.run(retryPrompt, workspace, 30, jobId, jobType,
+                            job.getParentJobId(), job.getDepth());
                 } catch (Exception agentEx) {
                     LOG.warnf("Agent fix loop error during build retry (attempt %d): %s", attempts, agentEx.getMessage());
                     return false;
@@ -128,7 +129,8 @@ public class BuildAndLintHelper {
             if (lintIter < maxLintFixes - 1) {
                 String fixPrompt = linterService.buildFixPrompt(newIssues);
                 try {
-                    toolUseLoop.run(fixPrompt, workspace, job.getJobId(), job.getJobType().name());
+                    toolUseLoop.run(fixPrompt, workspace, job.getJobId(), job.getJobType().name(),
+                            job.getParentJobId(), job.getDepth());
                 } catch (Exception e) {
                     LOG.warnf("Linter fix loop error (non-fatal): %s", e.getMessage());
                     return new LinterFixResult(true, lastResults);
@@ -191,7 +193,8 @@ public class BuildAndLintHelper {
                 diff.lines().filter(l -> l.startsWith("diff --git ")).count());
         try {
             toolUseLoop.run(reviewPrompt, workspace, selfReviewMaxIterations(),
-                    job.getJobId(), job.getJobType().name());
+                    job.getJobId(), job.getJobType().name(),
+                    job.getParentJobId(), job.getDepth());
         } catch (Exception e) {
             LOG.warnf("Self-review loop error (non-fatal): %s", e.getMessage());
         }

@@ -144,6 +144,8 @@ public class SelfAnalysisTrigger {
         );
 
         JobRecord selfAnalysisJob = new JobRecord(UUID.randomUUID().toString(), request);
+        selfAnalysisJob.setParentJobId(failedJobId);
+        selfAnalysisJob.setDepth(failedJob.getDepth() + 1);
         jobQueue.submit(selfAnalysisJob);
 
         LOG.infof("Self-analysis job %s submitted for failed job %s (product: %s, jira: %s)",

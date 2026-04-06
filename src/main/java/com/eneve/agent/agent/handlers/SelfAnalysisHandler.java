@@ -120,7 +120,8 @@ public class SelfAnalysisHandler implements JobHandler {
             // Run agent loop
             String summary;
             try {
-                summary = toolUseLoop.run(prompt, workspace, job.getJobId(), job.getJobType().name());
+                summary = toolUseLoop.run(prompt, workspace, job.getJobId(), job.getJobType().name(),
+                        job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 fail(job, "Agent loop error: " + e.getMessage());
                 return;

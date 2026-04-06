@@ -555,7 +555,7 @@ public class QaTestCaseService {
                     usage.cacheCreationInputTokens().orElse(0L),
                     usage.cacheReadInputTokens().orElse(0L),
                     stopReason, null, durationMs,
-                    false, null, Instant.now(), prompt, responseText));
+                    false, null, Instant.now(), prompt, responseText, null, 0));
 
             return responseText;
         } catch (Exception e) {
@@ -564,7 +564,7 @@ public class QaTestCaseService {
             aiCallStore.save(new AiCallRecord(
                     null, jobId, "QA_TESTCASE_GENERATION", modelName, null,
                     0, 0, 0, 0, null, null, durationMs,
-                    true, e.getMessage(), Instant.now(), prompt, null));
+                    true, e.getMessage(), Instant.now(), prompt, null, null, 0));
             return null;
         }
     }

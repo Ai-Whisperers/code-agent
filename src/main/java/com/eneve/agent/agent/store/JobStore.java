@@ -56,8 +56,9 @@ public class JobStore {
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
                      pr_author, workspace, repo_slug, priority, coverage_data,
                      aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                     restart_from_job_id, restart_iteration, additional_iterations)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?)
+                     restart_from_job_id, restart_iteration, additional_iterations,
+                     parent_job_id, depth)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         try (Connection conn = dataSource.getConnection();
@@ -92,6 +93,8 @@ public class JobStore {
             setNullable(ps, 24, job.getRestartFromJobId());
             ps.setInt(25, job.getRestartIteration());
             ps.setInt(26, job.getAdditionalIterations());
+            setNullable(ps, 27, job.getParentJobId());
+            ps.setInt(28, job.getDepth());
             ps.executeUpdate();
             cache.put(job.getJobId(), job);
         } catch (SQLException e) {
@@ -111,8 +114,9 @@ public class JobStore {
                      summary, error_message, pr_url, pr_id, files_changed, lines_changed, jira_key,
                      pr_author, workspace, repo_slug, priority, coverage_data,
                      aikido_issue_id, fix_branch_name, jira_issue_type, jira_priority, jira_created_at,
-                     promotion_job_id, workspace_path)
-                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?)
+                     promotion_job_id, workspace_path,
+                     parent_job_id, depth)
+                VALUES (?, ?, ?, ?::jsonb, ?, ?, now(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::jsonb, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT (job_id) DO NOTHING
                 """;
         String delete = "DELETE FROM jobs WHERE job_id = ?";
@@ -148,6 +152,8 @@ public class JobStore {
                 }
                 setNullable(ins, 24, job.getPromotionJobId());
                 setNullable(ins, 25, job.getWorkspacePath());
+                setNullable(ins, 26, job.getParentJobId());
+                ins.setInt(27, job.getDepth());
                 ins.executeUpdate();
             }
             try (PreparedStatement del = conn.prepareStatement(delete)) {
@@ -452,6 +458,13 @@ public class JobStore {
             if (!rs.wasNull()) job.setAdditionalIterations(additionalIterations);
         } catch (Exception e) {
             LOG.warnf("Failed to read restart fields for job %s (non-fatal): %s", jobId, e.getMessage());
+        }
+        try {
+            job.setParentJobId(rs.getString("parent_job_id"));
+            int depth = rs.getInt("depth");
+            if (!rs.wasNull()) job.setDepth(depth);
+        } catch (Exception e) {
+            LOG.warnf("Failed to read call-tree fields for job %s (non-fatal): %s", jobId, e.getMessage());
         }
         return job;
     }
