@@ -87,6 +87,9 @@ public class ClaudeToolUseLoop {
     @Inject
     ContextCompactionService compactionService;
 
+    @Inject
+    ToolResultSummaryService summaryService;
+
     /** Circuit-breaker limit: disable compaction for the remainder of the job after this many consecutive failures. */
     private static final int MAX_COMPACTION_FAILURES = 3;
 
@@ -202,6 +205,10 @@ public class ClaudeToolUseLoop {
 
         for (int iteration = startIteration; iteration < startIteration + iterationCap; iteration++) {
             LOG.infof("Agent loop iteration %d/%d", iteration + 1, iterationCap);
+
+            if (summaryService.isEnabled()) {
+                messages = summaryService.summarizeOldResults(messages);
+            }
 
             MessageCreateParams params = MessageCreateParams.builder()
                     .model(Model.of(modelName))
@@ -482,6 +489,12 @@ public class ClaudeToolUseLoop {
         try {
             for (int iteration = 0; iteration < iterationCap; iteration++) {
                 LOG.infof("Streaming agent loop iteration %d/%d", iteration + 1, iterationCap);
+
+                if (summaryService.isEnabled()) {
+                    List<MessageParam> summarized = summaryService.summarizeOldResults(messages);
+                    messages.clear();
+                    messages.addAll(summarized);
+                }
 
                 MessageCreateParams params = MessageCreateParams.builder()
                         .model(Model.of(modelName))

@@ -87,6 +87,18 @@ public class CursorRulesLoader {
             }
         }
 
+        Path agentMd = workspaceRoot.resolve("AGENT.md");
+        if (Files.isRegularFile(agentMd)) {
+            try {
+                String content = Files.readString(agentMd).strip();
+                if (!content.isBlank()) {
+                    bodies.add("# AGENT.md\n" + content);
+                }
+            } catch (IOException e) {
+                LOG.warnf("Failed to read AGENT.md: %s", e.getMessage());
+            }
+        }
+
         return bodies;
     }
 

@@ -7,9 +7,9 @@ import com.anthropic.models.messages.MessageCreateParams;
 import com.anthropic.models.messages.MessageParam;
 import com.anthropic.models.messages.Model;
 import com.eneve.agent.agent.service.PromptTemplateService;
+import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
-import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 
 import java.util.ArrayList;
@@ -68,11 +68,8 @@ public class ContextCompactionService {
      */
     private static final int TAIL_WINDOW = 8;
 
-    @ConfigProperty(name = "agent.context.window-size", defaultValue = "200000")
-    long contextWindowSize;
-
-    @ConfigProperty(name = "agent.context.compaction-threshold-pct", defaultValue = "0.75")
-    double compactionThresholdPct;
+    @Inject
+    SettingsService settings;
 
     @Inject
     AnthropicClient client;
@@ -90,7 +87,7 @@ public class ContextCompactionService {
      *
      * <p>Computed as {@code floor(windowSize × pct) - maxTokens}, where the
      * {@code - maxTokens} term reserves headroom for the next model response.
-     * Controlled by:
+     * Controlled at runtime via {@link SettingsService}:
      * <ul>
      *   <li>{@code agent.context.window-size} (default 200 000)</li>
      *   <li>{@code agent.context.compaction-threshold-pct} (default 0.75)</li>
@@ -99,7 +96,10 @@ public class ContextCompactionService {
      * @param maxTokens the job's configured max-output-tokens (used for headroom)
      */
     public long compactionThreshold(long maxTokens) {
-        return Math.max(0L, (long) (contextWindowSize * compactionThresholdPct) - maxTokens);
+        long windowSize = Long.parseLong(settings.get("agent.context.window-size", "200000"));
+        double thresholdPct = Double.parseDouble(
+                settings.get("agent.context.compaction-threshold-pct", "0.75"));
+        return Math.max(0L, (long) (windowSize * thresholdPct) - maxTokens);
     }
 
     /**
