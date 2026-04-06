@@ -33,6 +33,9 @@ import jakarta.ws.rs.core.Response;
  * and are never returned in plaintext — they appear as "****" in all responses.
  *
  * Deleting a key reverts that setting to its application.properties / env-var default.
+ *
+ * Some keys are intentionally read-only via this API and must be set through
+ * application.properties or environment variables only (e.g. the master encryption key).
  */
 @RolesAllowed("app_admin")
 @Path("/settings")
@@ -40,6 +43,11 @@ import jakarta.ws.rs.core.Response;
 @Consumes(MediaType.APPLICATION_JSON)
 @Tag(name = "Settings", description = "Manage runtime application settings and secrets without restarting")
 public class SettingsResource {
+
+    /** Keys that must be set via application.properties / env vars and cannot be stored in the DB. */
+    private static final java.util.Set<String> READ_ONLY_KEYS = java.util.Set.of(
+            "settings.encryption.key"
+    );
 
     @Inject
     SettingsService settingsService;
@@ -104,6 +112,12 @@ public class SettingsResource {
             @RequestBody(description = "Setting value and metadata", required = true)
             UpsertRequest request) {
 
+        if (READ_ONLY_KEYS.contains(key)) {
+            return Response.status(400)
+                    .entity(Map.of("error", "'" + key + "' is read-only via the API — set it in application.properties or via the SETTINGS_ENCRYPTION_KEY environment variable"))
+                    .build();
+        }
+
         if (request == null || request.value() == null || request.value().isBlank()) {
             return Response.status(400)
                     .entity(Map.of("error", "value must not be blank"))
@@ -143,6 +157,12 @@ public class SettingsResource {
     public Response delete(
             @Parameter(description = "Setting key", required = true)
             @PathParam("key") String key) {
+
+        if (READ_ONLY_KEYS.contains(key)) {
+            return Response.status(400)
+                    .entity(Map.of("error", "'" + key + "' is read-only via the API — set it in application.properties or via the SETTINGS_ENCRYPTION_KEY environment variable"))
+                    .build();
+        }
 
         boolean deleted = settingsService.delete(key);
         if (!deleted) {

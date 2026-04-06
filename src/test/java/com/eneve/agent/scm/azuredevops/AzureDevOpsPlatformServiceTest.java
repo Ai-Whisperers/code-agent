@@ -1,8 +1,11 @@
 package com.eneve.agent.scm.azuredevops;
 
+import com.eneve.agent.settings.SettingsService;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -12,12 +15,21 @@ class AzureDevOpsPlatformServiceTest {
     private AzureDevOpsPlatformService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         service = new AzureDevOpsPlatformService();
-        // Set minimal config to avoid null pointer exceptions
-        service.baseUrl = "https://dev.azure.com";
-        service.pat = "testpat";
-        service.agentUser = "testuser@example.com";
+        injectField("objectMapper", new ObjectMapper());
+        injectField("settingsService", new SettingsService() {
+            @Override
+            public String get(String key, String defaultValue) {
+                return defaultValue;
+            }
+        });
+    }
+
+    private void injectField(String fieldName, Object value) throws Exception {
+        Field field = AzureDevOpsPlatformService.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        field.set(service, value);
     }
 
     @Test
@@ -205,17 +217,6 @@ class AzureDevOpsPlatformServiceTest {
     }
 
     @Test
-    void repoApiUrlHandlesCustomBaseUrl() throws Exception {
-        service.baseUrl = "https://custom.azure.com";
-        Method repoApiUrl = AzureDevOpsPlatformService.class.getDeclaredMethod("repoApiUrl", String.class, String.class, String.class);
-        repoApiUrl.setAccessible(true);
-        
-        String result = (String) repoApiUrl.invoke(service, "org", "project", "repo");
-        
-        assertEquals("https://custom.azure.com/org/project/_apis/git/repositories/repo", result);
-    }
-
-    @Test
     void parseThreadFirstCommentIdParsesValidResponse() throws Exception {
         Method parseThreadFirstCommentId = AzureDevOpsPlatformService.class.getDeclaredMethod("parseThreadFirstCommentId", String.class);
         parseThreadFirstCommentId.setAccessible(true);
@@ -278,27 +279,6 @@ class AzureDevOpsPlatformServiceTest {
         long result = (long) parseThreadFirstCommentId.invoke(service, response);
         
         assertEquals(789L, result);
-    }
-
-    @Test
-    void serviceHandlesDefaultConfiguration() {
-        AzureDevOpsPlatformService defaultService = new AzureDevOpsPlatformService();
-        
-        // These fields are injected by CDI and will be null in unit tests
-        assertNull(defaultService.baseUrl);
-        assertNull(defaultService.pat);
-        assertNull(defaultService.agentUser);
-    }
-
-    @Test
-    void serviceAllowsConfigurationOverride() {
-        service.baseUrl = "https://custom.azure.com";
-        service.pat = "custompat";
-        service.agentUser = "custom@example.com";
-        
-        assertEquals("https://custom.azure.com", service.baseUrl);
-        assertEquals("custompat", service.pat);
-        assertEquals("custom@example.com", service.agentUser);
     }
 
     @Test

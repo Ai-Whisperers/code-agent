@@ -2,10 +2,11 @@ package com.eneve.agent.scm;
 
 import com.eneve.agent.scm.azuredevops.AzureDevOpsPlatformService;
 import com.eneve.agent.scm.bitbucket.BitbucketPlatformService;
+import com.eneve.agent.scm.github.GitHubPlatformService;
+import com.eneve.agent.scm.gitlab.GitLabPlatformService;
+import com.eneve.agent.settings.SettingsService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-
-import java.lang.reflect.Field;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -14,18 +15,22 @@ class GitPlatformProducerTest {
     private GitPlatformProducer producer;
     private BitbucketPlatformService mockBitbucketService;
     private AzureDevOpsPlatformService mockAzureDevOpsService;
+    private GitLabPlatformService mockGitlabService;
+    private GitHubPlatformService mockGitHubService;
 
     @BeforeEach
     void setUp() {
         producer = new GitPlatformProducer();
-        
-        // Create mock services to simulate properly injected CDI beans
+
         mockBitbucketService = new BitbucketPlatformService();
         mockAzureDevOpsService = new AzureDevOpsPlatformService();
-        
-        // Inject the mock services instead of setting to null
+        mockGitlabService = new GitLabPlatformService();
+        mockGitHubService = new GitHubPlatformService();
+
         producer.bitbucket = mockBitbucketService;
         producer.azureDevOps = mockAzureDevOpsService;
+        producer.gitlab = mockGitlabService;
+        producer.github = mockGitHubService;
     }
 
     @Test
@@ -102,12 +107,12 @@ class GitPlatformProducerTest {
 
     @Test
     void throwsExceptionForUnsupportedPlatform() throws Exception {
-        setPlatform("github");
-        
+        setPlatform("teamcity");
+
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
                 () -> producer.gitPlatformService());
-        
-        assertTrue(exception.getMessage().contains("Unknown git.platform value: 'github'"));
+
+        assertTrue(exception.getMessage().contains("Unknown git.platform value: 'teamcity'"));
         assertTrue(exception.getMessage().contains("Supported values: bitbucket, azuredevops"));
     }
 
@@ -131,12 +136,12 @@ class GitPlatformProducerTest {
 
     @Test
     void throwsExceptionForInvalidPlatform() throws Exception {
-        setPlatform("gitlab");
-        
+        setPlatform("gitlab-enterprise");
+
         IllegalArgumentException exception = assertThrows(IllegalArgumentException.class,
                 () -> producer.gitPlatformService());
-        
-        assertTrue(exception.getMessage().contains("Unknown git.platform value: 'gitlab'"));
+
+        assertTrue(exception.getMessage().contains("Unknown git.platform value: 'gitlab-enterprise'"));
     }
 
     @Test
@@ -209,7 +214,7 @@ class GitPlatformProducerTest {
     @Test
     void switchStatementRejectsInvalidCases() throws Exception {
         String[] invalidPlatforms = {
-            "github", "gitlab", "invalid", "", "azure devops", "bit bucket"
+            "teamcity", "jenkins", "invalid", "", "azure devops", "bit bucket"
         };
         
         for (String platform : invalidPlatforms) {
@@ -220,11 +225,14 @@ class GitPlatformProducerTest {
     }
 
     /**
-     * Helper method to set the platform field via reflection since we can't easily inject config values in unit tests
+     * Injects a stub SettingsService that returns the given platform for the "git.platform" key.
      */
-    private void setPlatform(String platform) throws Exception {
-        Field platformField = GitPlatformProducer.class.getDeclaredField("platform");
-        platformField.setAccessible(true);
-        platformField.set(producer, platform);
+    private void setPlatform(String platform) {
+        producer.settings = new SettingsService() {
+            @Override
+            public String get(String key, String defaultValue) {
+                return "git.platform".equals(key) ? platform : defaultValue;
+            }
+        };
     }
 }

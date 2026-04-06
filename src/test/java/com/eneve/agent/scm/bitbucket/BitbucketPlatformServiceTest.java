@@ -1,8 +1,10 @@
 package com.eneve.agent.scm.bitbucket;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -12,12 +14,11 @@ class BitbucketPlatformServiceTest {
     private BitbucketPlatformService service;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         service = new BitbucketPlatformService();
-        // Set minimal config to avoid null pointer exceptions
-        service.baseUrl = "https://api.bitbucket.org/2.0";
-        service.bbUser = "testuser";
-        service.appPassword = "testpass";
+        Field objectMapperField = BitbucketPlatformService.class.getDeclaredField("objectMapper");
+        objectMapperField.setAccessible(true);
+        objectMapperField.set(service, new ObjectMapper());
     }
 
     @Test
@@ -219,27 +220,6 @@ class BitbucketPlatformServiceTest {
         long result = (long) parseCommentId.invoke(service, response);
         
         assertEquals(0L, result);
-    }
-
-    @Test
-    void serviceHandlesDefaultConfiguration() {
-        BitbucketPlatformService defaultService = new BitbucketPlatformService();
-        
-        // These fields are injected by CDI and will be null in unit tests
-        assertNull(defaultService.baseUrl);
-        assertNull(defaultService.bbUser);
-        assertNull(defaultService.appPassword);
-    }
-
-    @Test
-    void serviceAllowsConfigurationOverride() {
-        service.baseUrl = "https://custom.bitbucket.com/api/2.0";
-        service.bbUser = "customuser";
-        service.appPassword = "custompass";
-        
-        assertEquals("https://custom.bitbucket.com/api/2.0", service.baseUrl);
-        assertEquals("customuser", service.bbUser);
-        assertEquals("custompass", service.appPassword);
     }
 
     @Test

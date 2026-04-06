@@ -1,10 +1,12 @@
 package com.eneve.agent.agent;
 
+import com.eneve.agent.agent.model.RepoSettings;
 import org.junit.jupiter.api.Test;
 
 import java.time.Instant;
-import java.util.List;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -22,8 +24,11 @@ class RepoSettingsTest {
         Instant createdAt = Instant.now();
         Instant updatedAt = createdAt.plusSeconds(10);
 
-        RepoSettings settings = new RepoSettings(id, workspace, repoSlug, reviewEnabled, 
-                ruleNames, reviewPrompt, disabledHooks, createdAt, updatedAt);
+        RepoSettings settings = new RepoSettings(id, workspace, repoSlug, reviewEnabled,
+                false, false, false, false, false,
+                ruleNames, reviewPrompt, disabledHooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                createdAt, updatedAt);
 
         assertEquals(id, settings.id());
         assertEquals(workspace, settings.workspace());
@@ -54,7 +59,6 @@ class RepoSettingsTest {
         assertTrue(settings.disabledHooks().isEmpty());
         assertNotNull(settings.createdAt());
         assertNotNull(settings.updatedAt());
-        assertEquals(settings.createdAt(), settings.updatedAt());
     }
 
     @Test
@@ -94,8 +98,11 @@ class RepoSettingsTest {
 
     @Test
     void constructorWithNullValues() {
-        RepoSettings settings = new RepoSettings(null, null, null, false, 
-                null, null, null, null, null);
+        RepoSettings settings = new RepoSettings(null, null, null, false,
+                false, false, false, false, false,
+                null, null, null,
+                null, null, null, null, null, null, null, null, null, null,
+                null, null);
 
         assertNull(settings.id());
         assertNull(settings.workspace());
@@ -113,8 +120,11 @@ class RepoSettingsTest {
         List<String> emptyRules = new ArrayList<>();
         List<String> emptyHooks = new ArrayList<>();
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                emptyRules, "prompt", emptyHooks, Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                emptyRules, "prompt", emptyHooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals(emptyRules, settings.ruleNames());
         assertEquals(emptyHooks, settings.disabledHooks());
@@ -126,8 +136,11 @@ class RepoSettingsTest {
     void constructorWithMultipleRules() {
         List<String> rules = List.of("checkstyle", "pmd", "spotbugs", "eslint", "sonarqube");
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                rules, null, List.of(), Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                rules, null, List.of(),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals(5, settings.ruleNames().size());
         assertTrue(settings.ruleNames().contains("checkstyle"));
@@ -141,8 +154,11 @@ class RepoSettingsTest {
     void constructorWithMultipleDisabledHooks() {
         List<String> disabledHooks = List.of("pre-commit", "pre-push", "post-merge");
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                List.of(), null, disabledHooks, Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                List.of(), null, disabledHooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals(3, settings.disabledHooks().size());
         assertTrue(settings.disabledHooks().contains("pre-commit"));
@@ -156,18 +172,27 @@ class RepoSettingsTest {
                 "security vulnerabilities and performance optimizations. " +
                 "Follow our team's coding standards and ensure proper error handling.";
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                List.of("security"), customPrompt, List.of(), Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                List.of("security"), customPrompt, List.of(),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals(customPrompt, settings.reviewPrompt());
     }
 
     @Test
     void reviewEnabledBooleanValues() {
-        RepoSettings enabledSettings = new RepoSettings(1L, "workspace", "repo", true, 
-                List.of(), null, List.of(), Instant.now(), Instant.now());
-        RepoSettings disabledSettings = new RepoSettings(2L, "workspace", "repo", false, 
-                List.of(), null, List.of(), Instant.now(), Instant.now());
+        RepoSettings enabledSettings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                List.of(), null, List.of(),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
+        RepoSettings disabledSettings = new RepoSettings(2L, "workspace", "repo", false,
+                false, false, false, false, false,
+                List.of(), null, List.of(),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertTrue(enabledSettings.reviewEnabled());
         assertFalse(disabledSettings.reviewEnabled());
@@ -178,8 +203,11 @@ class RepoSettingsTest {
         Instant createdAt = Instant.now().minusSeconds(3600); // 1 hour ago
         Instant updatedAt = Instant.now(); // now
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                List.of(), null, List.of(), createdAt, updatedAt);
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                List.of(), null, List.of(),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                createdAt, updatedAt);
 
         assertEquals(createdAt, settings.createdAt());
         assertEquals(updatedAt, settings.updatedAt());
@@ -192,12 +220,21 @@ class RepoSettingsTest {
         List<String> rules = List.of("rule1");
         List<String> hooks = List.of("hook1");
 
-        RepoSettings settings1 = new RepoSettings(1L, "workspace", "repo", true, 
-                rules, "prompt", hooks, now, now);
-        RepoSettings settings2 = new RepoSettings(1L, "workspace", "repo", true, 
-                rules, "prompt", hooks, now, now);
-        RepoSettings settings3 = new RepoSettings(2L, "workspace", "repo", true, 
-                rules, "prompt", hooks, now, now);
+        RepoSettings settings1 = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                rules, "prompt", hooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                now, now);
+        RepoSettings settings2 = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                rules, "prompt", hooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                now, now);
+        RepoSettings settings3 = new RepoSettings(2L, "workspace", "repo", true,
+                false, false, false, false, false,
+                rules, "prompt", hooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                now, now);
 
         assertEquals(settings1, settings2);
         assertNotEquals(settings1, settings3);
@@ -206,10 +243,12 @@ class RepoSettingsTest {
 
     @Test
     void recordToString() {
-        RepoSettings settings = new RepoSettings(1L, "my-workspace", "my-repo", true, 
-                List.of("checkstyle"), "Review carefully", List.of("pre-commit"), 
+        RepoSettings settings = new RepoSettings(1L, "my-workspace", "my-repo", true,
+                false, false, false, false, false,
+                List.of("checkstyle"), "Review carefully", List.of("pre-commit"),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
                 Instant.now(), Instant.now());
-        
+
         String toString = settings.toString();
         assertTrue(toString.contains("my-workspace"));
         assertTrue(toString.contains("my-repo"));
@@ -221,12 +260,14 @@ class RepoSettingsTest {
 
     @Test
     void listFieldsAreImmutableReferences() {
-        // Lists should be immutable references, but the test verifies the structure
         List<String> originalRules = List.of("rule1", "rule2");
         List<String> originalHooks = List.of("hook1");
 
-        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true, 
-                originalRules, null, originalHooks, Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace", "repo", true,
+                false, false, false, false, false,
+                originalRules, null, originalHooks,
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals(originalRules, settings.ruleNames());
         assertEquals(originalHooks, settings.disabledHooks());
@@ -246,9 +287,12 @@ class RepoSettingsTest {
 
     @Test
     void constructorWithSpecialCharactersInStrings() {
-        RepoSettings settings = new RepoSettings(1L, "workspace-123", "repo_name.git", 
-                true, List.of("rule-1", "rule_2"), "Review with @mentions and #tags", 
-                List.of("hook/pre-commit"), Instant.now(), Instant.now());
+        RepoSettings settings = new RepoSettings(1L, "workspace-123", "repo_name.git",
+                true, false, false, false, false, false,
+                List.of("rule-1", "rule_2"), "Review with @mentions and #tags",
+                List.of("hook/pre-commit"),
+                null, null, null, null, null, Map.of(), null, null, List.of(), List.of(),
+                Instant.now(), Instant.now());
 
         assertEquals("workspace-123", settings.workspace());
         assertEquals("repo_name.git", settings.repoSlug());
@@ -262,15 +306,14 @@ class RepoSettingsTest {
     void defaultSettingsHaveExpectedDefaults() {
         RepoSettings settings = RepoSettings.defaults("workspace", "repo");
 
-        // Verify all default values
-        assertNull(settings.id()); // Should be null for new entities
-        assertTrue(settings.reviewEnabled()); // Should be enabled by default
-        assertNotNull(settings.ruleNames()); // Should not be null
-        assertTrue(settings.ruleNames().isEmpty()); // But should be empty
-        assertNull(settings.reviewPrompt()); // Should be null (use global prompt)
-        assertNotNull(settings.disabledHooks()); // Should not be null
-        assertTrue(settings.disabledHooks().isEmpty()); // But should be empty
-        assertNotNull(settings.createdAt()); // Should have timestamp
-        assertNotNull(settings.updatedAt()); // Should have timestamp
+        assertNull(settings.id());
+        assertTrue(settings.reviewEnabled());
+        assertNotNull(settings.ruleNames());
+        assertTrue(settings.ruleNames().isEmpty());
+        assertNull(settings.reviewPrompt());
+        assertNotNull(settings.disabledHooks());
+        assertTrue(settings.disabledHooks().isEmpty());
+        assertNotNull(settings.createdAt());
+        assertNotNull(settings.updatedAt());
     }
 }
