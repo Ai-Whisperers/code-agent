@@ -5,7 +5,9 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.ScopeItemStore;
 import com.eneve.agent.agent.store.ScopeStore;
 import com.eneve.agent.audit.AuditService;
+import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.settings.SettingsService;
 import com.eneve.agent.model.QaTestPlan;
 import com.eneve.agent.model.QaTestPlanAnalysisRequest;
 import com.eneve.agent.model.QaTestPlanConversionRequest;
@@ -59,6 +61,8 @@ public class QaTestPlanResource {
     @Inject JobStore jobStore;
     @Inject AuditService auditService;
     @Inject ObjectMapper mapper;
+    @Inject JiraService jiraService;
+    @Inject SettingsService settingsService;
 
     // ─── Feature list ─────────────────────────────────────────────────────────
 
@@ -211,6 +215,180 @@ public class QaTestPlanResource {
             LOG.errorf("QaTestPlanResource.updateJiraKey: %s / %s: %s", scopeId, issueKey, e.getMessage());
             return serverError("Failed to update Jira key: " + e.getMessage());
         }
+    }
+
+    // ─── Export to Jira ───────────────────────────────────────────────────────
+
+    /**
+     * Creates or updates a Jira QA issue for this test plan.
+     *
+     * <ul>
+     *   <li>If the plan already has a {@code jiraIssueKey}, the existing Jira issue is updated
+     *       with the latest summary and description.</li>
+     *   <li>Otherwise a new Jira issue is created in {@code projectKey} and linked to the
+     *       feature via a "Tests" issue link. The new key is persisted to the test plan.</li>
+     * </ul>
+     *
+     * <p>Request body (all fields optional):
+     * <pre>{@code
+     * {
+     *   "projectKey": "QA",       // required when creating a new issue
+     *   "issueType": "Story",     // optional, defaults to "Story"
+     *   "linkType": "Tests"       // optional issue-link type name, defaults to "Tests"
+     * }
+     * }</pre>
+     */
+    @POST
+    @Path("/features/{issueKey}/test-plan/export-to-jira")
+    public Response exportToJira(@PathParam("scopeId") String scopeId,
+                                 @PathParam("issueKey") String issueKey,
+                                 Map<String, String> body) {
+        if (!isValidIssueKey(issueKey)) return badRequest("Invalid issue key format");
+
+        QaTestPlan plan = store.findByKey(issueKey)
+                .orElse(null);
+        if (plan == null || plan.planJson() == null) {
+            return badRequest("No generated test plan JSON found for " + issueKey + " — generate JSON first");
+        }
+
+        if (!jiraService.isConfigured()) {
+            return serverError("Jira is not configured — check system settings");
+        }
+
+        String projectKey  = body != null ? body.getOrDefault("projectKey", "") : "";
+        String issueType   = body != null ? body.getOrDefault("issueType", "Story") : "Story";
+        if (issueType == null || issueType.isBlank()) issueType = "Story";
+        // Prefer explicit request body, fall back to system setting, then default "Tests"
+        String linkTypeFromBody = body != null ? body.get("linkType") : null;
+        String linkType = (linkTypeFromBody != null && !linkTypeFromBody.isBlank())
+                ? linkTypeFromBody
+                : settingsService.get("jira.qa-link-type", "tests");
+
+        String featureSummary = jiraService.fetchIssueSummary(issueKey);
+        String planTitle = "QA Test Plan: " + (featureSummary != null ? featureSummary : issueKey) + " [" + issueKey + "]";
+        String description = buildJiraDescription(plan, issueKey);
+
+        try {
+            if (plan.jiraIssueKey() != null && !plan.jiraIssueKey().isBlank()) {
+                // Update existing issue
+                jiraService.updateIssueSystem(plan.jiraIssueKey(), planTitle, description);
+                auditService.log("QA", "TESTPLAN_JIRA_UPDATED", "qa_test_plan", issueKey,
+                        Map.of("scopeId", scopeId, "jiraIssueKey", plan.jiraIssueKey()));
+                LOG.infof("QaTestPlanResource.exportToJira: updated Jira issue %s for %s", plan.jiraIssueKey(), issueKey);
+
+                return service.getTestPlan(issueKey)
+                        .map(updated -> {
+                            Map<String, Object> resp = new LinkedHashMap<>();
+                            resp.put("jiraIssueKey", updated.jiraIssueKey());
+                            resp.put("action", "updated");
+                            resp.put("plan", toResponseMap(updated));
+                            return Response.ok(resp).build();
+                        })
+                        .orElse(notFound("Test plan not found after update"));
+            } else {
+                // Create new issue
+                if (projectKey == null || projectKey.isBlank()) {
+                    return badRequest("projectKey is required when creating a new Jira issue");
+                }
+                String newKey = jiraService.createIssueSystem(projectKey, planTitle, description, issueType, null);
+                if (newKey == null || newKey.isBlank()) {
+                    return serverError("Jira issue creation failed — check Jira configuration and project key");
+                }
+
+                // Link: feature "is tested by" QA plan (inward=feature, outward=QA ticket)
+                // linkType read from system setting "jira.qa-link-type" (default "Tests")
+                String linkError = jiraService.createIssueLink(linkType, issueKey, newKey);
+                if (linkError != null) {
+                    LOG.warnf("QaTestPlanResource.exportToJira: link '%s' failed for %s -> %s: %s",
+                            linkType, issueKey, newKey, linkError);
+                }
+
+                // Persist the new Jira key regardless of whether the link succeeded
+                store.updateJiraKey(issueKey, newKey);
+                auditService.log("QA", "TESTPLAN_JIRA_CREATED", "qa_test_plan", issueKey,
+                        Map.of("scopeId", scopeId, "jiraIssueKey", newKey, "projectKey", projectKey));
+                LOG.infof("QaTestPlanResource.exportToJira: created Jira issue %s for %s", newKey, issueKey);
+
+                final String finalLinkError = linkError;
+                final String finalLinkType = linkType;
+                return service.getTestPlan(issueKey)
+                        .map(updated -> {
+                            Map<String, Object> resp = new LinkedHashMap<>();
+                            resp.put("jiraIssueKey", newKey);
+                            resp.put("action", "created");
+                            resp.put("plan", toResponseMap(updated));
+                            if (finalLinkError != null) {
+                                resp.put("linkWarning", "Could not create '" + finalLinkType + "' link between "
+                                        + issueKey + " and " + newKey + ": " + finalLinkError
+                                        + ". Check the 'jira.qa-link-type' system setting.");
+                            }
+                            return Response.ok(resp).build();
+                        })
+                        .orElse(notFound("Test plan not found after creation"));
+            }
+        } catch (Exception e) {
+            LOG.errorf("QaTestPlanResource.exportToJira: %s / %s: %s", scopeId, issueKey, e.getMessage());
+            return serverError("Export to Jira failed: " + e.getMessage());
+        }
+    }
+
+    /**
+     * Builds a rich markdown description for the Jira QA issue.
+     * Includes the feature overview, test approach, and a KPI summary table.
+     * The {@link com.eneve.agent.jira.AdfBuilder} will convert the markdown table
+     * to a native ADF table when the description is posted to Jira.
+     */
+    private String buildJiraDescription(QaTestPlan plan, String featureKey) {
+        StringBuilder sb = new StringBuilder();
+
+        // Pull rich content from planJson when available
+        String featureOverview = null;
+        String testApproach = null;
+        String methodology = null;
+        if (plan.planJson() != null) {
+            try {
+                com.fasterxml.jackson.databind.JsonNode root = mapper.readTree(plan.planJson());
+                // planJson may still be wrapped in { "featureTestPlan": {...} } at this point
+                com.fasterxml.jackson.databind.JsonNode inner = root.path("featureTestPlan");
+                com.fasterxml.jackson.databind.JsonNode planNode = inner.isMissingNode() ? root : inner;
+                featureOverview = planNode.path("section01_executiveSummary").path("featureOverview").asText(null);
+                testApproach    = planNode.path("section01_executiveSummary").path("testApproach").asText(null);
+                methodology     = planNode.path("metadata").path("methodology").asText(null);
+            } catch (Exception ignored) {
+                // Fall through to KPI-only description
+            }
+        }
+
+        sb.append("## QA Test Plan — ").append(featureKey).append("\n\n");
+
+        if (featureOverview != null && !featureOverview.isBlank()) {
+            sb.append("### Feature Overview\n\n");
+            sb.append(featureOverview).append("\n\n");
+        }
+
+        if (testApproach != null && !testApproach.isBlank()) {
+            sb.append("### Test Approach\n\n");
+            sb.append(testApproach).append("\n\n");
+        }
+
+        sb.append("### Test Coverage Summary\n\n");
+        sb.append("| Metric | Value |\n");
+        sb.append("|---|---|\n");
+        if (plan.kpiStoryCount() != null)         sb.append("| Stories | ").append(plan.kpiStoryCount()).append(" |\n");
+        if (plan.kpiBehaviourTcCount() != null)   sb.append("| Behaviour Test Conditions | ").append(plan.kpiBehaviourTcCount()).append(" |\n");
+        if (plan.kpiCapabilityTcCount() != null)  sb.append("| Capability Test Conditions | ").append(plan.kpiCapabilityTcCount()).append(" |\n");
+        if (plan.kpiRiskCount() != null)          sb.append("| Risks Identified | ").append(plan.kpiRiskCount()).append(" |\n");
+        if (plan.kpiHighRisks() != null)          sb.append("| High Risks | ").append(plan.kpiHighRisks()).append(" |\n");
+        if (plan.kpiCoveragePct() != null)        sb.append("| Coverage | ").append(plan.kpiCoveragePct()).append("% |\n");
+        if (plan.kpiOpenClarifications() != null) sb.append("| Open Clarifications | ").append(plan.kpiOpenClarifications()).append(" |\n");
+        if (plan.kpiGapsCount() != null)          sb.append("| Coverage Gaps | ").append(plan.kpiGapsCount()).append(" |\n");
+        if (plan.kpiReadiness() != null)          sb.append("| Readiness | ").append(plan.kpiReadiness()).append(" |\n");
+        if (methodology != null && !methodology.isBlank()) sb.append("| Methodology | ").append(methodology).append(" |\n");
+
+        if (plan.generatedAt() != null) {
+            sb.append("\n_Generated: ").append(plan.generatedAt()).append("_\n");
+        }
+        return sb.toString();
     }
 
     // ─── Generate JSON ────────────────────────────────────────────────────────

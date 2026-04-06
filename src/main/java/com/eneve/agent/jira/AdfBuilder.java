@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.node.ObjectNode;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -146,6 +148,45 @@ class AdfBuilder {
                 continue;
             }
 
+            // ── GFM pipe table ───────────────────────────────────────────────
+            if (raw.startsWith("|")) {
+                List<String> tableLines = new ArrayList<>();
+                while (i < lines.length && lines[i].startsWith("|")) {
+                    tableLines.add(lines[i]);
+                    i++;
+                }
+                var tableNode = out.addObject();
+                tableNode.put("type", "table");
+                var tableAttrs = tableNode.putObject("attrs");
+                tableAttrs.put("isNumberColumnEnabled", false);
+                tableAttrs.put("layout", "default");
+                var tableContent = tableNode.putArray("content");
+
+                boolean isHeaderRow = true;
+                for (String tl : tableLines) {
+                    // Skip separator row (only dashes, colons, pipes, spaces)
+                    if (tl.replaceAll("[\\s|:\\-]", "").isEmpty()) continue;
+
+                    String[] cells = tl.split("\\|", -1);
+                    // First element is empty (text before leading |); last is empty (after trailing |)
+                    var rowNode = tableContent.addObject();
+                    rowNode.put("type", "tableRow");
+                    var rowContent = rowNode.putArray("content");
+
+                    for (int ci = 1; ci < cells.length - 1; ci++) {
+                        var cellNode = rowContent.addObject();
+                        cellNode.put("type", isHeaderRow ? "tableHeader" : "tableCell");
+                        cellNode.putObject("attrs");
+                        var cellContent = cellNode.putArray("content");
+                        var para = cellContent.addObject();
+                        para.put("type", "paragraph");
+                        addInline(para.putArray("content"), cells[ci].trim());
+                    }
+                    isHeaderRow = false;
+                }
+                continue;
+            }
+
             // ── Paragraph (collect consecutive non-special lines) ────────────
             var sb = new StringBuilder();
             while (i < lines.length) {
@@ -155,6 +196,7 @@ class AdfBuilder {
                         || l.startsWith("```")
                         || l.startsWith("> ")
                         || l.equals(">")
+                        || l.startsWith("|")
                         || l.matches("^[-*+]\\s+.*")
                         || l.matches("^\\d+\\.\\s+.*")
                         || l.matches("^[-*_]{3,}\\s*$")) {

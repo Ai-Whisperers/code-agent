@@ -188,6 +188,40 @@ class JiraIssueWriter {
         }
     }
 
+    /**
+     * Creates an issue link between two Jira issues using system credentials.
+     *
+     * @param linkTypeName    Jira link type name, e.g. "Tests", "Relates"
+     * @param inwardIssueKey  the inward issue (shown as "is tested by" for the "Tests" link type)
+     * @param outwardIssueKey the outward issue (shown as "tests" for the "Tests" link type)
+     * @return {@code null} on success, or a human-readable error string on failure
+     */
+    String createIssueLink(String linkTypeName, String inwardIssueKey, String outwardIssueKey) {
+        try {
+            ObjectNode body = mapper.createObjectNode();
+            body.putObject("type").put("name", linkTypeName);
+            body.putObject("inwardIssue").put("key", inwardIssueKey);
+            body.putObject("outwardIssue").put("key", outwardIssueKey);
+            String json = mapper.writeValueAsString(body);
+            HttpResponse<String> response = http.postForResponse("/rest/api/3/issueLink", json,
+                    "create issue link " + inwardIssueKey + " -> " + outwardIssueKey);
+            if (response == null) {
+                LOG.warnf("createIssueLink: no response for %s -> %s", inwardIssueKey, outwardIssueKey);
+                return "No response from Jira";
+            }
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                String detail = response.body();
+                LOG.warnf("createIssueLink: failed (HTTP %d) for %s -> %s: %s",
+                        response.statusCode(), inwardIssueKey, outwardIssueKey, detail);
+                return "HTTP " + response.statusCode() + " — " + detail;
+            }
+            return null;
+        } catch (Exception e) {
+            LOG.warnf("createIssueLink: error linking %s -> %s: %s", inwardIssueKey, outwardIssueKey, e.getMessage());
+            return e.getMessage();
+        }
+    }
+
     void updateIssue(String issueKey, String summary, String description,
                      String assignee, String projectKey, JiraService.JiraCredentials creds) {
         try {

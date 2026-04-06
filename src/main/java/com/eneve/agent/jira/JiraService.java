@@ -275,6 +275,18 @@ public class JiraService {
         writer.updateIssue(issueKey, summary, description, assignee, projectKey, creds);
     }
 
+    /**
+     * Creates a Jira issue link between two issues using system credentials.
+     *
+     * @param linkTypeName    link type name (e.g. "Tests", "Relates")
+     * @param inwardIssueKey  issue key on the inward side (shown as "is tested by" for "Tests" type)
+     * @param outwardIssueKey issue key on the outward side (shown as "tests" for "Tests" type)
+     * @return {@code null} on success, or a human-readable error string on failure
+     */
+    public String createIssueLink(String linkTypeName, String inwardIssueKey, String outwardIssueKey) {
+        return writer.createIssueLink(linkTypeName, inwardIssueKey, outwardIssueKey);
+    }
+
     // ─── Transitions & comments ───────────────────────────────────────────────
 
     public void addComment(String issueKey, String commentText) {
