@@ -167,18 +167,51 @@ public class ToolResultSummaryService {
 
     /**
      * Extracts scalar entries from a tool-use block's input map as strings.
-     * Uses the {@link JsonValue.Visitor} pattern (same approach as
-     * {@code ClaudeToolUseLoop.convertJsonValueToMap}) to avoid raw-type issues.
-     * Nested objects and arrays are skipped — only scalars are needed for labels.
+     *
+     * <p>Handles two storage forms for the {@code input} field:
+     * <ol>
+     *   <li><b>KnownValue&lt;Input&gt;</b> — produced when a {@code ToolUseBlockParam} is
+     *       deserialised from stored JSON (e.g. chat history). {@code asKnown()} returns the
+     *       typed {@code Input} and we read its {@code _additionalProperties}.</li>
+     *   <li><b>Raw JsonValue</b> — produced when {@link
+     *       com.anthropic.models.messages.ToolUseBlock#toParam()} is called inside the live agent
+     *       loop; the original JSON object is kept as-is. Calling {@code tu.input()} in this case
+     *       would throw {@code AnthropicInvalidDataException} via {@code getRequired()}, so we
+     *       use {@code asUnknown()} and walk the object via {@link JsonValue.Visitor}.</li>
+     * </ol>
      */
     private static Map<String, String> extractStringInputs(ToolUseBlockParam tu) {
         Map<String, String> out = new HashMap<>();
-        tu.input()._additionalProperties().forEach((k, v) -> {
-            String strVal = jsonValueToString(v);
-            if (strVal != null) {
-                out.put(k, strVal);
-            }
-        });
+        var inputField = tu._input();
+
+        // Case 1: properly typed Input (normal deserialisation from stored messages)
+        inputField.asKnown().ifPresent(input ->
+            input._additionalProperties().forEach((k, v) -> {
+                String strVal = jsonValueToString(v);
+                if (strVal != null) out.put(k, strVal);
+            })
+        );
+        if (!out.isEmpty()) return out;
+
+        // Case 2: raw JsonValue (from ToolUseBlock.toParam() in the live agent loop).
+        // Calling tu.input() here would throw AnthropicInvalidDataException.
+        inputField.asUnknown().ifPresent(jsonValue ->
+            jsonValue.accept(new JsonValue.Visitor<Void>() {
+                @Override public Void visitMissing()                                          { return null; }
+                @Override public Void visitNull()                                             { return null; }
+                @Override public Void visitBoolean(boolean value)                            { return null; }
+                @Override public Void visitNumber(Number value)                              { return null; }
+                @Override public Void visitString(String value)                              { return null; }
+                @Override public Void visitArray(List<? extends JsonValue> values)          { return null; }
+                @Override public Void visitObject(Map<String, ? extends JsonValue> values)  {
+                    values.forEach((k, v) -> {
+                        String strVal = jsonValueToString(v);
+                        if (strVal != null) out.put(k, strVal);
+                    });
+                    return null;
+                }
+            })
+        );
         return out;
     }
 

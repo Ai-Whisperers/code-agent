@@ -1,3 +1,4 @@
+
 # Code Agent Runner
 
 A self-hosted coding agent that automates issue fixing, dependency upgrades, AI-powered code reviews, execution planning, documentation generation, and unit test generation. Built with Quarkus (Java 21), it clones your repos from Bitbucket Cloud, Azure DevOps, GitLab, or GitHub, uses Claude (Anthropic) in an agentic tool-use loop to make changes, validates builds, creates pull requests, and keeps JIRA and Teams in sync.
