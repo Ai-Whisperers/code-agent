@@ -62,6 +62,9 @@ public class JobQueue {
     /** Tracks job IDs currently in the pendingQueue to avoid re-adding duplicates. */
     private Set<String> dispatchedJobIds;
 
+    /** Maps job ID → executor thread for running jobs, used for cooperative cancellation. */
+    private final ConcurrentHashMap<String, Thread> runningJobThreads = new ConcurrentHashMap<>();
+
     private Thread dispatcherThread;
     private volatile boolean running = true;
 
@@ -278,19 +281,25 @@ public class JobQueue {
                 Semaphore semaphore = semaphoreFor(job.getJobType());
                 semaphore.acquire();
                 executor.submit(() -> {
+                    runningJobThreads.put(job.getJobId(), Thread.currentThread());
                     try {
                         agentRunner.dispatch(job);
+                    } catch (JobCancelledException e) {
+                        LOG.infof("Job %s was cancelled during execution", job.getJobId());
                     } catch (Exception e) {
                         LOG.errorf("Unhandled error in job %s: %s", job.getJobId(), e.getMessage());
                         job.setStatus(JobStatus.FAILED);
                         job.setErrorMessage("Unhandled error: " + e.getMessage());
                         jobStore.archive(job);
                     } finally {
+                        runningJobThreads.remove(job.getJobId());
                         if (job.getStatus() == null || job.getStatus() == JobStatus.QUEUED) {
                             LOG.warnf("Job %s completed without terminal status (%s) — forcing FAILED",
                                     job.getJobId(), job.getStatus());
                             job.setStatus(JobStatus.FAILED);
                             job.setErrorMessage("Job completed without setting a terminal status");
+                            jobStore.archive(job);
+                        } else if (job.getStatus() == JobStatus.CANCELLED) {
                             jobStore.archive(job);
                         }
                         jobCompletedEvent.fireAsync(new JobCompletedEvent(
@@ -345,8 +354,15 @@ public class JobQueue {
     }
 
     /**
-     * Cancel a PENDING or QUEUED job. Removes it from the in-memory queue, marks it
-     * CANCELLED, and archives it to job_history.
+     * Cancel a PENDING, QUEUED, or RUNNING job.
+     *
+     * <p>For PENDING/QUEUED jobs the job is removed from the in-memory queue, marked
+     * CANCELLED, and immediately archived to job_history.
+     *
+     * <p>For RUNNING jobs the status is set to CANCELLED in the store so the agent loop
+     * detects it at the next iteration boundary and throws {@link JobCancelledException}.
+     * The executor thread is also interrupted as a best-effort mechanism to unblock any
+     * sleeps. Archiving happens in the executor's finally block once the handler finishes.
      *
      * @return true if the job was found and successfully cancelled; false otherwise
      */
@@ -354,16 +370,27 @@ public class JobQueue {
         Optional<JobRecord> opt = jobStore.get(jobId);
         if (opt.isEmpty()) return false;
         JobRecord job = opt.get();
-        if (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED) {
-            return false;
+        if (job.getStatus() == JobStatus.PENDING || job.getStatus() == JobStatus.QUEUED) {
+            pendingQueue.removeIf(j -> j.getJobId().equals(jobId));
+            dispatchedJobIds.remove(jobId);
+            job.setStatus(JobStatus.CANCELLED);
+            job.setErrorMessage("Cancelled by user");
+            jobStore.archive(job);
+            LOG.infof("Job %s (%s) cancelled by user (was %s)", jobId, job.getJobType(), job.getStatus());
+            return true;
+        } else if (job.getStatus() == JobStatus.RUNNING) {
+            job.setStatus(JobStatus.CANCELLED);
+            job.setErrorMessage("Cancelled by user");
+            jobStore.update(job);
+            Thread runningThread = runningJobThreads.get(jobId);
+            if (runningThread != null) {
+                runningThread.interrupt();
+            }
+            LOG.infof("Job %s (%s) cancel requested while RUNNING — agent loop will stop at next iteration",
+                    jobId, job.getJobType());
+            return true;
         }
-        pendingQueue.removeIf(j -> j.getJobId().equals(jobId));
-        dispatchedJobIds.remove(jobId);
-        job.setStatus(JobStatus.CANCELLED);
-        job.setErrorMessage("Cancelled by user");
-        jobStore.archive(job);
-        LOG.infof("Job %s (%s) cancelled by user", jobId, job.getJobType());
-        return true;
+        return false;
     }
 
     /**

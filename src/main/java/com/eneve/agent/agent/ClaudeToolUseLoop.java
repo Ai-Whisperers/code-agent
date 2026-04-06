@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -37,6 +38,9 @@ import com.anthropic.models.messages.ToolUseBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
 import com.eneve.agent.agent.store.JobCheckpointStore;
+import com.eneve.agent.agent.store.JobStore;
+import com.eneve.agent.model.JobRecord;
+import com.eneve.agent.model.JobStatus;
 import com.eneve.agent.tools.ToolExecutor;
 import com.eneve.agent.tools.ToolRegistry;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -83,6 +87,9 @@ public class ClaudeToolUseLoop {
 
     @Inject
     JobCheckpointStore checkpointStore;
+
+    @Inject
+    JobStore jobStore;
 
     @Inject
     ContextCompactionService compactionService;
@@ -265,6 +272,14 @@ public class ClaudeToolUseLoop {
         int compactionFailures = 0;
 
         for (int iteration = startIteration; iteration < startIteration + iterationCap; iteration++) {
+            if (jobId != null) {
+                Optional<JobRecord> current = jobStore.get(jobId);
+                if (current.isPresent() && current.get().getStatus() == JobStatus.CANCELLED) {
+                    LOG.infof("Job %s was cancelled — stopping agent loop at iteration %d", jobId, iteration + 1);
+                    throw new JobCancelledException(jobId);
+                }
+            }
+
             LOG.infof("Agent loop iteration %d/%d", iteration + 1, iterationCap);
 
             if (summaryService.isEnabled()) {

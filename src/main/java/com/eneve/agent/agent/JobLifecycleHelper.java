@@ -67,7 +67,20 @@ public class JobLifecycleHelper {
 
     // ─── Failure handlers ───────────────────────────────────────────────
 
+    /**
+     * Returns true if the job has already been marked CANCELLED (e.g. by a concurrent cancel
+     * request). All fail-handlers check this before overriding status to FAILED.
+     */
+    private boolean isAlreadyCancelled(JobRecord job) {
+        if (job.getStatus() == JobStatus.CANCELLED) {
+            LOG.infof("Job %s already cancelled — skipping FAILED override", job.getJobId());
+            return true;
+        }
+        return false;
+    }
+
     public void failFix(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -83,6 +96,7 @@ public class JobLifecycleHelper {
     }
 
     public void failReview(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Review job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -100,6 +114,7 @@ public class JobLifecycleHelper {
     }
 
     public void failFixPr(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Fix-PR job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -116,6 +131,7 @@ public class JobLifecycleHelper {
     }
 
     public void failGenerateTests(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("GenerateTests job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -132,6 +148,7 @@ public class JobLifecycleHelper {
     }
 
     public void failGenerateDocs(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("GenerateDocs job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -147,6 +164,7 @@ public class JobLifecycleHelper {
     }
 
     public void failSyncConfluence(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("SyncConfluence job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -154,6 +172,7 @@ public class JobLifecycleHelper {
     }
 
     public void failHook(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Hook job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -162,6 +181,7 @@ public class JobLifecycleHelper {
     }
 
     public void failMetrics(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Metrics job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -170,6 +190,7 @@ public class JobLifecycleHelper {
     }
 
     public void failQualityReport(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("QualityReport job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -177,6 +198,7 @@ public class JobLifecycleHelper {
     }
 
     public void failReply(JobRecord job, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("Reply job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
@@ -184,6 +206,7 @@ public class JobLifecycleHelper {
     }
 
     public void failFixComment(JobRecord job, ReplyCommentRequest request, String message) {
+        if (isAlreadyCancelled(job)) return;
         LOG.errorf("FixComment job %s failed: %s", job.getJobId(), message);
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);

@@ -427,7 +427,9 @@ public class RunFixService {
                     + "Records must be retained for compliance.");
         }
 
-        if (job.getStatus() != JobStatus.PENDING && job.getStatus() != JobStatus.QUEUED) {
+        if (job.getStatus() != JobStatus.PENDING
+                && job.getStatus() != JobStatus.QUEUED
+                && job.getStatus() != JobStatus.RUNNING) {
             throw new JobConflictException(
                     "Job cannot be cancelled. Current status: " + job.getStatus());
         }
