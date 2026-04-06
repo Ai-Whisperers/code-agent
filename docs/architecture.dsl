@@ -1,315 +1,233 @@
-workspace "Code Agent Runner" "Self-hosted AI coding agent: clones repos, runs a Claude tool-use loop, validates builds, creates pull requests, and updates Jira." {
+workspace "Code Agent Runner" "Self-hosted AI coding agent that clones repositories, runs an agentic tool-use loop, validates builds, creates pull requests, and updates Jira." {
 
     model {
 
-        # ── External Actors ─────────────────────────────────────────────────────
+        # ── External actors ─────────────────────────────────────────────────
 
-        developer = person "Developer" "Interacts with the agent via the web UI or an MCP-enabled IDE to trigger jobs, review PRs, and chat with the AI assistant."
-        admin = person "Admin" "Configures the system: repo settings, customer registry, cloud accounts, knowledge sources, and encryption keys."
-        aiAgent = person "AI Agent (MCP Client)" "External AI agent (e.g. Claude Desktop) that calls the agent's MCP-compatible REST tools over HTTPS."
+        developer = person "Developer" "Software engineer who triggers jobs, reviews AI-generated PRs, and interacts via the chat interface."
+        admin = person "Administrator" "Platform admin who manages settings, knowledge sources, teams, and user accounts."
 
-        # ── External Software Systems ────────────────────────────────────────────
+        # ── External systems ────────────────────────────────────────────────
 
-        gitPlatform = softwareSystem "Git Platform" "Hosts source code repositories and raises webhook events on pull-request and push activity. Supports Bitbucket, GitHub, GitLab, and Azure DevOps." {
+        anthropicApi = softwareSystem "Anthropic Claude API" "LLM provider (Claude Sonnet / Haiku) used for the agentic tool-use loop, code generation, reviews, and chat." {
             tags "External"
         }
 
-        jiraSystem = softwareSystem "Jira" "Issue tracker. The agent reads issues for context, posts review comments, transitions tickets, and logs work." {
+        jiraCloud = softwareSystem "Jira Cloud" "Issue tracking system; provides ticket context for fix jobs, receives status transitions and comments, and is used as a knowledge source." {
             tags "External"
         }
 
-        confluenceSystem = softwareSystem "Confluence" "Wiki. The agent reads pages for knowledge indexing and publishes generated documentation." {
+        confluenceCloud = softwareSystem "Confluence Cloud" "Wiki platform used as a knowledge source and documentation target for generated docs." {
             tags "External"
         }
 
-        anthropicApi = softwareSystem "Anthropic Claude API" "Provides the Claude large-language model for all AI inference: code review, fix generation, chat, planning, and intent classification." {
+        gitPlatform = softwareSystem "Git Platform" "Source control hosting (Bitbucket Cloud, Azure DevOps, GitLab, or GitHub). Receives webhooks, hosts pull requests, and is cloned by the agent." {
             tags "External"
         }
 
-        awsBedrock = softwareSystem "AWS Bedrock" "Generates vector embeddings for code and knowledge chunks (Cohere / Titan models) and performs reranking (amazon.rerank-v1)." {
+        aikidoSecurity = softwareSystem "Aikido Security" "SAST/SCA vulnerability scanner. Provides security issue context for automated fix jobs and triage workflows." {
             tags "External"
         }
 
-        awsTranscribe = softwareSystem "AWS Transcribe Streaming" "Real-time speech-to-text service used by the /speech/transcribe endpoint." {
+        awsBedrock = softwareSystem "AWS Bedrock" "Managed ML service used for vector embeddings (Cohere, Titan) and semantic reranking." {
             tags "External"
         }
 
-        awsCloudWatch = softwareSystem "AWS CloudWatch" "Customer-account observability: log groups, log events, and CloudWatch metrics. Accessed cross-account via STS AssumeRole." {
+        awsTranscribe = softwareSystem "AWS Transcribe Streaming" "Converts spoken audio to text for the voice input feature." {
             tags "External"
         }
 
-        awsEcs = softwareSystem "AWS ECS" "Customer-account container management. The agent can list clusters, services, and tasks for diagnostics." {
+        awsS3 = softwareSystem "AWS S3" "Object storage for knowledge file uploads (PDFs, markdown) and UI static assets." {
             tags "External"
         }
 
-        awsRds = softwareSystem "AWS RDS" "Customer-account relational database metadata (instances and clusters)." {
+        awsSecretsManager = softwareSystem "AWS Secrets Manager" "Stores database credentials, API keys, and webhook secrets used by the ECS task at startup." {
             tags "External"
         }
 
-        awsSts = softwareSystem "AWS STS" "Security Token Service. Used to assume cross-account read-only IAM roles in customer AWS accounts." {
+        keycloak = softwareSystem "Keycloak" "OIDC identity provider that issues JWT bearer tokens for the REST API and UI authentication." {
             tags "External"
         }
 
-        awsS3 = softwareSystem "AWS S3" "Object storage for chat attachment files uploaded by users." {
+        n8n = softwareSystem "n8n" "Workflow automation platform that orchestrates the human-approval flow (PR approve/reject) via webhook callbacks." {
             tags "External"
         }
 
-        awsSes = softwareSystem "AWS SES" "Simple Email Service for outbound notifications (optional)." {
+        teamsWebhook = softwareSystem "Microsoft Teams" "Receives Adaptive Card notifications for job status updates (started, awaiting approval, completed, failed)." {
             tags "External"
         }
 
-        keycloak = softwareSystem "Keycloak" "OIDC identity provider. Issues JWT Bearer tokens for the REST API and the web UI." {
+        scytale = softwareSystem "Scytale" "SOC 2 compliance platform that receives automated evidence uploads when approved fix jobs are merged to production." {
             tags "External"
         }
 
-        aikido = softwareSystem "Aikido Security" "SAST / SCA / secret-scanning platform. The agent reads open security findings and can trigger CI scans after fixes are merged." {
-            tags "External"
-        }
+        # ── Main software system ─────────────────────────────────────────────
 
-        scytale = softwareSystem "Scytale" "SOC II compliance platform. The agent uploads evidence payloads (audit trail + compliance checks) after fix jobs are approved and merged." {
-            tags "External"
-        }
+        codeAgentRunner = softwareSystem "Code Agent Runner" "Quarkus-based service that automates code fixes, AI code reviews, test generation, documentation, and knowledge management through an agentic Claude tool-use loop." {
 
-        teamsWebhook = softwareSystem "Microsoft Teams" "Receives Adaptive Card notifications when jobs complete, fail, or require approval." {
-            tags "External"
-        }
+            # ── Containers ───────────────────────────────────────────────
 
-        n8nWebhook = softwareSystem "n8n" "Workflow automation platform. Receives job completion callbacks via HTTP webhook for downstream automation." {
-            tags "External"
-        }
-
-        mavenCentral = softwareSystem "Maven Central / npm / Packagist" "Public package registries queried by the Upgrade Scheduler to determine the latest framework versions." {
-            tags "External"
-        }
-
-        xray = softwareSystem "Xray (Jira)" "Jira-native test management add-on. The agent creates test executions and updates test run statuses." {
-            tags "External"
-        }
-
-        # ── Main Software System ─────────────────────────────────────────────────
-
-        codeAgent = softwareSystem "Code Agent Runner" "Quarkus-based self-hosted service that orchestrates AI-powered code review, automated fixes, knowledge indexing, quality reporting, and compliance evidence generation." {
-
-            # ── Containers ──────────────────────────────────────────────────────
-
-            apiService = container "API Service" "Quarkus 3 JAX-RS application. Exposes REST endpoints for job management, chat, plans, quality reports, webhooks, speech, and MCP tooling. Secured by Keycloak OIDC and API-key filters." "Java 21 / Quarkus 3 / RESTEasy Reactive" {
+            apiService = container "API Service" "Quarkus 3 REST application. Exposes all REST endpoints, runs the agentic job loop, and coordinates all integrations." "Java 21 / Quarkus 3 / JAX-RS" {
                 tags "Service"
 
-                # REST resources
-                webhookHandler = component "Webhook Handlers" "Receives and validates signed webhook events from the Git platform, Jira, and Aikido. Enqueues the appropriate job type."
-                jobsApi = component "Jobs API" "CRUD and lifecycle endpoints for agent jobs: list, diff, commits, approve, reject, evidence upload."
-                chatApi = component "Chat API" "POST /chat — streams SSE ChatEvents (text deltas, tool events) from a Claude tool-use loop. Supports multi-turn conversation history."
-                speechApi = component "Speech API" "POST /speech/transcribe — forwards raw PCM audio to AWS Transcribe Streaming and returns the transcript."
-                attachmentsApi = component "Attachments API" "Multipart upload and presigned-URL download for chat attachment files stored in S3."
-                planApi = component "Plan API" "CRUD, generation, approval/rejection, and SSE-streaming progress for AI execution plans."
-                qualityApi = component "Quality Report API" "On-demand trigger and historical retrieval of per-repository quality snapshots."
-                mcpApi = component "MCP Tools API" "Model Context Protocol compatible REST tools (Jira, Confluence, Xray, agent control) consumed by external AI agents."
-                customerApi = component "Customer Registry API" "Manages customer → product → environment → cloud account mappings."
-                settingsApi = component "Settings API" "Encrypted key-value store for system and per-product runtime configuration."
+                # REST surface — grouped by domain
+                webhookHandlers = component "Webhook Handlers" "Receives HMAC-verified push events from Bitbucket, GitHub, GitLab, Azure DevOps, Jira, Confluence, and Aikido. Enqueues review/fix jobs automatically." "JAX-RS Resources"
+                runFixResource = component "RunFix Resource" "REST endpoints: POST /run-fix, /quick-fix, /aikido-fix, /review-pr, /fix-pr, /generate-tests, /generate-docs, /sync-jira." "JAX-RS Resource"
+                jobsResource = component "Jobs Resource" "REST endpoints for job lifecycle: list, status, diff, approve, reject, rerun, cancel, comment-chat (SSE)." "JAX-RS Resource"
+                chatResource = component "Chat Resource" "POST /chat — SSE-streaming freeform AI assistant backed by a read-mostly tool-use loop." "JAX-RS Resource"
+                knowledgeResource = component "Knowledge Resource" "REST endpoints to index Jira/Confluence/web-docs/static files, search the knowledge base, and manage sources." "JAX-RS Resource"
+                architectureResource = component "Architecture Resource" "REST endpoints to generate, view, version, pin, and export Structurizr DSL architecture diagrams." "JAX-RS Resource"
+                settingsResource = component "Settings Resource" "Manages global agent settings, repo settings, prompt templates, teams, hooks, and customer registry." "JAX-RS Resource"
 
-                # Core agent machinery
-                jobQueue = component "Job Queue" "In-memory priority queue with per-category concurrency semaphores. Dispatches JobRecords to the AgentRunner. Refills review jobs from the database every 10 s."
-                agentRunner = component "Agent Runner" "Resolves the matching JobHandler for each job type and delegates execution. Handles approve/reject lifecycle including PR merge and Scytale evidence upload."
-                claudeLoop = component "Claude Tool-Use Loop" "Iterative agentic loop: sends messages to Claude with tool definitions, executes tool calls (in parallel when read-only), and repeats until a final answer or iteration cap is reached."
-                toolRegistry = component "Tool Registry" "CDI registry of all ToolExecutor beans. Routes tool-call names from Claude to the correct executor."
+                # Core agent engine
+                agentRunner = component "Agent Runner" "Thin dispatcher: resolves the correct JobHandler for each job type and delegates to it. Also handles PR approve/reject lifecycle." "ApplicationScoped Bean"
+                claudeToolUseLoop = component "Claude Tool-Use Loop" "Core agentic loop: sends messages to Claude with tool definitions, dispatches tool calls in parallel where safe, and iterates until a final response or iteration cap." "ApplicationScoped Bean"
+                jobQueue = component "Job Queue" "In-memory FIFO queue with configurable capacity and max-concurrency. Submits jobs to a ManagedExecutor thread pool." "ApplicationScoped Bean"
 
-                # Job handlers
-                reviewHandler = component "Review Handler" "Clones repo, fetches PR diff, runs linters and static analysis, then asks Claude to produce inline review comments posted back to the Git platform."
-                fixHandler = component "Fix / Fix-PR / Fix-Comment Handlers" "Clones repo, runs the Claude tool-use loop in write mode to apply code changes, validates the build, and opens or updates a pull request."
-                generateTestsHandler = component "Generate Tests Handler" "Generates unit tests for changed code and commits them to a new PR."
-                generateDocsHandler = component "Generate Docs Handler" "Generates or updates documentation pages and optionally publishes them to Confluence."
-                qualityReportHandler = component "Quality Report Handler" "Collects coverage, linter findings, complexity, and security metrics; stores a quality snapshot in the database."
-                planOrchestratorSvc = component "Plan Orchestrator Service" "Phase-by-phase execution of approved execution plans. Listens for JobCompletedEvents and submits the next phase."
+                # Job handlers (one per job type)
+                jobHandlers = component "Job Handlers" "Specialised handlers for each JobType: RunFix, Review, FixPr, FixComment, Reply, GenerateTests, GenerateDocs, QualityReport, Metrics, Upgrade, KnowledgeGraph, Architecture, and more." "CDI Beans"
 
-                # Supporting services
-                knowledgeIndexer = component "Knowledge Indexer" "Indexes Jira issues, Confluence pages, web documentation, and S3-hosted static files into the knowledge_embeddings vector table."
-                embeddingIndexer = component "Embedding Indexer" "Extracts class and method-level symbol chunks from Java / C# / TypeScript / PHP source files and stores embeddings in the code_embeddings table."
-                codeGraphSvc = component "Code Graph Service" "Builds and queries a call-graph index (code_graph table) using JavaParser AST analysis. Supports cross-repo impact analysis."
-                upgradeService = component "Upgrade Service" "Checks framework version registries, generates AI upgrade plans for outdated repos, and auto-executes them."
-                aikidoSvc = component "Aikido Service" "OAuth2 client for the Aikido Security API. Fetches open security findings and triggers CI scans."
-                scytaleSvc = component "Scytale Service" "HTTP client that uploads SOC II compliance evidence payloads to the Scytale API after fix jobs are approved."
-                linterService = component "Linter Service" "Runs PMD, SpotBugs, ESLint, PHPStan, and dotnet-format against changed files; produces a diff-scoped findings report."
-                chatService = component "Chat Service" "Builds system prompts, loads conversation history, selects read-only or write tools, runs the streaming Claude loop, and persists messages."
-                webDocsCrawler = component "Web Docs Crawler" "BFS crawler that fetches public documentation sites and feeds pages to the knowledge indexer."
-                teamsNotifier = component "Teams Notifier" "Posts Adaptive Card notifications to the Microsoft Teams incoming webhook URL."
-                n8nNotifier = component "n8n Notifier" "HTTP POST callback to n8n when a job completes."
-                securityFilters = component "Security Filters" "API-key filter, OIDC bearer token validation, webhook HMAC-SHA256 signature verification, and SSRF guard."
+                # Intelligence services
+                codeGraphService = component "Code Graph Service" "Builds and queries AST-based call graphs using JavaParser, Tree-sitter (C#, TypeScript, PHP). Supports cross-repo impact analysis." "ApplicationScoped Bean"
+                embeddingIndexer = component "Embedding Indexer" "Indexes code symbols (classes, methods) as vectors via AWS Bedrock and stores them in pgvector for semantic code search." "ApplicationScoped Bean"
+                knowledgeIndexer = component "Knowledge Indexer" "Indexes Jira issues, Confluence pages, web-doc crawls, and uploaded files as vectors via AWS Bedrock for knowledge search." "ApplicationScoped Bean"
+                linterService = component "Linter Service" "Runs Checkstyle, PMD, SpotBugs, ESLint, PHPStan, and dotnet-format. Diffs findings against a pre-change baseline." "ApplicationScoped Bean"
+                plannerService = component "Planner Service" "Generates and orchestrates multi-step execution plans for complex Jira epics / user stories using Claude." "ApplicationScoped Bean"
+
+                # Integration clients
+                gitPlatformService = component "Git Platform Service" "Pluggable abstraction over Bitbucket, GitHub, GitLab, and Azure DevOps: clone, PR create/merge/decline, inline comments, webhook sync." "ApplicationScoped Bean"
+                jiraService = component "Jira Service" "REST client for Jira Cloud: fetch issues, post comments, transition status, add worklogs, create issues." "ApplicationScoped Bean"
+                confluenceService = component "Confluence Service" "REST client for Confluence Cloud: read pages, create/update pages, index space content." "ApplicationScoped Bean"
+                aikidoService = component "Aikido Service" "OAuth2 REST client for Aikido Security: list open issue groups, fetch CVE details, trigger CI scans." "ApplicationScoped Bean"
+                bedrockEmbeddingService = component "Bedrock Embedding Service" "Calls AWS Bedrock InvokeModel for code/text embeddings and BedrockAgentRuntime Rerank API." "ApplicationScoped Bean"
+
+                # Notification & compliance
+                notifiers = component "Notifiers" "Sends job result notifications to Microsoft Teams (Adaptive Cards) and n8n webhooks for approval flows." "ApplicationScoped Beans"
+                scytaleService = component "Scytale Service" "Uploads SOC 2 compliance evidence (audit trail + compliance checks) to Scytale when fix jobs are merged to production." "ApplicationScoped Bean"
+
+                # Scheduler
+                schedulers = component "Schedulers" "Quarkus @Scheduled jobs: code-graph pre-build, knowledge reindex, quality reports, upgrade checks, web-doc crawl, log analysis." "Quarkus Scheduler"
             }
 
-            database = container "PostgreSQL Database" "Stores all persistent state: jobs, reviews, comments, conversations, knowledge embeddings, code embeddings, code graph, quality reports, plans, settings, customer registry, and audit log." "PostgreSQL 16 + pgvector" {
+            database = container "PostgreSQL Database" "Primary persistent store. Holds jobs, repo settings, code graph, vector embeddings, knowledge embeddings, audit log, conversations, plans, and more. Uses pgvector extension for similarity search." "PostgreSQL 15 + pgvector" {
                 tags "Database"
             }
 
-            s3Bucket = container "S3 Attachment Bucket" "Object storage for chat attachment files (images, PDFs, text files)." "AWS S3" {
-                tags "Database"
+            frontendUi = container "Frontend UI" "Static React single-page application served from S3 via CloudFront. Provides job dashboard, chat, architecture viewer, settings, and knowledge management." "React / CloudFront + S3" {
+                tags "WebApp"
+            }
+
+            loadBalancer = container "Application Load Balancer" "AWS ALB that terminates HTTPS and forwards traffic to ECS Fargate tasks on port 8080." "AWS ALB" {
+                tags "Infrastructure"
             }
         }
 
-        # ── Relationships: Persons → System ─────────────────────────────────────
+        # ── Relationships: people → system ───────────────────────────────────
 
-        developer -> codeAgent "Submits jobs, chats with AI, reviews plans, approves/rejects PRs" "HTTPS/REST + SSE"
-        admin -> codeAgent "Configures repos, customers, cloud accounts, knowledge sources" "HTTPS/REST"
-        aiAgent -> codeAgent "Calls MCP-compatible agent tools" "HTTPS/REST"
+        developer -> codeAgentRunner "Triggers fix/review jobs, chats with AI, reviews pull requests, manages settings" "HTTPS/REST + SSE"
+        admin -> codeAgentRunner "Configures integrations, manages knowledge sources, user accounts, and system settings" "HTTPS/REST"
 
-        # ── Relationships: System → External Systems ─────────────────────────────
+        # ── Relationships: external systems → Code Agent Runner ───────────────
 
-        codeAgent -> gitPlatform "Clones repos, creates branches, opens/merges/declines PRs, posts review comments, syncs webhooks" "HTTPS/Git"
-        codeAgent -> jiraSystem "Reads issues, posts comments, transitions tickets, logs worklogs" "HTTPS/REST"
-        codeAgent -> confluenceSystem "Reads pages for knowledge indexing, publishes generated docs" "HTTPS/REST"
-        codeAgent -> anthropicApi "Sends messages and tool definitions; receives streamed responses" "HTTPS"
-        codeAgent -> awsBedrock "Generates vector embeddings for code and knowledge; reranks search results" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsTranscribe "Streams raw PCM audio; receives real-time transcription events" "AWS SDK v2 / HTTP2"
-        codeAgent -> awsCloudWatch "Reads log groups, log events, and metrics for customer accounts" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsEcs "Lists clusters, services, and tasks for customer accounts" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsRds "Describes DB instances and clusters for customer accounts" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsSts "Assumes cross-account read-only IAM roles" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsS3 "Stores and retrieves chat attachment files" "AWS SDK v2 / HTTPS"
-        codeAgent -> awsSes "Sends outbound email notifications" "AWS SDK v2 / HTTPS"
-        codeAgent -> keycloak "Validates OIDC Bearer tokens; manages users via Admin REST Client" "HTTPS/OIDC"
-        codeAgent -> aikido "Fetches open security findings, triggers CI scans" "HTTPS/REST"
-        codeAgent -> scytale "Uploads SOC II compliance evidence after fix merges" "HTTPS/REST"
-        codeAgent -> teamsWebhook "Sends Adaptive Card job-completion notifications" "HTTPS"
-        codeAgent -> n8nWebhook "Sends job-completion callback payloads" "HTTPS"
-        codeAgent -> mavenCentral "Queries latest framework versions for upgrade checks" "HTTPS/REST"
-        codeAgent -> xray "Creates test executions, updates test run statuses" "HTTPS/REST"
+        gitPlatform -> codeAgentRunner "Sends PR / comment webhook events (HMAC-SHA256)" "HTTPS/Webhook"
+        jiraCloud -> codeAgentRunner "Sends issue-created / issue-updated webhook events" "HTTPS/Webhook"
+        confluenceCloud -> codeAgentRunner "Sends page-updated webhook events for knowledge re-index" "HTTPS/Webhook"
+        aikidoSecurity -> codeAgentRunner "Sends new vulnerability webhook events" "HTTPS/Webhook"
+        n8n -> codeAgentRunner "Calls approve/reject job endpoints after human decision" "HTTPS/REST"
 
-        gitPlatform -> codeAgent "Delivers PR and push webhook events" "HTTPS"
-        jiraSystem -> codeAgent "Delivers issue-created and issue-updated webhook events" "HTTPS"
-        aikido -> codeAgent "Delivers security-finding webhook events" "HTTPS"
+        # ── Relationships: Code Agent Runner → external systems ───────────────
 
-        # ── Relationships: Containers ────────────────────────────────────────────
+        codeAgentRunner -> anthropicApi "Sends tool-use messages and receives model responses" "HTTPS / Anthropic Java SDK"
+        codeAgentRunner -> jiraCloud "Fetches issues, posts comments, transitions status, adds worklogs" "HTTPS/REST"
+        codeAgentRunner -> confluenceCloud "Reads and writes wiki pages, indexes space content" "HTTPS/REST"
+        codeAgentRunner -> gitPlatform "Clones repos, pushes branches, creates/merges/declines PRs, posts inline comments" "HTTPS/Git + REST"
+        codeAgentRunner -> aikidoSecurity "Fetches vulnerability groups and CVE details via OAuth2" "HTTPS/REST"
+        codeAgentRunner -> awsBedrock "Generates vector embeddings and reranks search results" "HTTPS / AWS SDK v2"
+        codeAgentRunner -> awsTranscribe "Streams PCM audio chunks and receives transcription results" "HTTPS / AWS SDK v2 (WebSocket)"
+        codeAgentRunner -> awsS3 "Stores and retrieves knowledge file uploads and static UI assets" "HTTPS / AWS SDK v2"
+        codeAgentRunner -> awsSecretsManager "Reads secrets at startup via ECS task execution role" "HTTPS / AWS SDK v2"
+        codeAgentRunner -> keycloak "Validates OIDC bearer tokens on each authenticated request" "HTTPS/OIDC"
+        codeAgentRunner -> n8n "POSTs job result payloads to trigger approval workflows" "HTTPS/Webhook"
+        codeAgentRunner -> teamsWebhook "Sends Adaptive Card notifications for job lifecycle events" "HTTPS/Webhook"
+        codeAgentRunner -> scytale "Uploads SOC 2 evidence on approved-and-merged fix jobs" "HTTPS/REST"
 
-        developer -> apiService "Uses" "HTTPS/REST + SSE"
-        admin -> apiService "Configures" "HTTPS/REST"
-        aiAgent -> apiService "Invokes MCP tools" "HTTPS/REST"
+        # ── Container-level relationships ─────────────────────────────────────
 
-        apiService -> database "Reads and writes all state" "JDBC / SQL"
-        apiService -> s3Bucket "Uploads and downloads chat attachment files" "AWS SDK v2"
-        apiService -> anthropicApi "Sends inference requests" "HTTPS"
-        apiService -> awsBedrock "Generates embeddings and reranks results" "AWS SDK v2"
-        apiService -> awsTranscribe "Streams audio for transcription" "AWS SDK v2"
-        apiService -> awsCloudWatch "Reads customer CloudWatch data via assumed role" "AWS SDK v2"
-        apiService -> awsEcs "Reads customer ECS data via assumed role" "AWS SDK v2"
-        apiService -> awsRds "Reads customer RDS metadata via assumed role" "AWS SDK v2"
-        apiService -> awsSts "Assumes cross-account IAM roles" "AWS SDK v2"
-        apiService -> gitPlatform "Clones repos, manages PRs and comments" "HTTPS/Git"
-        apiService -> jiraSystem "Reads and updates issues" "HTTPS/REST"
-        apiService -> confluenceSystem "Reads and publishes pages" "HTTPS/REST"
-        apiService -> keycloak "Validates Bearer tokens; proxies user management" "HTTPS/OIDC"
-        apiService -> aikido "Reads findings; triggers CI scans" "HTTPS/REST"
+        developer -> frontendUi "Uses browser-based UI" "HTTPS"
+        frontendUi -> loadBalancer "Makes API calls" "HTTPS/REST + SSE"
+        loadBalancer -> apiService "Forwards requests to" "HTTP"
+        apiService -> database "Reads and writes all persistent state" "JDBC / pgvector"
+        apiService -> awsS3 "Stores and retrieves attachment files" "HTTPS / AWS SDK v2"
+        apiService -> anthropicApi "Runs agentic tool-use loop" "HTTPS / Anthropic Java SDK"
+        apiService -> jiraCloud "Fetches issues, updates status" "HTTPS/REST"
+        apiService -> confluenceCloud "Reads and writes pages" "HTTPS/REST"
+        apiService -> gitPlatform "Clones repos and manages PRs" "HTTPS/Git + REST"
+        apiService -> aikidoSecurity "Fetches security issue data" "HTTPS/REST"
+        apiService -> awsBedrock "Generates embeddings and reranks" "HTTPS / AWS SDK v2"
+        apiService -> awsTranscribe "Transcribes audio via streaming" "HTTPS / AWS SDK v2"
+        apiService -> keycloak "Validates OIDC JWT tokens" "HTTPS/OIDC"
+        apiService -> n8n "Sends job result notifications" "HTTPS/Webhook"
+        apiService -> teamsWebhook "Sends Teams notifications" "HTTPS/Webhook"
         apiService -> scytale "Uploads compliance evidence" "HTTPS/REST"
-        apiService -> teamsWebhook "Posts notifications" "HTTPS"
-        apiService -> n8nWebhook "Posts callbacks" "HTTPS"
-        apiService -> mavenCentral "Queries version registries" "HTTPS/REST"
-        apiService -> xray "Manages test executions" "HTTPS/REST"
-        apiService -> awsS3 "Stores static knowledge-base files" "AWS SDK v2"
-        apiService -> awsSes "Sends emails" "AWS SDK v2"
+        apiService -> awsSecretsManager "Reads bootstrap secrets at startup" "HTTPS / AWS SDK v2"
 
-        gitPlatform -> apiService "Pushes PR/push webhook events" "HTTPS"
-        jiraSystem -> apiService "Pushes issue webhook events" "HTTPS"
-        aikido -> apiService "Pushes security-finding webhook events" "HTTPS"
+        # ── Component-level relationships (inside API Service) ────────────────
 
-        # ── Relationships: Components ────────────────────────────────────────────
-
-        securityFilters -> chatApi "Guards all endpoints" "CDI filter chain"
-        securityFilters -> jobsApi "Guards all endpoints" "CDI filter chain"
-        securityFilters -> webhookHandler "Validates HMAC-SHA256 signatures" "CDI filter chain"
-
-        webhookHandler -> jobQueue "Enqueues jobs on webhook events" "CDI / in-process"
-        jobsApi -> jobQueue "Submits and queries jobs" "CDI / in-process"
-        chatApi -> chatService "Delegates streaming chat" "CDI / in-process"
-        chatApi -> attachmentsApi "References attachment IDs" "CDI / in-process"
-        attachmentsApi -> s3Bucket "Uploads and downloads files" "AWS SDK v2"
-        speechApi -> awsTranscribe "Streams audio" "AWS SDK v2"
-        planApi -> planOrchestratorSvc "Triggers plan execution" "CDI / in-process"
-        mcpApi -> jiraSystem "Reads/writes Jira on behalf of user" "HTTPS/REST"
-        mcpApi -> confluenceSystem "Reads/writes Confluence on behalf of user" "HTTPS/REST"
-        mcpApi -> xray "Manages test executions" "HTTPS/REST"
-
-        jobQueue -> agentRunner "Dispatches JobRecords" "CDI / in-process"
-        agentRunner -> reviewHandler "Delegates REVIEW jobs" "CDI / in-process"
-        agentRunner -> fixHandler "Delegates FIX/FIX_PR/FIX_COMMENT jobs" "CDI / in-process"
-        agentRunner -> generateTestsHandler "Delegates GENERATE_TESTS jobs" "CDI / in-process"
-        agentRunner -> generateDocsHandler "Delegates GENERATE_DOCS jobs" "CDI / in-process"
-        agentRunner -> qualityReportHandler "Delegates QUALITY_REPORT jobs" "CDI / in-process"
-        agentRunner -> scytaleSvc "Uploads evidence on fix-job merge" "CDI / in-process"
-
-        reviewHandler -> claudeLoop "Runs review prompt" "CDI / in-process"
-        reviewHandler -> linterService "Runs diff-scoped linting" "CDI / in-process"
-        reviewHandler -> gitPlatform "Posts inline review comments" "HTTPS/REST"
-        fixHandler -> claudeLoop "Runs fix prompt in write mode" "CDI / in-process"
-        fixHandler -> gitPlatform "Opens / updates pull request" "HTTPS/Git"
-        generateTestsHandler -> claudeLoop "Generates tests via AI loop" "CDI / in-process"
-        generateDocsHandler -> claudeLoop "Generates docs via AI loop" "CDI / in-process"
-        generateDocsHandler -> confluenceSystem "Publishes generated pages" "HTTPS/REST"
-        qualityReportHandler -> linterService "Collects linter findings" "CDI / in-process"
-        qualityReportHandler -> database "Stores quality snapshots" "JDBC"
-
-        claudeLoop -> anthropicApi "Sends messages and tool schemas; receives streamed responses" "HTTPS"
-        claudeLoop -> toolRegistry "Dispatches tool calls by name" "CDI / in-process"
-
-        toolRegistry -> jiraSystem "Reads/writes Jira issues (search_knowledge, jira tools)" "HTTPS/REST"
-        toolRegistry -> confluenceSystem "Reads/writes Confluence pages" "HTTPS/REST"
-        toolRegistry -> awsBedrock "Semantic code and knowledge search" "AWS SDK v2"
-        toolRegistry -> awsCloudWatch "Reads customer logs and metrics" "AWS SDK v2"
-        toolRegistry -> awsEcs "Reads customer ECS data" "AWS SDK v2"
-        toolRegistry -> awsRds "Reads customer RDS metadata" "AWS SDK v2"
-        toolRegistry -> gitPlatform "Reads repo files via SCM API" "HTTPS/REST"
-        toolRegistry -> database "Reads code graph, embeddings, knowledge" "JDBC"
-
-        planOrchestratorSvc -> jobQueue "Submits plan step jobs" "CDI / in-process"
-
-        knowledgeIndexer -> jiraSystem "Fetches issues and attachments" "HTTPS/REST"
-        knowledgeIndexer -> confluenceSystem "Fetches pages" "HTTPS/REST"
-        knowledgeIndexer -> awsBedrock "Generates text embeddings" "AWS SDK v2"
-        knowledgeIndexer -> awsS3 "Downloads static knowledge files" "AWS SDK v2"
-        knowledgeIndexer -> database "Persists knowledge_embeddings" "JDBC"
-
-        embeddingIndexer -> awsBedrock "Generates code symbol embeddings" "AWS SDK v2"
-        embeddingIndexer -> database "Persists code_embeddings" "JDBC"
-
-        codeGraphSvc -> database "Reads and writes code_graph table" "JDBC"
-
-        upgradeService -> mavenCentral "Queries latest framework versions" "HTTPS/REST"
-        upgradeService -> planOrchestratorSvc "Creates and executes upgrade plans" "CDI / in-process"
-        upgradeService -> aikidoSvc "Appends security findings to upgrade spec" "CDI / in-process"
-
-        aikidoSvc -> aikido "Fetches findings; triggers CI scans" "HTTPS/REST"
-        scytaleSvc -> scytale "Uploads evidence payloads" "HTTPS/REST"
-
-        chatService -> claudeLoop "Runs streaming chat loop" "CDI / in-process"
-        chatService -> database "Loads and persists conversation history" "JDBC"
-
-        webDocsCrawler -> database "Persists crawled web pages as knowledge chunks" "JDBC"
-        webDocsCrawler -> awsBedrock "Generates embeddings for crawled pages" "AWS SDK v2"
-
-        teamsNotifier -> teamsWebhook "Sends Adaptive Card notifications" "HTTPS"
-        n8nNotifier -> n8nWebhook "Sends job-completion callbacks" "HTTPS"
+        webhookHandlers -> jobQueue "Enqueues review and fix jobs" "CDI Event"
+        runFixResource -> jobQueue "Submits fix, review, and generation jobs" "Direct call"
+        runFixResource -> jiraService "Fetches issue summary and context" "Direct call"
+        runFixResource -> aikidoService "Resolves vulnerability context for aikido-fix" "Direct call"
+        jobsResource -> agentRunner "Calls approve/reject lifecycle actions" "Direct call"
+        jobsResource -> jobQueue "Re-queues or cancels jobs" "Direct call"
+        chatResource -> claudeToolUseLoop "Runs streaming chat loop" "Direct call"
+        knowledgeResource -> knowledgeIndexer "Triggers indexing and crawling" "Direct call"
+        architectureResource -> jobQueue "Submits architecture generation jobs" "Direct call"
+        jobQueue -> agentRunner "Dispatches jobs to the correct handler" "ManagedExecutor"
+        agentRunner -> jobHandlers "Delegates execution to typed handler" "CDI lookup"
+        jobHandlers -> claudeToolUseLoop "Runs the core agentic loop" "Direct call"
+        jobHandlers -> gitPlatformService "Clones repos, creates PRs" "Direct call"
+        jobHandlers -> jiraService "Updates Jira issue status" "Direct call"
+        jobHandlers -> linterService "Runs static analysis before and after changes" "Direct call"
+        jobHandlers -> codeGraphService "Indexes and queries code impact graph" "Direct call"
+        claudeToolUseLoop -> anthropicApi "Sends messages and tool results to Claude" "Anthropic Java SDK"
+        claudeToolUseLoop -> codeGraphService "Executes query_code_graph tool calls" "Direct call"
+        claudeToolUseLoop -> embeddingIndexer "Executes semantic_search tool calls" "Direct call"
+        claudeToolUseLoop -> knowledgeIndexer "Executes search_knowledge_base tool calls" "Direct call"
+        claudeToolUseLoop -> jiraService "Executes Jira tool calls (create, update, search, transition)" "Direct call"
+        claudeToolUseLoop -> confluenceService "Executes Confluence tool calls (get, create, update page)" "Direct call"
+        embeddingIndexer -> bedrockEmbeddingService "Generates code embeddings" "Direct call"
+        knowledgeIndexer -> bedrockEmbeddingService "Generates knowledge embeddings" "Direct call"
+        bedrockEmbeddingService -> awsBedrock "Invokes embedding and reranking models" "AWS SDK v2"
+        notifiers -> n8n "Sends job result webhook payload" "HTTP POST"
+        notifiers -> teamsWebhook "Sends Adaptive Card notification" "HTTP POST"
+        agentRunner -> scytaleService "Triggers SOC 2 evidence upload on PR merge" "Direct call"
+        scytaleService -> scytale "POSTs evidence payload" "HTTPS/REST"
+        schedulers -> jobQueue "Enqueues scheduled jobs (quality reports, upgrades, code graphs)" "Direct call"
+        schedulers -> knowledgeIndexer "Triggers periodic knowledge reindex" "Direct call"
+        plannerService -> claudeToolUseLoop "Runs plan-generation loop" "Direct call"
     }
-
-    # ── Views ────────────────────────────────────────────────────────────────────
 
     views {
 
-        systemContext codeAgent "SystemContext" {
+        systemContext codeAgentRunner "SystemContext" {
             include *
             autoLayout lr
-            title "Code Agent Runner – System Context"
-            description "The Code Agent Runner and all external systems and actors it interacts with."
+            title "Code Agent Runner — System Context"
+            description "Shows the Code Agent Runner and all people and external systems it interacts with."
         }
 
-        container codeAgent "Containers" {
+        container codeAgentRunner "Containers" {
             include *
             autoLayout lr
-            title "Code Agent Runner – Containers"
-            description "Deployable units inside the Code Agent Runner system."
+            title "Code Agent Runner — Containers"
+            description "The deployable containers and key external dependencies."
         }
 
-        component apiService "Components_ApiService" {
+        component apiService "Components_APIService" {
             include *
             autoLayout tb
-            title "API Service – Components"
-            description "Key components inside the Quarkus API Service container."
+            title "API Service — Components"
+            description "Internal components of the Quarkus API service: REST resources, agent engine, intelligence services, and integration clients."
         }
 
         styles {
@@ -320,18 +238,30 @@ workspace "Code Agent Runner" "Self-hosted AI coding agent: clones repos, runs a
             }
             element "Database" {
                 shape Cylinder
-                background #f5a623
-                color #000000
+                background #2e7d32
+                color #ffffff
+            }
+            element "WebApp" {
+                shape WebBrowser
+                background #e65100
+                color #ffffff
+            }
+            element "Infrastructure" {
+                shape RoundedBox
+                background #546e7a
+                color #ffffff
             }
             element "External" {
                 background #999999
                 color #ffffff
             }
+            element "Service" {
+                background #1565c0
+                color #ffffff
+            }
             element "Queue" {
                 shape Pipe
-            }
-            element "Service" {
-                background #1168bd
+                background #6a1b9a
                 color #ffffff
             }
             element "softwareSystem" {
@@ -345,6 +275,9 @@ workspace "Code Agent Runner" "Self-hosted AI coding agent: clones repos, runs a
             element "component" {
                 background #85bbf0
                 color #000000
+            }
+            relationship "Relationship" {
+                dashed false
             }
         }
     }
