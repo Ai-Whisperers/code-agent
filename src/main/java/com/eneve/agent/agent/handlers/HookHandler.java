@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
@@ -11,6 +12,8 @@ import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.List;
 
 @ApplicationScoped
 public class HookHandler implements JobHandler {
@@ -25,6 +28,7 @@ public class HookHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject TeamsNotifier teamsNotifier;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -74,6 +78,8 @@ public class HookHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             RunFixRequest fixRequest = new RunFixRequest(
                     request.repoUrl(), request.branchName(), null,
                     request.prompt(), request.targetBranch(), null, null,
@@ -83,7 +89,8 @@ public class HookHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
+                        priorMessages, job.getAdditionalIterations(),
                         job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {

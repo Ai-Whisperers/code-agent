@@ -455,8 +455,9 @@ public class JobQueue {
      * @return new job ID, or {@code null} if the job type cannot be restarted
      */
     public String restartJob(JobRecord original, int checkpointIteration, int additionalIterations) {
-        if (original.getStatus() != com.eneve.agent.model.JobStatus.FAILED) {
-            LOG.warnf("restartJob called on non-FAILED job %s (status=%s) — ignoring",
+        if (original.getStatus() != com.eneve.agent.model.JobStatus.FAILED
+                && original.getStatus() != com.eneve.agent.model.JobStatus.CANCELLED) {
+            LOG.warnf("restartJob called on non-FAILED/CANCELLED job %s (status=%s) — ignoring",
                     original.getJobId(), original.getStatus());
             return null;
         }

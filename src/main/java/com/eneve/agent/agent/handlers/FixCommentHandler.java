@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.model.CommentContext;
 import com.eneve.agent.agent.store.CommentStore;
@@ -36,6 +37,7 @@ public class FixCommentHandler implements JobHandler {
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -92,6 +94,8 @@ public class FixCommentHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             java.util.List<ThreadComment> thread;
             try {
                 thread = platformService.getCommentThread(
@@ -106,10 +110,11 @@ public class FixCommentHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
                         ToolDefinitions.all(),
                         "A developer has requested that you implement the fix from your review comment. "
                                 + "Read the relevant code, apply the fix, and run tests.",
+                        priorMessages, job.getAdditionalIterations(),
                         job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {

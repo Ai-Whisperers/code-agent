@@ -474,9 +474,9 @@ public class RunFixService {
         JobRecord job = jobStore.get(jobId)
                 .orElseThrow(() -> new JobNotFoundException("Job not found: " + jobId));
 
-        if (job.getStatus() != JobStatus.FAILED) {
+        if (job.getStatus() != JobStatus.FAILED && job.getStatus() != JobStatus.CANCELLED) {
             throw new JobConflictException(
-                    "Job cannot be restarted. Only FAILED jobs support restart. Current status: "
+                    "Job cannot be restarted. Only FAILED or CANCELLED jobs support restart. Current status: "
                             + job.getStatus());
         }
         com.eneve.agent.agent.model.JobCheckpoint checkpoint = checkpointStore.load(jobId)
@@ -718,11 +718,11 @@ public class RunFixService {
         boolean scytaleEnabled = !settings.get("scytale.api.key", "").isBlank();
         List<String> bugList = Arrays.asList(bugTypes.split("\\s*,\\s*"));
 
-        // Populate checkpoint fields for FAILED jobs of restartable types
+        // Populate checkpoint fields for FAILED and CANCELLED jobs of restartable types
         boolean hasCheckpoint = false;
         int checkpointIteration = 0;
         int iterationCap = Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50"));
-        if (job.getStatus() == JobStatus.FAILED) {
+        if (job.getStatus() == JobStatus.FAILED || job.getStatus() == JobStatus.CANCELLED) {
             var checkpoint = checkpointStore.load(jobId);
             if (checkpoint.isPresent()) {
                 hasCheckpoint = true;

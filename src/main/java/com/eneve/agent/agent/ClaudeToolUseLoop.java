@@ -39,6 +39,7 @@ import com.anthropic.models.messages.ThinkingBlock;
 import com.anthropic.models.messages.ThinkingBlockParam;
 import com.anthropic.models.messages.ToolUnion;
 import com.anthropic.models.messages.Usage;
+import com.eneve.agent.agent.handlers.CheckpointAwareJobSupport;
 import com.eneve.agent.agent.store.JobCheckpointStore;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.JobRecord;
@@ -248,6 +249,78 @@ public class ClaudeToolUseLoop {
                          String parentJobId, int depth) {
         return doRun(systemPrompt, workspace, ToolDefinitions.all(), priorMessages,
                 jobId, jobType, startIteration, remainingCap, parentJobId, depth);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // runOrResume — start fresh or resume from checkpoint
+    // ──────────────────────────────────────────────────────────────────────
+
+    /**
+     * Runs the agent loop from scratch if {@code priorMessages} is empty, or resumes from a
+     * previously saved checkpoint otherwise.
+     *
+     * <p>This is the full-parameter overload that all simpler variants delegate to.
+     *
+     * @param tools               tool definitions to make available to Claude
+     * @param initialUserMessage  message used only when starting fresh (ignored on resume)
+     * @param priorMessages       checkpoint message list; empty means start from scratch
+     * @param iterationCap        total iteration budget for a fresh run
+     * @param additionalIterations extra iterations to grant on top of the remaining default budget
+     */
+    public String runOrResume(String systemPrompt, WorkspaceContext workspace,
+                               List<ToolUnion> tools, String initialUserMessage,
+                               List<MessageParam> priorMessages, int iterationCap,
+                               int additionalIterations,
+                               String jobId, String jobType, String parentJobId, int depth) {
+        if (priorMessages == null || priorMessages.isEmpty()) {
+            return doRun(systemPrompt, workspace, tools, initialUserMessage,
+                    jobId, jobType, iterationCap, parentJobId, depth);
+        }
+        int startIter = CheckpointAwareJobSupport.startIteration(priorMessages);
+        int remainingCap = CheckpointAwareJobSupport.remainingCap(iterationCap, startIter, additionalIterations);
+        return doRun(systemPrompt, workspace, tools, priorMessages,
+                jobId, jobType, startIter, remainingCap, parentJobId, depth);
+    }
+
+    /**
+     * Variant of {@link #runOrResume} using custom tools and default initial message,
+     * with a custom iteration cap. Suitable for GenerateTests-style jobs.
+     */
+    public String runOrResume(String systemPrompt, WorkspaceContext workspace,
+                               List<MessageParam> priorMessages, int iterationCap,
+                               int additionalIterations,
+                               String jobId, String jobType, String parentJobId, int depth) {
+        String defaultMsg = "Please complete the task described in the system prompt. "
+                + "Start by listing the repository structure, then proceed.";
+        return runOrResume(systemPrompt, workspace, ToolDefinitions.all(), defaultMsg,
+                priorMessages, iterationCap, additionalIterations,
+                jobId, jobType, parentJobId, depth);
+    }
+
+    /**
+     * Variant of {@link #runOrResume} using custom tools and custom initial message,
+     * with the default iteration cap. Suitable for FixComment/Rewrite-style jobs.
+     */
+    public String runOrResume(String systemPrompt, WorkspaceContext workspace,
+                               List<ToolUnion> tools, String initialUserMessage,
+                               List<MessageParam> priorMessages, int additionalIterations,
+                               String jobId, String jobType, String parentJobId, int depth) {
+        int cap = Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50"));
+        return runOrResume(systemPrompt, workspace, tools, initialUserMessage,
+                priorMessages, cap, additionalIterations,
+                jobId, jobType, parentJobId, depth);
+    }
+
+    /**
+     * Simplest variant of {@link #runOrResume}: uses default tools, default iteration cap,
+     * and default initial message. Suitable for Fix/FixPr/Hook/SelfAnalysis-style jobs.
+     */
+    public String runOrResume(String systemPrompt, WorkspaceContext workspace,
+                               List<MessageParam> priorMessages, int additionalIterations,
+                               String jobId, String jobType, String parentJobId, int depth) {
+        int cap = Integer.parseInt(settings.get("run-fix.max-loop-iterations", "50"));
+        return runOrResume(systemPrompt, workspace, priorMessages, cap, additionalIterations,
+                jobId, jobType, parentJobId, depth);
     }
 
     private String doRun(String systemPrompt, WorkspaceContext workspace,

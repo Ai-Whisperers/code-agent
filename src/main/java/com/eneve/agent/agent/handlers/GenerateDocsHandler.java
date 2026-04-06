@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.model.RepoSettings;
 import com.eneve.agent.agent.service.DocsEmbeddingService;
@@ -16,6 +17,8 @@ import com.eneve.agent.settings.SettingsService;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.List;
 
 @ApplicationScoped
 public class GenerateDocsHandler implements JobHandler {
@@ -34,6 +37,7 @@ public class GenerateDocsHandler implements JobHandler {
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -115,6 +119,8 @@ public class GenerateDocsHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             workspace.putMetadata("workspace", ws);
             workspace.putMetadata("repoSlug", repoSlug);
 
@@ -124,10 +130,11 @@ public class GenerateDocsHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace, tools,
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace, tools,
                         "Please generate comprehensive documentation for this repository. "
                                 + "Start by exploring the project structure, then create all doc files.",
-                        generateDocsMaxIterations, job.getJobId(), job.getJobType().name(),
+                        priorMessages, generateDocsMaxIterations, job.getAdditionalIterations(),
+                        job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failGenerateDocs(job, "Agent loop error: " + e.getMessage());

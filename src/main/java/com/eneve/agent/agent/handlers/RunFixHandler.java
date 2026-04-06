@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.CodeMetricsStore;
 import com.eneve.agent.agent.store.JobStore;
@@ -43,6 +44,7 @@ public class RunFixHandler implements JobHandler {
     @Inject LinterService linterService;
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -111,6 +113,8 @@ public class RunFixHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             // Quality-improvement FIX jobs carry a planId; use the focused CC-reduction prompt.
             if (request.planId() != null && !request.planId().isBlank()) {
                 String qualityPrompt = buildQualityFixPrompt(request.planId());
@@ -173,7 +177,8 @@ public class RunFixHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
+                        priorMessages, job.getAdditionalIterations(),
                         job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {

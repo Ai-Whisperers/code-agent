@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.AgentPromptBuilder;
 import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.GitWorkspaceHelper;
@@ -21,6 +22,8 @@ import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+
+import java.util.List;
 
 /**
  * Handles REWRITE jobs: clones a source repository (read-only) and a target repository
@@ -47,6 +50,7 @@ public class RewriteHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -133,16 +137,21 @@ public class RewriteHandler implements JobHandler {
                 LOG.warnf("Could not configure git author (non-fatal): %s", e.getMessage());
             }
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(
+                    job, workspace, "target");
+
             // Build system prompt scoped to the rewrite task
             String systemPrompt = promptBuilder.buildRewritePrompt(request, workspace);
 
             // Run the agent loop
+            String initialUserMessage = request.prompt() != null ? request.prompt()
+                    : "Complete the rewrite step described in the system prompt. "
+                    + "Read from source/, write to target/.";
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
-                        ToolDefinitions.all(), request.prompt() != null ? request.prompt()
-                                : "Complete the rewrite step described in the system prompt. "
-                                + "Read from source/, write to target/.",
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
+                        ToolDefinitions.all(), initialUserMessage,
+                        priorMessages, job.getAdditionalIterations(),
                         job.getJobId(), JobType.REWRITE.name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {

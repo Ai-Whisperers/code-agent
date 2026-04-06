@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.BuildAndLintHelper;
 import com.eneve.agent.agent.ClaudeToolUseLoop;
 import com.eneve.agent.agent.GitWorkspaceHelper;
@@ -25,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -56,6 +58,7 @@ public class SelfAnalysisHandler implements JobHandler {
     @Inject SettingsService settings;
     @Inject PromptTemplateService promptTemplates;
     @Inject AwsCloudWatchLogsTool cloudWatchLogsTool;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -107,6 +110,8 @@ public class SelfAnalysisHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             // Pre-fetch CloudWatch logs (non-fatal)
             boolean hasCloudWatchLogs = prefetchCloudWatchLogs(workspace, request);
 
@@ -120,7 +125,9 @@ public class SelfAnalysisHandler implements JobHandler {
             // Run agent loop
             String summary;
             try {
-                summary = toolUseLoop.run(prompt, workspace, job.getJobId(), job.getJobType().name(),
+                summary = toolUseLoop.runOrResume(prompt, workspace,
+                        priorMessages, job.getAdditionalIterations(),
+                        job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 fail(job, "Agent loop error: " + e.getMessage());

@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.model.QualityReport;
 import com.eneve.agent.agent.store.JobStore;
@@ -38,6 +39,7 @@ public class GenerateTestsHandler implements JobHandler {
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;
     @Inject QualityReportStore qualityReportStore;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -108,6 +110,8 @@ public class GenerateTestsHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             // Capture initial HEAD so we can detect commits made by the agent.
             String initialHeadSha = null;
             try {
@@ -158,8 +162,9 @@ public class GenerateTestsHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
-                        generateTestsMaxIterations, job.getJobId(), job.getJobType().name(),
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
+                        priorMessages, generateTestsMaxIterations, job.getAdditionalIterations(),
+                        job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
                 lifecycle.failGenerateTests(job, "Agent loop error: " + e.getMessage());

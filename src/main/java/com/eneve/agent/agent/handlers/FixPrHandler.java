@@ -1,5 +1,6 @@
 package com.eneve.agent.agent.handlers;
 
+import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.jira.JiraService;
@@ -33,6 +34,7 @@ public class FixPrHandler implements JobHandler {
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
     @Inject SettingsService settings;
+    @Inject CheckpointAwareJobSupport checkpointSupport;
 
     @Override
     public JobType jobType() {
@@ -101,6 +103,8 @@ public class FixPrHandler implements JobHandler {
 
             gitHelper.configureGitIfNeeded(workspace);
 
+            List<MessageParam> priorMessages = checkpointSupport.restoreCheckpointIfPresent(job, workspace);
+
             // Phase 2: fetchBranch+diff and target-repo rules loading overlap
             CompletableFuture<String> diffFuture = CompletableFuture.supplyAsync(() -> {
                 try {
@@ -150,7 +154,8 @@ public class FixPrHandler implements JobHandler {
 
             String summary;
             try {
-                summary = toolUseLoop.run(systemPrompt, workspace,
+                summary = toolUseLoop.runOrResume(systemPrompt, workspace,
+                        priorMessages, job.getAdditionalIterations(),
                         job.getJobId(), job.getJobType().name(),
                         job.getParentJobId(), job.getDepth());
             } catch (Exception e) {
