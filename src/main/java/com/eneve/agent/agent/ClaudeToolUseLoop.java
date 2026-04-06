@@ -84,6 +84,12 @@ public class ClaudeToolUseLoop {
     @Inject
     JobCheckpointStore checkpointStore;
 
+    @Inject
+    ContextCompactionService compactionService;
+
+    /** Circuit-breaker limit: disable compaction for the remainder of the job after this many consecutive failures. */
+    private static final int MAX_COMPACTION_FAILURES = 3;
+
     void onShutdown(@Observes ShutdownEvent event) {
         PARALLEL_TOOL_EXECUTOR.shutdown();
         try {
@@ -188,11 +194,11 @@ public class ClaudeToolUseLoop {
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
-        long compressionThreshold = Long.parseLong(
-                settings.get("agent.context.compression-threshold", "160000"));
+        long compactionThreshold = compactionService.compactionThreshold(maxTokens);
         boolean checkpointEnabled = Boolean.parseBoolean(
                 settings.get("agent.checkpoint.enabled", "true"));
         List<MessageParam> messages = new ArrayList<>(initialMessages);
+        int compactionFailures = 0;
 
         for (int iteration = startIteration; iteration < startIteration + iterationCap; iteration++) {
             LOG.infof("Agent loop iteration %d/%d", iteration + 1, iterationCap);
@@ -224,9 +230,21 @@ public class ClaudeToolUseLoop {
             logUsage(response, iteration + 1);
             tokenBudgetTracker.recordUsage(response.usage().inputTokens(), response.usage().outputTokens());
 
-            // Compress context when the measured input token count approaches the limit.
-            if (response.usage().inputTokens() >= compressionThreshold) {
-                messages = compressContext(messages, systemPrompt, modelName, maxTokens);
+            // Compact context when input tokens approach the context window limit.
+            if (response.usage().inputTokens() >= compactionThreshold) {
+                if (compactionFailures >= MAX_COMPACTION_FAILURES) {
+                    LOG.warnf("Context compaction disabled for this job after %d consecutive failures",
+                            compactionFailures);
+                } else {
+                    try {
+                        messages = compactionService.compact(messages, systemPrompt, modelName, maxTokens);
+                        compactionFailures = 0;
+                    } catch (Exception e) {
+                        compactionFailures++;
+                        LOG.warnf("Context compaction failed (%d/%d): %s",
+                                compactionFailures, MAX_COMPACTION_FAILURES, e.getMessage());
+                    }
+                }
             }
 
             List<ContentBlockParam> toolResults = new ArrayList<>();
@@ -459,6 +477,8 @@ public class ClaudeToolUseLoop {
                 "anthropic.model." + jobType.toLowerCase(),
                 settings.get("anthropic.model", "claude-sonnet-4-20250514"));
         long maxTokens = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
+        long compactionThreshold = compactionService.compactionThreshold(maxTokens);
+        int compactionFailures = 0;
         try {
             for (int iteration = 0; iteration < iterationCap; iteration++) {
                 LOG.infof("Streaming agent loop iteration %d/%d", iteration + 1, iterationCap);
@@ -516,6 +536,28 @@ public class ClaudeToolUseLoop {
                 tokenBudgetTracker.recordUsage(
                         response.usage().inputTokens(),
                         response.usage().outputTokens());
+
+                // Compact context when input tokens approach the context window limit.
+                // Uses clear+addAll so the original list reference held by the caller
+                // (runStreaming return value) stays consistent with the compacted state.
+                if (response.usage().inputTokens() >= compactionThreshold) {
+                    if (compactionFailures >= MAX_COMPACTION_FAILURES) {
+                        LOG.warnf("Context compaction disabled for this session after %d consecutive failures",
+                                compactionFailures);
+                    } else {
+                        try {
+                            List<MessageParam> compacted =
+                                    compactionService.compact(messages, systemPrompt, modelName, maxTokens);
+                            messages.clear();
+                            messages.addAll(compacted);
+                            compactionFailures = 0;
+                        } catch (Exception e) {
+                            compactionFailures++;
+                            LOG.warnf("Context compaction failed (%d/%d): %s",
+                                    compactionFailures, MAX_COMPACTION_FAILURES, e.getMessage());
+                        }
+                    }
+                }
 
                 // Process tool calls from the accumulated message
                 List<ToolUseBlock> toolUseBlocks = response.content().stream()
@@ -746,72 +788,7 @@ public class ClaudeToolUseLoop {
         throw new RuntimeException("Exhausted retries after rate limiting (streaming)");
     }
 
-    /**
-     * When the conversation context is getting large, asks Claude to produce a concise
-     * summary of the work completed so far, then replaces the message list with just
-     * [summary turn + last 4 messages]. The system prompt is always passed separately
-     * and is not affected.
-     *
-     * <p>This prevents hitting the model's hard context-window limit on long fix or
-     * doc-generation jobs while keeping the most recent tool results visible.
-     */
-    private List<MessageParam> compressContext(List<MessageParam> messages, String systemPrompt,
-            String modelName, long maxTokens) {
-        LOG.infof("Context compression triggered: %d messages in history — summarizing", messages.size());
-        try {
-            String historyText = messages.stream()
-                    .map(m -> m.role().toString().toUpperCase() + ": "
-                            + contentToText(m))
-                    .collect(Collectors.joining("\n\n"));
-
-            String summarizePrompt = "You are summarizing an ongoing agentic coding session. "
-                    + "Produce a concise but complete summary of all files read, changes made, "
-                    + "tools called, and key decisions taken so far. "
-                    + "This summary will replace the full history — do not omit any completed work.\n\n"
-                    + "CONVERSATION HISTORY:\n" + historyText;
-
-            MessageCreateParams summaryParams = MessageCreateParams.builder()
-                    .model(Model.of(modelName))
-                    .maxTokens(maxTokens)
-                    .system(systemPrompt)
-                    .messages(List.of(MessageParam.builder()
-                            .role(MessageParam.Role.USER)
-                            .content(summarizePrompt)
-                            .build()))
-                    .build();
-
-            Message summaryResponse = callWithRetry(summaryParams);
-            String summary = summaryResponse.content().stream()
-                    .filter(ContentBlock::isText)
-                    .map(b -> b.asText().text())
-                    .collect(Collectors.joining());
-            tokenBudgetTracker.recordUsage(
-                    summaryResponse.usage().inputTokens(),
-                    summaryResponse.usage().outputTokens());
-
-            // Preserve the most recent messages for continuity (avoid losing active tool calls)
-            int keepLast = Math.min(4, messages.size());
-            List<MessageParam> tail = messages.subList(messages.size() - keepLast, messages.size());
-
-            List<MessageParam> compressed = new ArrayList<>();
-            compressed.add(MessageParam.builder()
-                    .role(MessageParam.Role.USER)
-                    .content("Summary of work completed so far:\n\n" + summary)
-                    .build());
-            compressed.add(MessageParam.builder()
-                    .role(MessageParam.Role.ASSISTANT)
-                    .content("Understood. I have reviewed the summary and will continue from where we left off.")
-                    .build());
-            compressed.addAll(tail);
-            LOG.infof("Context compressed: %d messages → %d messages", messages.size(), compressed.size());
-            return compressed;
-        } catch (Exception e) {
-            LOG.warnf("Context compression failed, continuing with full history: %s", e.getMessage());
-            return messages;
-        }
-    }
-
-    /** Extracts displayable text from a MessageParam for use in the summarization prompt. */
+    /** Extracts displayable text from a MessageParam for use in AI call logging. */
     private static String contentToText(MessageParam msg) {
         if (msg.content().isString()) {
             return msg.content().asString();
