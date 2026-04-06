@@ -68,8 +68,12 @@ public class SearchCodeTool implements ToolExecutor {
         String include = (String) input.get("include");
         String repoUrl = (String) input.get("repo");
 
-        // Strategy 1: Search current workspace if it has a cloned repo
-        if (repoUrl == null && workspace.hasClonedRepo()) {
+        // Strategy 1: Search current workspace if it has a directly-cloned repo (single-repo
+        // layout: .git at workspace root). Multi-repo workspaces clone each repo into a named
+        // subdirectory registered in clonedRepos; those must go through searchInAllRepos /
+        // searchInSpecificRepo so that grep runs from each repo root rather than the parent
+        // directory (which would produce ./code-agent/src/... prefixes the AI cannot reuse).
+        if (repoUrl == null && workspace.hasClonedRepo() && workspace.listClonedRepos().isEmpty()) {
             LOG.debugf("Searching current workspace for pattern: %s", pattern);
             return searchInWorkspace(workspace, pattern, searchPath, include);
         }
@@ -353,9 +357,26 @@ public class SearchCodeTool implements ToolExecutor {
             if (repoPath == null || !Files.exists(repoPath)) {
                 continue;
             }
-            
+
+            // Strip the repo-slug prefix if the AI copied it from a previous search result
+            // (e.g. "code-agent/src/main/java/..." → "src/main/java/..." within this repo).
+            String effectivePath = searchPath;
+            String slugPrefix = repoSlug + "/";
+            if (effectivePath.startsWith(slugPrefix)) {
+                effectivePath = effectivePath.substring(slugPrefix.length());
+            }
+            if (effectivePath.isBlank()) {
+                effectivePath = ".";
+            }
+
+            // Skip repos that don't contain the requested path to avoid grep exit-code-2 noise.
+            if (!effectivePath.equals(".") && !Files.exists(repoPath.resolve(effectivePath))) {
+                LOG.debugf("Skipping repository %s: path '%s' does not exist", repoSlug, effectivePath);
+                continue;
+            }
+
             LOG.debugf("Searching repository %s for pattern: %s", repoSlug, pattern);
-            String repoResult = executeGrepSearch(repoPath, pattern, searchPath, include);
+            String repoResult = executeGrepSearch(repoPath, pattern, effectivePath, include);
             
             if (!repoResult.startsWith("No matches found") && !repoResult.startsWith("ERROR:")) {
                 result.append("## Repository: ").append(repoSlug).append("\n");

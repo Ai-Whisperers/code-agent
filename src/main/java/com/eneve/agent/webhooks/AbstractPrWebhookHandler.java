@@ -133,8 +133,11 @@ public abstract class AbstractPrWebhookHandler {
             }
         }
 
-        // 3. Cancel any active review jobs for this PR (scoped to this repo to avoid cross-repo collisions)
+        // 3. Cancel any active review jobs for this PR (scoped to this repo to avoid cross-repo collisions).
+        //    Jobs in AWAITING_APPROVAL are also resolved: a merged PR means the change was accepted,
+        //    so those jobs are marked SUCCESS and archived instead of cancelled.
         int cancelled = 0;
+        int finished = 0;
         try {
             List<JobRecord> activeJobs = jobStore.findByPrId(prId, workspace, repoSlug);
             for (JobRecord job : activeJobs) {
@@ -145,10 +148,17 @@ public abstract class AbstractPrWebhookHandler {
                         LOG.infof("handleMergedPr: cancelled job %s for %s PR %s/%s#%s",
                                 job.getJobId(), cacheStatus.toLowerCase(), workspace, repoSlug, prId);
                     }
+                } else if (s == JobStatus.AWAITING_APPROVAL && "MERGED".equals(cacheStatus)) {
+                    job.setStatus(JobStatus.SUCCESS);
+                    job.setSummary("PR was merged in the SCM; job completed successfully.");
+                    jobStore.archive(job);
+                    finished++;
+                    LOG.infof("handleMergedPr: finished job %s (was AWAITING_APPROVAL) for merged PR %s/%s#%s",
+                            job.getJobId(), workspace, repoSlug, prId);
                 }
             }
         } catch (Exception e) {
-            LOG.warnf("handleMergedPr: failed to cancel jobs for PR %s/%s#%s: %s",
+            LOG.warnf("handleMergedPr: failed to cancel/finish jobs for PR %s/%s#%s: %s",
                     workspace, repoSlug, prId, e.getMessage());
         }
 
@@ -161,7 +171,8 @@ public abstract class AbstractPrWebhookHandler {
                 "action", cacheStatus.toLowerCase(),
                 "hooksTriggered", hookJobIds.size(),
                 "jobIds", hookJobIds,
-                "jobsCancelled", cancelled
+                "jobsCancelled", cancelled,
+                "jobsFinished", finished
         )).build();
     }
 

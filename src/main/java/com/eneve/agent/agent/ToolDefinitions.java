@@ -155,7 +155,7 @@ public final class ToolDefinitions {
      * No Jira write, Confluence write, agent action, or AWS tools are included.
      */
     public static List<ToolUnion> chatAsk() {
-        return chat(false, false);
+        return chat(false, true);
     }
 
     public static List<ToolUnion> chat() {
@@ -200,7 +200,10 @@ public final class ToolDefinitions {
                 ToolUnion.ofTool(JiraToolSchemas.jiraGetWorklogs()),
                 // Confluence read tools (all roles)
                 ToolUnion.ofTool(ConfluenceToolSchemas.confluenceSearch()),
-                ToolUnion.ofTool(ConfluenceToolSchemas.confluenceGetPage())
+                ToolUnion.ofTool(ConfluenceToolSchemas.confluenceGetPage()),
+                // Agent job tools (all roles)
+                ToolUnion.ofTool(AgentJobToolSchemas.agentGetJobStatus()),
+                ToolUnion.ofTool(SelfAnalysisToolSchemas.readDb())
         ));
 
         if (includeAwsTools) {
@@ -226,8 +229,8 @@ public final class ToolDefinitions {
                     ToolUnion.ofTool(ConfluenceToolSchemas.confluenceUpdatePage()),
                     // Agent action tools
                     ToolUnion.ofTool(AgentJobToolSchemas.agentRunFix()),
-                    ToolUnion.ofTool(AgentJobToolSchemas.agentGetJobStatus()),
-                    ToolUnion.ofTool(AgentJobToolSchemas.agentSubmitReviewJob())
+                    ToolUnion.ofTool(AgentJobToolSchemas.agentSubmitReviewJob()),
+                    ToolUnion.ofTool(AgentJobToolSchemas.agentSelfAnalysis())
             ));
         }
 

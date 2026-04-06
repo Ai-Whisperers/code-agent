@@ -57,6 +57,51 @@ public final class AgentJobToolSchemas {
                 .build();
     }
 
+    public static Tool agentSelfAnalysis() {
+        return Tool.builder()
+                .name("agent_self_analysis")
+                .description("Submit an autonomous self-analysis job. The agent will clone the repository, "
+                        + "inspect the codebase and (optionally) recent CloudWatch logs, diagnose issues, "
+                        + "implement a fix, push a branch, and create a PR. "
+                        + "Returns a job ID that can be polled with agent_get_job_status.")
+                .inputSchema(Tool.InputSchema.builder()
+                        .properties(Tool.InputSchema.Properties.builder()
+                                .putAdditionalProperty("repoUrl", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Repository HTTPS URL to clone and analyse, "
+                                                + "e.g. 'https://bitbucket.org/workspace/repo.git'"
+                                )))
+                                .putAdditionalProperty("failedJobId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Job ID of a previously failed job that should be investigated "
+                                                + "(optional — omit for a general health analysis)"
+                                )))
+                                .putAdditionalProperty("targetBranch", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Base branch to check out (optional, defaults to 'develop')"
+                                )))
+                                .putAdditionalProperty("customerId", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Customer ID used to resolve AWS credentials for CloudWatch log fetching (optional)"
+                                )))
+                                .putAdditionalProperty("environmentName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Environment name to fetch CloudWatch logs from, e.g. 'production' (optional)"
+                                )))
+                                .putAdditionalProperty("logGroupName", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "CloudWatch log group name, e.g. '/ecs/code-agent' (optional)"
+                                )))
+                                .putAdditionalProperty("jiraProjectKey", JsonValue.from(Map.of(
+                                        "type", "string",
+                                        "description", "Jira project key for commit messages and PR description, e.g. 'PROJ' (optional)"
+                                )))
+                                .build())
+                        .addRequired("repoUrl")
+                        .build())
+                .build();
+    }
+
     public static Tool agentSubmitReviewJob() {
         return Tool.builder()
                 .name("agent_submit_review_job")
