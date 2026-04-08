@@ -121,6 +121,18 @@ public class ClaudeToolUseLoop {
     }
 
     /**
+     * AIW: whether to attach Anthropic's {@code cache_control} prompt-caching
+     * block to outgoing messages. Defaults to true for upstream compatibility;
+     * set {@code anthropic.prompt-cache.enabled=false} (or
+     * {@code ANTHROPIC_PROMPT_CACHE_ENABLED=false}) when routing through a
+     * multi-provider gateway (LiteLLM) where the downstream provider may be
+     * Groq / Mistral / Cerebras / etc. and would reject the field.
+     */
+    private boolean promptCachingEnabled() {
+        return !"false".equalsIgnoreCase(settings.get("anthropic.prompt-cache.enabled", "true"));
+    }
+
+    /**
      * Run the agentic tool-use loop with a custom tool set and initial user message.
      */
     public String run(String systemPrompt, WorkspaceContext workspace,
@@ -368,10 +380,17 @@ public class ClaudeToolUseLoop {
             MessageCreateParams.Builder paramsBuilder = MessageCreateParams.builder()
                     .model(Model.of(modelName))
                     .maxTokens(maxTokens)
-                    .cacheControl(CacheControlEphemeral.builder().build())
                     .system(systemPrompt)
                     .messages(messages)
                     .tools(tools);
+            // AIW: prompt-caching is Anthropic-native and breaks when LiteLLM routes
+            // the request to a non-Anthropic provider (Groq, Mistral, etc.) that
+            // rejects the cache_control field. Gate behind a config flag — default
+            // on for upstream compatibility, off when going through a multi-provider
+            // gateway.
+            if (promptCachingEnabled()) {
+                paramsBuilder.cacheControl(CacheControlEphemeral.builder().build());
+            }
             if (thinkingActive) {
                 paramsBuilder.putAdditionalBodyProperty("thinking",
                         com.anthropic.core.JsonValue.from(Map.of(
@@ -697,10 +716,13 @@ public class ClaudeToolUseLoop {
                 MessageCreateParams.Builder streamParamsBuilder = MessageCreateParams.builder()
                         .model(Model.of(modelName))
                         .maxTokens(maxTokens)
-                        .cacheControl(CacheControlEphemeral.builder().build())
                         .system(systemPrompt)
                         .messages(messages)
                         .tools(tools);
+                // AIW: same cache_control gate as the non-streaming branch above.
+                if (promptCachingEnabled()) {
+                    streamParamsBuilder.cacheControl(CacheControlEphemeral.builder().build());
+                }
                 if (thinkingActive) {
                     streamParamsBuilder.putAdditionalBodyProperty("thinking",
                             com.anthropic.core.JsonValue.from(Map.of(
