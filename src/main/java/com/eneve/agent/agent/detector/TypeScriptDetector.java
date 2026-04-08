@@ -27,8 +27,36 @@ public class TypeScriptDetector implements Detector {
         this.objectMapper = objectMapper;
     }
 
+    /**
+     * AIW: common subdirectories that hold the real project in a monorepo-ish
+     * layout. Kept in sync with {@code BuildValidator.MONOREPO_SUBDIRS}.
+     */
+    private static final String[] MONOREPO_SUBDIRS = {
+        "web", "app", "frontend", "backend", "api", "packages/web", "apps/web"
+    };
+
     @Override
     public ArchetypeInfo detect(Path projectRoot) {
+        // AIW: try root first, then walk common monorepo subdirs so that
+        // projects like Vete (real package.json in web/) are still detected.
+        ArchetypeInfo rootInfo = detectAt(projectRoot);
+        if (rootInfo != null) {
+            return rootInfo;
+        }
+        for (String subdir : MONOREPO_SUBDIRS) {
+            Path candidate = projectRoot.resolve(subdir);
+            if (Files.isDirectory(candidate)) {
+                ArchetypeInfo subInfo = detectAt(candidate);
+                if (subInfo != null) {
+                    LOG.debugf("TypeScriptDetector: found project in monorepo subdir %s", subdir);
+                    return subInfo;
+                }
+            }
+        }
+        return null;
+    }
+
+    private ArchetypeInfo detectAt(Path projectRoot) {
         Path pkgJson = projectRoot.resolve("package.json");
         if (!Files.exists(pkgJson)) return null;
 
@@ -49,6 +77,15 @@ public class TypeScriptDetector implements Detector {
                 String version = stripVersionRange(angularVersion);
                 LOG.debugf("Detected Angular via package.json: %s", version);
                 return new ArchetypeInfo("angular", version);
+            }
+
+            // AIW: Next.js before plain React. Vete and clinica-duerksen hit this branch.
+            // Detects via `next` dep OR a next.config.{js,mjs,ts} file in the same dir.
+            String nextVersion = allDeps.get("next");
+            if (nextVersion != null) {
+                String version = stripVersionRange(nextVersion);
+                LOG.debugf("Detected Next.js via package.json: %s", version);
+                return new ArchetypeInfo("nextjs", version);
             }
 
             String reactVersion = allDeps.get("react");

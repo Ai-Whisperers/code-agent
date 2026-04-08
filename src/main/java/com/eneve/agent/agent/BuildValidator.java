@@ -98,7 +98,44 @@ public class BuildValidator {
         return tail.isBlank() ? head : head + "\n...\n" + tail;
     }
 
+    /**
+     * AIW: waterfall detector with monorepo subdirectory auto-detection.
+     * First tries the repo root; if nothing is found, walks common subfolders
+     * that hold the real project in AIW repos (web/, app/, frontend/, etc.)
+     * and picks the first one with a testable manifest.
+     */
     private String detectTestCommand(Path root, String mavenHome) {
+        String cmd = detectTestCommandFor(root, mavenHome);
+        if (cmd != null) return cmd;
+        for (String subdir : MONOREPO_SUBDIRS) {
+            Path candidate = root.resolve(subdir);
+            if (Files.isDirectory(candidate)) {
+                cmd = detectTestCommandFor(candidate, mavenHome);
+                if (cmd != null) {
+                    LOG.infof("Using monorepo project root: %s", subdir);
+                    return "cd " + subdir + " && " + cmd;
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Common subdirectories that hold the real project in AIW repos.
+     * Checked in order — first match wins.
+     *   web/           - Vete (Next.js in web/)
+     *   app/           - alternative Next.js convention
+     *   frontend/      - split-repo frontend
+     *   backend/       - split-repo backend
+     *   api/           - split-repo API
+     *   packages/web   - monorepo with packages/ layout
+     *   apps/web       - Turborepo convention
+     */
+    private static final String[] MONOREPO_SUBDIRS = {
+        "web", "app", "frontend", "backend", "api", "packages/web", "apps/web"
+    };
+
+    private String detectTestCommandFor(Path root, String mavenHome) {
         if (Files.exists(root.resolve("pom.xml"))) {
             return ProcessHelper.mvn(root, mavenHome) + " test";
         }
