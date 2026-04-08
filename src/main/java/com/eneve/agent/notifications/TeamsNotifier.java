@@ -17,9 +17,14 @@ import jakarta.inject.Inject;
 /**
  * One-way Microsoft Teams notification via incoming webhook.
  * Sends Adaptive Card with job result summary.
+ *
+ * <p>AIW: now implements {@link Notifier} so it's auto-discovered by
+ * {@link NotificationDispatcher}. Stays disabled unless
+ * {@code teams.webhook.url} is configured (AIW doesn't use Teams — this is
+ * kept for upstream Eneve compatibility).
  */
 @ApplicationScoped
-public class TeamsNotifier {
+public class TeamsNotifier implements Notifier {
 
     private static final Logger LOG = Logger.getLogger(TeamsNotifier.class);
 
@@ -28,6 +33,12 @@ public class TeamsNotifier {
 
     @Inject HttpClient httpClient;
 
+    @Override
+    public String channel() {
+        return "teams";
+    }
+
+    @Override
     public void sendNotification(RunResult result) {
         String webhookUrl = settingsService.get("teams.webhook.url", "");
         if (webhookUrl.isBlank()) {

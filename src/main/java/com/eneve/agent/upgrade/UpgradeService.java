@@ -14,7 +14,7 @@ import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.aikido.AikidoIssueInfo;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.model.RunResult;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.planner.ExecutionPlan;
 import com.eneve.agent.planner.PlanCompletedEvent;
 import com.eneve.agent.planner.PlanData;
@@ -70,7 +70,7 @@ public class UpgradeService {
     @Inject PlannerService plannerService;
     @Inject PlanStore planStore;
     @Inject PlanOrchestratorService orchestratorService;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject GitPlatformRegistry platformRegistry;
     @Inject AikidoService aikidoService;
     @Inject SettingsService settings;
@@ -279,7 +279,7 @@ public class UpgradeService {
 
         if (plan == null) {
             LOG.errorf("UpgradeService: plan generation failed for %s/%s", repo.workspace(), repo.repoSlug());
-            teamsNotifier.sendNotification(new RunResult(
+            notificationDispatcher.sendNotification(new RunResult(
                     "upgrade-" + repo.repoSlug(), "UPGRADE", "FAILED",
                     null, cleanUrl, branchName, null,
                     null, "Plan generation failed for " + archetype + " upgrade to " + latestVersion,
@@ -317,7 +317,7 @@ public class UpgradeService {
                         planId, repo.workspace(), repo.repoSlug(),
                         archetype, currentVersion, latestVersion);
 
-                teamsNotifier.sendNotification(new RunResult(
+                notificationDispatcher.sendNotification(new RunResult(
                         planId, "UPGRADE", "STARTED",
                         null, cleanUrl, branchName, null,
                         archetype + " upgrade from " + currentVersion + " to " + latestVersion
@@ -329,7 +329,7 @@ public class UpgradeService {
                         planId, repo.workspace(), repo.repoSlug(), e.getMessage());
                 activePlans.remove(planId);
 
-                teamsNotifier.sendNotification(new RunResult(
+                notificationDispatcher.sendNotification(new RunResult(
                         planId, "UPGRADE", "FAILED",
                         null, cleanUrl, branchName, null,
                         null, "Failed to start " + archetype + " upgrade plan: " + e.getMessage(),

@@ -15,7 +15,7 @@ import com.eneve.agent.model.JobRecord;
 import com.eneve.agent.model.ProductConfig;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.Soc2Policy;
 import com.eneve.agent.settings.SettingsService;
 
@@ -46,7 +46,7 @@ public class AikidoTriageService {
     @Inject JiraService jiraService;
     @Inject JobStore jobStore;
     @Inject JobQueue jobQueue;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject SettingsService settings;
     @Inject AuditStore auditStore;
     @Inject Soc2Policy soc2Policy;
@@ -282,7 +282,7 @@ public class AikidoTriageService {
                     null, "AIKIDO_TRIAGE", "STARTED",
                     jiraKey, repoUrl, null, null,
                     summary, null, 0, 0);
-            teamsNotifier.sendNotification(notification);
+            notificationDispatcher.sendNotification(notification);
         } catch (Exception e) {
             LOG.warnf("AikidoTriage: Teams notification failed (non-fatal): %s", e.getMessage());
         }

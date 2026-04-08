@@ -25,7 +25,7 @@ import com.eneve.agent.model.ReviewPrRequest;
 import com.eneve.agent.model.RunFixRequest;
 import com.eneve.agent.model.RunResult;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 
@@ -40,7 +40,7 @@ public class JobLifecycleHelper {
 
     @Inject JobStore jobStore;
     @Inject JiraService jiraService;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject GitPlatformRegistry platformRegistry;
     @Inject com.eneve.agent.settings.SettingsService settings;
@@ -91,7 +91,7 @@ public class JobLifecycleHelper {
         safeJira(() -> jiraService.commentFailure(request.jiraKey(), "Automated fix", message));
 
         RunResult result = buildResult(job, false);
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
@@ -109,7 +109,7 @@ public class JobLifecycleHelper {
         }
 
         RunResult result = buildReviewResult(job, false);
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
@@ -126,7 +126,7 @@ public class JobLifecycleHelper {
         }
 
         RunResult result = buildFixPrResult(job, false);
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
@@ -143,7 +143,7 @@ public class JobLifecycleHelper {
         }
 
         RunResult result = buildGenerateTestsResult(job, false);
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(request.n8nWebhookUrl()), result);
     }
 
@@ -155,7 +155,7 @@ public class JobLifecycleHelper {
         jobStore.archive(job);
 
         RunResult result = buildGenerateDocsResult(job, false);
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
 
         GenerateDocsRequest request = job.getGenerateDocsRequest();
         if (request != null) {
@@ -177,7 +177,7 @@ public class JobLifecycleHelper {
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
         jobStore.archive(job);
-        teamsNotifier.sendNotification(buildHookResult(job, false));
+        notificationDispatcher.sendNotification(buildHookResult(job, false));
     }
 
     public void failMetrics(JobRecord job, String message) {
@@ -186,7 +186,7 @@ public class JobLifecycleHelper {
         job.setStatus(JobStatus.FAILED);
         job.setErrorMessage(message);
         jobStore.archive(job);
-        teamsNotifier.sendNotification(buildMetricsResult(job, false));
+        notificationDispatcher.sendNotification(buildMetricsResult(job, false));
     }
 
     public void failQualityReport(JobRecord job, String message) {
@@ -212,7 +212,7 @@ public class JobLifecycleHelper {
         job.setErrorMessage(message);
         jobStore.archive(job);
 
-        teamsNotifier.sendNotification(buildFixCommentResult(job, false));
+        notificationDispatcher.sendNotification(buildFixCommentResult(job, false));
 
         try {
             RepoCoordinates c = RepoCoordinates.parse(request.repoUrl());
@@ -352,7 +352,7 @@ public class JobLifecycleHelper {
 
     /** Sends both Teams and n8n notifications for a completed job result. */
     public void notifyResult(RunResult result, String webhookUrl) {
-        teamsNotifier.sendNotification(result);
+        notificationDispatcher.sendNotification(result);
         n8nNotifier.sendResult(resolveWebhookUrl(webhookUrl), result);
     }
 }

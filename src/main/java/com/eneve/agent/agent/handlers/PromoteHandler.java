@@ -7,7 +7,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.jira.JiraService;
 import com.eneve.agent.model.*;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -45,7 +45,7 @@ public class PromoteHandler implements JobHandler {
     @Inject JobQueue jobQueue;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject SettingsService settings;
@@ -176,7 +176,7 @@ public class PromoteHandler implements JobHandler {
                     + "Awaiting final review and approval."));
 
             // ── 5. Teams notification ─────────────────────────────────────
-            teamsNotifier.sendNotification(new RunResult(
+            notificationDispatcher.sendNotification(new RunResult(
                     job.getJobId(), "PROMOTE", "AWAITING_APPROVAL",
                     request.jiraKey(), request.repoUrl(), request.promoteBranchName(),
                     prUrl,
@@ -264,7 +264,7 @@ public class PromoteHandler implements JobHandler {
                     "Promotion job " + job.getJobId() + " failed: " + message));
         }
 
-        teamsNotifier.sendNotification(new RunResult(
+        notificationDispatcher.sendNotification(new RunResult(
                 job.getJobId(), "PROMOTE", "FAILED",
                 request != null ? request.jiraKey() : null,
                 request != null ? request.repoUrl() : null,
