@@ -1,0 +1,121 @@
+# =============================================================================
+# AIW Code Agent — Docker Swarm stack
+# =============================================================================
+# Deployed alongside vete_web, clinica-duerksen, etc. on the VPS Swarm cluster.
+# Traefik auto-discovers via providers.swarm=true and routes HTTPS via
+# letsencryptresolver on the websecure entrypoint.
+#
+# Deploy:
+#   docker stack deploy -c docker-stack.aiw.yml aiw-code-agent
+#
+# Tear down:
+#   docker stack rm aiw-code-agent
+#
+# Rebuild image:
+#   docker compose -f docker-compose.aiw.yml build app   # local build
+#   docker stack deploy -c docker-stack.aiw.yml aiw-code-agent  # replay
+#
+# Note: Swarm stacks can't use `build:` — the image must exist locally or in
+# a registry. This stack pulls from the local Docker daemon's image cache,
+# which is fine for single-node Swarm (our case).
+
+version: "3.8"
+
+services:
+  app:
+    image: ai-whisperers/code-agent:aiw-dev
+    env_file: /opt/aiw-code-agent/.env
+    environment:
+      # Swarm service DNS: use the FULLY-QUALIFIED stack.name form.
+      # `postgres` alone collides with the top-level `postgres_postgres`
+      # service also running on agent-net — the app then tries to auth
+      # against the wrong database and fails with 28P01.
+      # `aiw-code-agent_postgres` is guaranteed to resolve to our service.
+      DATABASE_URL: jdbc:postgresql://aiw-code-agent_postgres:5432/aiw_code_agent
+      DATABASE_USER: aiw_code_agent
+      DATABASE_PASSWORD: aiw_code_agent
+      KEYCLOAK_ENABLED: "false"
+      QUARKUS_LOG_LEVEL: "INFO"
+      QUARKUS_LOG_CATEGORY__COM_ENEVE_AGENT__LEVEL: "DEBUG"
+
+      # LiteLLM gateway — reachable via the aiw-llm-net attachable overlay
+      # that we created specifically so swarm services can reach the
+      # non-swarm litellm container. LiteLLM is connected to aiw-llm-net
+      # with `docker network connect aiw-llm-net litellm` (see ops notes).
+      ANTHROPIC_BASE_URL: http://litellm:4000
+    volumes:
+      - aiw-m2:/home/appuser/.m2
+      - aiw-workspace:/workspace
+    networks:
+      - agent-net
+      - aiw-internal
+      - aiw-llm-net
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+        delay: 10s
+      update_config:
+        parallelism: 1
+        order: start-first
+      labels:
+        - "traefik.enable=true"
+
+        # ─── PUBLIC ROUTER: webhooks only ─────────────────────────────
+        # GitHub POSTs to these paths. HMAC verified by WebhookSignatureFilter
+        # at the app layer — Traefik just routes.
+        - "traefik.http.routers.aiwca-public.rule=Host(`code-agent.sunstein.cloud`) && PathPrefix(`/api/webhooks/`)"
+        - "traefik.http.routers.aiwca-public.entrypoints=websecure"
+        - "traefik.http.routers.aiwca-public.tls.certresolver=letsencryptresolver"
+        - "traefik.http.routers.aiwca-public.service=aiwca-svc"
+
+        # ─── SERVICE ─────────────────────────────────────────────────
+        - "traefik.http.services.aiwca-svc.loadbalancer.server.port=8080"
+
+        # Multi-network disambiguation: this service is on both agent-net (for
+        # Traefik ingress) and aiw-internal (for app↔db). Without this hint,
+        # Traefik tries to reach the VIP on whichever network comes first in
+        # the service spec, which may not be the one it's on.
+        - "traefik.swarm.network=agent-net"
+        - "traefik.docker.network=agent-net"
+
+        # Internal admin access: via SSH + docker exec on the VPS, no Traefik route.
+        # Phase 3 (integration:supabase-auth) will add a properly-authenticated
+        # HTTPS route once we can trust @Authenticated in production.
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: aiw_code_agent
+      POSTGRES_USER: aiw_code_agent
+      POSTGRES_PASSWORD: aiw_code_agent
+    volumes:
+      - aiw-pg:/var/lib/postgresql/data
+    networks:
+      - aiw-internal
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: any
+      placement:
+        constraints:
+          - node.role == manager
+      labels:
+        # Explicitly tell Traefik to ignore this service (providers.swarm
+        # scans all services; without this it logs "port is missing" errors
+        # for every postgres label check cycle).
+        - "traefik.enable=false"
+
+volumes:
+  aiw-m2:
+  aiw-pg:
+  aiw-workspace:
+
+networks:
+  agent-net:
+    external: true
+  aiw-llm-net:
+    external: true
+  aiw-internal:
+    driver: overlay
+    attachable: false
