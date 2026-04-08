@@ -5,6 +5,7 @@ import com.eneve.agent.util.DotnetWorkspaceProbe;
 import com.eneve.agent.util.JdkResolver;
 import com.eneve.agent.util.NodeProjectHelper;
 import com.eneve.agent.util.ProcessHelper;
+import com.eneve.agent.util.PythonProjectHelper;
 import com.eneve.agent.workspace.WorkspaceContext;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -109,6 +110,10 @@ public class BuildValidator {
         }
         if (Files.exists(root.resolve("package.json")) && hasNodeTestableProject(root)) {
             return NodeProjectHelper.installAndTestCommand(root);
+        }
+        // AIW: Python support — pyproject.toml / requirements.txt / setup.py with pytest
+        if (PythonProjectHelper.isPythonProject(root) && PythonProjectHelper.hasPytestConfig(root)) {
+            return PythonProjectHelper.installAndTestCommand(root);
         }
         return null;
     }

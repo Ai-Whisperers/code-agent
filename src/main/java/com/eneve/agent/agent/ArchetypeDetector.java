@@ -4,6 +4,7 @@ import com.eneve.agent.agent.detector.DockerfileDetector;
 import com.eneve.agent.agent.detector.DotnetDetector;
 import com.eneve.agent.agent.detector.MavenDetector;
 import com.eneve.agent.agent.detector.PhpDetector;
+import com.eneve.agent.agent.detector.PythonDetector;
 import com.eneve.agent.agent.detector.ShellDetector;
 import com.eneve.agent.agent.detector.SqlDetector;
 import com.eneve.agent.agent.detector.TerraformDetector;
@@ -71,6 +72,7 @@ public class ArchetypeDetector {
                 new DotnetDetector(objectMapper),
                 new PhpDetector(objectMapper),
                 new TypeScriptDetector(objectMapper),
+                new PythonDetector(),
                 dockerfileDetector,
                 new TerraformDetector(),
                 new SqlDetector(),
