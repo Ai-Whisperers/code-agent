@@ -73,6 +73,18 @@ public class ApiKeyFilter {
                         return pass();
                     }
 
+                    // AIW: dev-mode bypass. When dev.auth.bypass=true (set via the
+                    // DEV_AUTH_BYPASS env var), stamp a synthetic admin identity on
+                    // every anonymous request so @Authenticated endpoints are
+                    // reachable without a Keycloak token or API key. Intended for
+                    // local smoke tests only — do NOT enable in production. The
+                    // proper production fix lands with integration:supabase-auth.
+                    if ("true".equalsIgnoreCase(settingsService.get("dev.auth.bypass", "false"))) {
+                        LOG.debugf("dev.auth.bypass=true: stamping synthetic admin identity on /%s", path);
+                        identityAssociation.setIdentity(synthAdmin("dev-bypass"));
+                        return pass();
+                    }
+
                     // Fall back to API key check (read per-request to support live rotation)
                     String apiKey = settingsService.getSecret("api.key");
                     if (isNotConfigured(apiKey)) {
@@ -81,16 +93,7 @@ public class ApiKeyFilter {
 
                     String provided = ctx.getHeaderString(API_KEY_HEADER);
                     if (apiKey.equals(provided)) {
-                        // Establish a real SecurityIdentity so @Authenticated / @RolesAllowed
-                        // work for API key callers without needing a Keycloak token.
-                        SecurityIdentity apiKeyIdentity = QuarkusSecurityIdentity.builder()
-                                .setPrincipal(new java.security.Principal() {
-                                    @Override public String getName() { return API_KEY_PRINCIPAL; }
-                                })
-                                .addRole(RoleMapper.KC_ADMIN)
-                                .setAnonymous(false)
-                                .build();
-                        identityAssociation.setIdentity(apiKeyIdentity);
+                        identityAssociation.setIdentity(synthAdmin(API_KEY_PRINCIPAL));
                         return pass();
                     }
 
@@ -106,6 +109,21 @@ public class ApiKeyFilter {
     // null item = pass through; non-null Response = abort with that response
     private static Uni<Response> pass() {
         return Uni.createFrom().nullItem();
+    }
+
+    /**
+     * Builds a synthetic app_admin SecurityIdentity. Used for both API key
+     * callers and the dev-mode bypass. The Principal carries the source name
+     * (e.g. "dev-bypass", "api-key") for audit logging.
+     */
+    private static SecurityIdentity synthAdmin(String principalName) {
+        return QuarkusSecurityIdentity.builder()
+                .setPrincipal(new java.security.Principal() {
+                    @Override public String getName() { return principalName; }
+                })
+                .addRole(RoleMapper.KC_ADMIN)
+                .setAnonymous(false)
+                .build();
     }
 
     private static boolean isNotConfigured(String value) {
