@@ -1,0 +1,265 @@
+# Structured profile for the AIW Code Agent.
+# See docs/clients/solstein.md for the prose version.
+
+client: solstein
+repo:
+  workspace: Ai-Whisperers
+  slug: solstein
+  git_platform: github
+  default_branch: master               # ⚠ not 'main'
+  target_branch: develop               # ⚠ PRs go to develop, NOT master
+  clone_url: https://github.com/Ai-Whisperers/solstein.git
+  project_root: "."
+  archetype: python-fastapi
+
+stack:
+  language: python
+  python_version: ">=3.10,<3.13"
+  target_version: "3.12"
+  framework: fastapi
+  package_manager: uv                  # prefer uv over pip/poetry
+  orm: sqlalchemy
+  migrations: alembic
+  migrations_dir: "alembic/versions"
+  database: supabase-postgres
+  vector_db: pgvector
+  orchestrator: langgraph
+  task_queue: celery
+  cache: redis
+  test_framework: pytest
+  type_checkers: ["mypy", "basedpyright"]
+  linter: ruff
+  formatter: black
+  observability:
+    llm: langfuse
+    metrics: prometheus
+    tracing: opentelemetry
+
+build:
+  install: "uv sync --all-extras"
+  install_fallback: "pip install -e '.[dev]'"
+  env:
+    PYTHONPATH: "src"
+  lint: "ruff check src/"
+  lint_fix: "ruff check src/ --fix"
+  lint_stats: "ruff check src/ --statistics"
+  format_check: "black --check src/ tests/"
+  format_fix: "black src/ tests/"
+  typecheck: "mypy src/solstein"
+  typecheck_strict: "basedpyright src/solstein"
+  precommit: "pre-commit run --all-files"
+
+tests:
+  default: 'pytest -m "unit and not slow" --cov=solstein'
+  suites:
+    smoke: "pytest tests/unit/ -x -q"
+    unit: 'pytest -m "unit and not slow" --cov=solstein --cov-report=term-missing'
+    integration: "pytest tests/integration/ -v"
+    agents: 'pytest -m "agents" -v'
+    data_quality: 'pytest -m "data_quality" -v'
+    e2e: 'pytest -m "e2e" -v'
+    all_fast: 'pytest -m "not slow" --cov=solstein'
+    all: "pytest --cov=solstein"
+  markers_required: true               # untagged tests are rejected
+  known_markers: [unit, integration, data_quality, agents, slow, e2e]
+
+  # Ruff delta gate — new warnings of enabled rule classes must be 0
+  lint_delta_gate:
+    enabled: true
+    baseline_command: "ruff check src/ --statistics"
+    fail_on_new: true
+
+protected_paths:
+  - "src/solstein/research/graph/**"   # FROZEN region
+  - "alembic/versions/*.py"            # migrations immutable once merged
+  - ".env"
+  - "config/secrets/**"
+  - "k8s/secrets/**"
+  - "terraform/*.tfstate*"
+  - "helm/values.*.yaml"
+  - ".github/workflows/**"
+
+canonical_paths:
+  - "src/solstein/research/pipeline.py"       # all new pipeline work here
+  - "src/solstein/analytics/constants.py"     # classification thresholds source of truth
+
+frozen_paths:
+  - "src/solstein/research/graph/**"          # security patches only
+
+allowed_commands:
+  - python
+  - python3
+  - pip
+  - uv
+  - pytest
+  - ruff
+  - black
+  - mypy
+  - basedpyright
+  - pre-commit
+  - alembic
+  - git
+  - ls
+  - find
+  - cat
+  - grep
+  - docker
+  - docker-compose
+
+forbidden_commands:
+  - "rm -rf"
+  - "alembic downgrade base"
+  - "psql"
+  - "pg_dump"
+  - "terraform apply"
+  - "terraform destroy"
+  - "helm upgrade"
+  - "helm rollback"
+  - "kubectl apply"
+  - "kubectl delete"
+
+caps:
+  max_files_changed: 8
+  max_lines_changed: 400
+  max_loop_iterations: 150
+  self_review_enabled: true
+  self_review_max_iterations: 15
+  job_timeout_minutes: 30
+  max_build_retries: 2
+
+invariants:
+  - id: metrics_footer_required
+    description: "Every agent commit must include a Metrics: footer per Autoresearch Protocol"
+    check_type: commit_message_footer
+    required_key: "Metrics"
+    severity: P0
+  - id: no_frozen_region_edits
+    description: "src/solstein/research/graph/** is frozen except for security patches"
+    check_type: path_write
+    block_paths: ["src/solstein/research/graph/**"]
+    exception_label: "security-patch"
+    severity: P0
+  - id: target_branch_develop
+    description: "PRs target develop, not master"
+    check_type: pr_base_branch
+    required_branch: develop
+    severity: P0
+  - id: pydantic_v2_io
+    description: "FastAPI routes must use Pydantic models, not raw dicts"
+    severity: P1
+  - id: no_blocking_in_async
+    description: "Don't use sync DB calls inside async def"
+    pattern: "async def.*\\n.*psycopg2\\.(?!.*await)"
+    severity: P1
+  - id: test_markers_required
+    description: "All test functions must carry a marker"
+    severity: P2
+    soft: true
+  - id: no_raise_exception
+    description: "Non-test code must use specific exception classes, not raise Exception(...)"
+    pattern: "raise Exception\\("
+    exclude_paths: ["tests/**"]
+    severity: P1
+  - id: loguru_not_print
+    description: "Use loguru, not print or stdlib logging"
+    pattern: "^\\s*(print|logging\\.get_logger)\\("
+    exclude_paths: ["tests/**", "scripts/**"]
+    severity: P2
+
+commit_template:
+  # Agent commit messages for Solstein must use this template.
+  subject: "{type}({scope}): {summary}"
+  body: |
+    {body}
+
+    STORY: {story_id}
+    Metrics:
+      coverage: {coverage_before}% → {coverage_after}%
+      ruff_warnings: {ruff_before} → {ruff_after}
+      tests: {tests_before} → {tests_after}
+    Self-review: {self_review_verdict}
+
+memories:
+  - "Follow the Autoresearch Protocol: every commit includes a Metrics footer with before/after numbers."
+  - "One small change at a time. Don't bundle unrelated fixes."
+  - "Never touch src/solstein/research/graph/ except for security patches."
+  - "Never edit analytics/constants.py thresholds without cross-checking the 2 other places they're defined."
+  - "Use Pydantic v2 models for all I/O. Never return dicts from FastAPI routes."
+  - "Use async def endpoints and asyncpg/psycopg — not blocking calls inside async context."
+  - "LangGraph nodes go in research/pipeline.py (canonical), never in research/graph/ (frozen)."
+  - "Log with loguru, not print or stdlib logging."
+  - "Tests must carry a marker (unit, integration, agents, etc.). Untagged tests are rejected."
+  - "Don't fix old ruff warnings as a side effect of unrelated PRs. Delta must be ≤ 0 per rule code."
+  - "Never use `raise Exception(...)` in non-test code — define a specific class in solstein/exceptions.py."
+  - "STORY-NNN references in commit messages link to Linear/GitHub issues."
+  - "Target branch is develop, NOT master."
+
+notifications:
+  default_target: "telegram:@solstein-alerts"
+  escalation:
+    P0: ["telegram:@solstein-alerts", "telegram:ivan"]
+    P1: ["telegram:@solstein-alerts"]
+
+quality_reports:
+  - kind: quality_snapshot
+    cron: "0 6 * * *"
+    timezone: "UTC"
+    branches: ["master", "develop"]
+  - kind: coverage_trend
+    cron: "0 6 * * *"
+    timezone: "UTC"
+    branches: ["develop"]
+  - kind: ruff_delta
+    cron: "@per_pr"
+    branches: ["develop"]
+  - kind: tech_debt_heatmap
+    cron: "0 8 * * 1"
+    timezone: "UTC"
+    branches: ["master"]
+  - kind: dependency_upgrade
+    cron: "0 8 * * 1"
+    timezone: "UTC"
+    branches: ["develop"]
+
+auto_fix:
+  enabled: true
+  work_queue_source:
+    type: file
+    path: "planning/QUEUE.md"
+    format: markdown_top_to_bottom
+  triggers:
+    - type: issue_label
+      labels: ["aiw-agent", "P0"]
+    - type: issue_label
+      labels: ["aiw-agent", "P1"]
+    - type: dependabot
+      auto_merge_if_small: true
+      small_threshold_lines: 30
+    - type: langfuse_regression
+      enabled: false                    # wire after langfuse webhook
+
+docs:
+  generator: mkdocs
+  config: "mkdocs.strict.yml"           # use strict config for generated docs
+  target_dir: "docs"
+  publish_to_confluence: false
+  publish_to_notion: false
+
+known_issues:
+  # Surfaced to the dashboard so humans know why the agent is conservative here.
+  - id: sqlite_fixtures_in_repo
+    description: "test_integration.db and test_perf.sqlite3 are binary files committed to the repo — should be generated by conftest.py"
+    severity: P2
+    first_task: true
+  - id: demo_auth_shim
+    description: "Auth currently accepts any credentials — NOT agent's responsibility to fix, needs human architecture decision"
+    severity: P0
+    agent_hands_off: true
+  - id: data_pipeline_field_loss
+    description: "70% field loss in data pipeline — needs human diagnosis first"
+    severity: P0
+    agent_hands_off: true
+  - id: threshold_conflict
+    description: "Classification thresholds defined in 3 conflicting files — reconcile via .hermes.md rule"
+    severity: P1
+    first_task: true

@@ -1,0 +1,197 @@
+# Structured profile for the AIW Code Agent.
+# This is the machine-readable version of docs/clients/vete.md.
+# The bootstrap script (scripts/aiw-bootstrap-clients.sh) POSTs this to the
+# running agent to seed repo_settings, memories, hooks, and schedules.
+
+client: vete
+repo:
+  workspace: Ai-Whisperers
+  slug: Vete
+  git_platform: github
+  default_branch: main
+  target_branch: main              # PRs merge here
+  clone_url: https://github.com/Ai-Whisperers/Vete.git
+  project_root: web                # Real app lives in web/ subfolder
+  archetype: nextjs-supabase
+
+stack:
+  language: typescript
+  framework: nextjs
+  version: "15"
+  package_manager: npm
+  node_version: ">=20.0.0"
+  database: supabase-postgres
+  orm: drizzle
+  auth: supabase-ssr
+  test_framework: vitest
+  e2e_framework: playwright
+
+build:
+  install: "npm ci"
+  build: "NODE_OPTIONS='--max_old_space_size=8192' npm run build"
+  build_memory_mb: 8192
+  lint: "npm run lint"              # --max-warnings 800  (the relaxed baseline)
+  lint_fix: "npm run lint:fix"
+  lint_strict: "npm run lint:strict"   # agent MUST NOT use this
+  typecheck: "npm run typecheck"
+  format_check: "npm run format:check"
+  format_fix: "npm run format"
+
+tests:
+  default: "npm run test"           # = test:unit
+  suites:
+    unit: "npm run test:unit"
+    integration: "npm run test:integration"
+    api: "npm run test:api"
+    components: "npm run test:components"
+    database: "npm run test:database"
+    e2e: "npm run test:e2e"
+    smoke: "npm run test:smoke"
+    critical: "npm run test:critical"
+  feature_suites:
+    pets: "npm run test:feature:pets"
+    booking: "npm run test:feature:booking"
+    vaccines: "npm run test:feature:vaccines"
+    inventory: "npm run test:feature:inventory"
+    finance: "npm run test:feature:finance"
+    medical: "npm run test:feature:medical"
+    store: "npm run test:feature:store"
+  auto_detect_rules:
+    - path_glob: "web/app/api/**"
+      run: ["unit", "api"]
+    - path_glob: "web/components/**"
+      run: ["unit", "components"]
+    - path_glob: "web/db/**"
+      run: ["database"]
+    - path_glob: "web/app/[clinic]/**/pets/**"
+      run: ["unit", "feature_pets"]
+    - path_glob: "web/app/[clinic]/**/booking/**"
+      run: ["unit", "feature_booking"]
+
+protected_paths:
+  - "web/.content_data/**"
+  - "web/db/migrations/*.sql"       # numbered migrations are immutable
+  - "web/.env*"
+  - "supabase/migrations/**"
+  - ".github/workflows/**"
+  - "vercel.json"
+  - "web/sentry.*.config.ts"
+  - "scripts/migrate-*"
+
+allowed_commands:
+  - npm
+  - npx
+  - pnpm
+  - node
+  - git
+  - ls
+  - find
+  - cat
+  - grep
+  - supabase
+  - drizzle-kit
+
+forbidden_commands:
+  - "rm -rf"
+  - "npm run db:clean"
+  - "npm run seed:clear"
+  - "npm run reset-dev"
+  - "supabase db reset"
+  - "psql"
+  - "pg_dump"
+
+caps:
+  max_files_changed: 15
+  max_lines_changed: 800
+  max_loop_iterations: 150
+  self_review_enabled: true
+  self_review_max_iterations: 20
+  job_timeout_minutes: 45
+  max_build_retries: 2
+
+invariants:
+  # Hard refusal rules — agent MUST reject any PR that violates these.
+  - id: tenant_filter_required
+    description: "Every Supabase query must filter by tenant_id"
+    pattern: 'supabase.*from\([^)]+\)(?!.*tenant_id)'
+    severity: P0
+  - id: rls_on_new_tables
+    description: "New CREATE TABLE statements must include ENABLE ROW LEVEL SECURITY"
+    pattern: "CREATE TABLE"
+    requires_match: "ENABLE ROW LEVEL SECURITY"
+    severity: P0
+  - id: no_hardcoded_colors
+    description: "Use CSS variables, not Tailwind color utilities"
+    pattern: 'className=".*(bg|text|border)-(red|blue|green|gray|yellow|purple|pink|indigo)-[0-9]'
+    severity: P1
+  - id: no_tailwind_v4
+    description: "Tailwind v4 is forbidden — it breaks the build"
+    pattern: '"tailwindcss":\s*"\^?4\.'
+    severity: P0
+  - id: no_silent_catch
+    description: "catch blocks must log + rethrow or return structured error"
+    pattern: 'catch\s*\([^)]*\)\s*\{\s*\}|catch\s*\([^)]*\)\s*\{\s*//.*\s*\}'
+    severity: P1
+  - id: spanish_ui_text
+    description: "UI-facing error messages in Spanish"
+    severity: P2
+    soft: true                       # warn, don't reject
+
+memories:
+  # Seed entries for the learning extractor (prevents re-learning from comments)
+  - "Prefer Server Components. Only add 'use client' when genuinely needed (state, events, browser APIs)."
+  - "Use TanStack Query for client-side data fetching, never plain fetch + useEffect."
+  - "Use `interface` for object shapes, `type` only for unions and primitives."
+  - "All colors come from CSS variables. Never hardcode Tailwind color classes."
+  - "UI text and API error messages in Spanish. Code and comments in English."
+  - "Every catch block: log with [Module/fn] prefix, then rethrow or return structured error. Never silent."
+  - "Use BaseService pattern in web/lib/services/. Don't put business logic in API routes."
+  - "Database access goes through the Supabase client. Never raw SQL in components."
+  - "Prefer async/await over .then() chains."
+  - "Test files live beside the code or in web/tests/. Use describe/it, not test()."
+  - "Every API route starts with: auth check, tenant lookup, tenant-filtered query."
+  - "Multi-tenant rule: every query filters by tenant_id. No exceptions."
+
+notifications:
+  default_target: "telegram:@vete-alerts"
+  escalation:
+    P0: ["telegram:@vete-alerts", "telegram:ivan"]
+    P1: ["telegram:@vete-alerts"]
+    P2: ["telegram:@vete-alerts"]
+
+quality_reports:
+  - kind: quality_snapshot
+    cron: "0 6 * * *"
+    timezone: "America/Asuncion"
+    branches: ["main", "develop"]
+  - kind: coverage_trend
+    cron: "0 6 * * *"
+    timezone: "America/Asuncion"
+    branches: ["main"]
+  - kind: dependency_upgrade
+    cron: "0 8 * * 1"
+    timezone: "America/Asuncion"
+    branches: ["develop"]
+  - kind: tech_debt_heatmap
+    cron: "0 8 * * 1"
+    timezone: "America/Asuncion"
+    branches: ["main"]
+
+auto_fix:
+  enabled: true
+  triggers:
+    - type: issue_label
+      labels: ["aiw-agent"]
+    - type: issue_label
+      labels: ["bug", "priority:high"]
+    - type: dependabot
+      auto_merge_if_small: true
+      small_threshold_lines: 50
+    - type: sentry_webhook
+      enabled: false                 # wire after sentry webhook secret is in bw
+
+docs:
+  api_docs_target: "web/docs/api.md"
+  architecture_docs_target: "web/docs/architecture.md"
+  publish_to_confluence: false       # AIW doesn't use Confluence
+  publish_to_notion: false
