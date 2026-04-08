@@ -45,7 +45,12 @@ public class ApiKeyFilter {
     @Inject
     CurrentIdentityAssociation identityAssociation;
 
-    @ServerRequestFilter
+    // AIW: preMatching=true makes this filter run before Quarkus @Authenticated
+    // enforcement. The upstream version ran at Priorities.USER (5000), which is
+    // AFTER auth (1000) — meaning the filter's `identityAssociation.setIdentity`
+    // never got a chance to save the request, and @Authenticated endpoints
+    // always 401'd in dev (OIDC-disabled) mode. Pre-matching fixes both modes.
+    @ServerRequestFilter(preMatching = true)
     public Uni<Response> filter(ContainerRequestContext ctx) {
         // Always let CORS preflight through — OPTIONS carries no credentials
         if ("OPTIONS".equalsIgnoreCase(ctx.getMethod())) {
