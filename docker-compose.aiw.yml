@@ -57,7 +57,12 @@ services:
       - aiw-code-agent-net
 
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 is postgres 16 + pgvector extension preinstalled.
+    # Upstream docker-compose.yml uses plain postgres:16-alpine which doesn't
+    # include pgvector, so migration V12 (create code embeddings) fails with
+    # "extension vector is not available". We need pgvector for the agent's
+    # code-graph embeddings + knowledge search.
+    image: pgvector/pgvector:pg16
     container_name: aiw-code-agent-db
     environment:
       POSTGRES_DB: aiw_code_agent
