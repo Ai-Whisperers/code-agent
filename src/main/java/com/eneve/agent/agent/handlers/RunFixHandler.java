@@ -10,7 +10,7 @@ import com.eneve.agent.linter.LinterResult;
 import com.eneve.agent.linter.LinterService;
 import com.eneve.agent.linter.StaticAnalysisDiffReport;
 import com.eneve.agent.model.*;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
@@ -38,7 +38,7 @@ public class RunFixHandler implements JobHandler {
     @Inject JobQueue jobQueue;
     @Inject JobLifecycleHelper lifecycle;
     @Inject JiraService jiraService;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject RepoSettingsStore repoSettingsStore;
     @Inject CodeMetricsStore codeMetricsStore;
     @Inject LinterService linterService;
@@ -158,7 +158,7 @@ public class RunFixHandler implements JobHandler {
 
             // Teams: Fix job started notification
             if (request.jiraKey() != null && !request.jiraKey().isBlank()) {
-                teamsNotifier.sendNotification(new RunResult(
+                notificationDispatcher.sendNotification(new RunResult(
                         job.getJobId(), "FIX", "STARTED",
                         request.jiraKey(), request.repoUrl(), request.branchName(),
                         null,
@@ -303,7 +303,7 @@ public class RunFixHandler implements JobHandler {
 
                 // Teams: PR ready for review
                 String jiraKey = request.jiraKey();
-                teamsNotifier.sendNotification(new RunResult(
+                notificationDispatcher.sendNotification(new RunResult(
                         job.getJobId(), "FIX", "AWAITING_APPROVAL",
                         jiraKey, request.repoUrl(), request.branchName(),
                         prUrl,

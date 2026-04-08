@@ -4,7 +4,7 @@ import com.anthropic.models.messages.MessageParam;
 import com.eneve.agent.agent.*;
 import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.model.*;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.WorkspaceContext;
@@ -26,7 +26,7 @@ public class HookHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject SettingsService settings;
     @Inject CheckpointAwareJobSupport checkpointSupport;
 
@@ -117,7 +117,7 @@ public class HookHandler implements JobHandler {
                 job.setSummary("Hook '" + request.hookName() + "' completed with no changes needed.");
                 jobStore.archive(job);
                 LOG.infof("Hook job %s completed: no changes made", job.getJobId());
-                teamsNotifier.sendNotification(lifecycle.buildHookResult(job, true));
+                notificationDispatcher.sendNotification(lifecycle.buildHookResult(job, true));
                 return;
             }
 
@@ -133,7 +133,7 @@ public class HookHandler implements JobHandler {
                 job.setSummary(summary);
                 jobStore.archive(job);
                 LOG.infof("Hook job %s completed: committed directly to %s", job.getJobId(), pushBranch);
-                teamsNotifier.sendNotification(lifecycle.buildHookResult(job, true));
+                notificationDispatcher.sendNotification(lifecycle.buildHookResult(job, true));
             } else {
                 try {
                     String title = "chore: " + request.hookName();
@@ -148,7 +148,7 @@ public class HookHandler implements JobHandler {
                     job.setPrId(prResult[1]);
                     jobStore.update(job);
                     LOG.infof("Hook job %s completed: PR %s created", job.getJobId(), prResult[0]);
-                    teamsNotifier.sendNotification(lifecycle.buildHookResult(job, true));
+                    notificationDispatcher.sendNotification(lifecycle.buildHookResult(job, true));
                 } catch (Exception e) {
                     lifecycle.failHook(job, "Create PR failed: " + e.getMessage());
                 }

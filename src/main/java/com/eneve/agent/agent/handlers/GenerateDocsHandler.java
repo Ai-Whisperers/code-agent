@@ -8,7 +8,7 @@ import com.eneve.agent.agent.store.JobStore;
 import com.eneve.agent.agent.store.RepoSettingsStore;
 import com.eneve.agent.model.*;
 import com.eneve.agent.notifications.N8nWebhookNotifier;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.scm.GitPlatformRegistry;
 import com.eneve.agent.scm.GitPlatformService;
 import com.eneve.agent.workspace.PlanWorkspaceManager;
@@ -33,7 +33,7 @@ public class GenerateDocsHandler implements JobHandler {
     @Inject JobStore jobStore;
     @Inject GitWorkspaceHelper gitHelper;
     @Inject JobLifecycleHelper lifecycle;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject N8nWebhookNotifier n8nNotifier;
     @Inject PlanWorkspaceManager planWorkspaceManager;
     @Inject SettingsService settings;

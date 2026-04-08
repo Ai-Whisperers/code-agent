@@ -16,7 +16,7 @@ import com.eneve.agent.aikido.AikidoGroupDetailStore;
 import com.eneve.agent.aikido.AikidoService;
 import com.eneve.agent.aikido.AikidoTriageService;
 import com.eneve.agent.model.RunResult;
-import com.eneve.agent.notifications.TeamsNotifier;
+import com.eneve.agent.notifications.NotificationDispatcher;
 import com.eneve.agent.upgrade.UpgradeService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -58,7 +58,7 @@ public class AikidoWebhookResource {
     @Inject AikidoGroupDetailStore groupDetailStore;
     @Inject AikidoTriageService aikidoTriageService;
     @Inject HookEvaluator hookEvaluator;
-    @Inject TeamsNotifier teamsNotifier;
+    @Inject NotificationDispatcher notificationDispatcher;
     @Inject SecurityIssuesCacheService securityIssuesCacheService;
 
     ObjectMapper objectMapper = new ObjectMapper();
@@ -142,7 +142,7 @@ public class AikidoWebhookResource {
                         if (mapped == null) {
                             LOG.warnf("Aikido webhook: container image '%s' has no repo mapping — alerting team",
                                     containerImage);
-                            teamsNotifier.sendNotification(new RunResult(
+                            notificationDispatcher.sendNotification(new RunResult(
                                     null, "AIKIDO_TRIAGE", "FAILED", null, null, null, null,
                                     null,
                                     "Unmapped container: " + containerImage
