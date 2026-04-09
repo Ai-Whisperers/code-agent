@@ -6,6 +6,21 @@ This comprehensive system provides automated software development workflows, fro
 
 ## Documentation Index
 
+### AIW adaptation docs (read these first if you're deploying)
+
+| Document | Description |
+|----------|-------------|
+| [Runbook](RUNBOOK.md) | **START HERE** — step-by-step deploy from a blank VPS to a running agent. Every command copy-pastable. |
+| [Operations](OPERATIONS.md) | Day-to-day commands: health checks, logs, rotating tokens, restoring backups, changing models, adding repos. |
+| [Known Issues](KNOWN-ISSUES.md) | Every footgun we've hit, with root causes and fixes. Grep your error here before debugging. |
+| [Next Steps](NEXT-STEPS.md) | Phased roadmap from "working agent" to "production-hardened multi-client deployment". |
+| [Deployment Notes](DEPLOYMENT-NOTES.md) | Current state of the VPS deployment + the non-obvious bits of the Swarm setup. |
+| [Customization Plan](AIW-CUSTOMIZATION-PLAN.md) | The original plan for forking upstream Eneve and adapting to AIW infrastructure. |
+| [Study Notes](STUDY-NOTES.md) | Annotated observations about the upstream codebase. |
+| [Client Profiles](clients/) | Per-client YAML profiles (Vete, Solstein) loaded by the bootstrap script. |
+
+### Upstream Eneve reference docs
+
 | Document | Description |
 |----------|-------------|
 | [Architecture Overview](architecture.md) | High-level system design, component interactions, and technology stack |

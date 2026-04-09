@@ -142,12 +142,34 @@ def update_env_file(env_file: str, key: str, value: str) -> None:
 # -----------------------------------------------------------------------------
 
 def roll_service(service_name: str) -> None:
+    """Roll the Swarm service via `docker stack deploy`.
+
+    IMPORTANT: we deliberately use `docker stack deploy` here, NOT
+    `docker service update --force`. Rationale: Swarm's env_file: directive
+    is evaluated CLIENT-SIDE at `docker stack deploy` time — the file contents
+    are inlined into the service spec. `docker service update` does NOT
+    re-read the file; it just restarts the container with the existing spec.
+
+    If this script used `service update`, any changes to /opt/aiw-code-agent/.env
+    (model selection, webhook secrets, feature flags) would be silently
+    invisible to the running container. Only the GITHUB_TOKEN line, which THIS
+    script writes just before calling roll, would ever propagate.
+
+    `docker stack deploy` re-reads the stack file + the env_file every time,
+    so ALL .env changes (plus the fresh token) land on the next boot.
+    """
     if not service_name:
         return
-    print(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] rolling service: {service_name}")
+    print(f"[{time.strftime('%Y-%m-%dT%H:%M:%S')}] redeploying stack to pick up .env")
+    # The stack name and compose file path are conventions — if they change,
+    # update these two constants.
+    stack_name = "aiw-code-agent"
+    compose_file = "/opt/aiw-code-agent/docker-stack.aiw.yml"
     subprocess.run(
-        ["docker", "service", "update", "--force",
-         "--update-order", "start-first", service_name],
+        ["docker", "stack", "deploy",
+         "-c", compose_file,
+         "--with-registry-auth",
+         stack_name],
         check=True, capture_output=True,
     )
 
