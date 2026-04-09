@@ -1,0 +1,24 @@
+# /etc/aiw-code-agent/github-app.conf
+#
+# Config for the GitHub App installation token refresher.
+# Copy to /etc/aiw-code-agent/github-app.conf, fill in your values, chmod 600.
+#
+# These are non-secret IDs (the .pem file is the actual secret).
+
+# Numeric App ID from github.com/organizations/Ai-Whisperers/settings/apps/<app>
+AIW_GITHUB_APP_ID=
+
+# Installation ID from github.com/organizations/Ai-Whisperers/settings/installations
+# (the NNNNN at the end of the Configure URL)
+AIW_GITHUB_INSTALLATION_ID=
+
+# Path to the PEM private key (default works if you scp'd to the agreed location)
+AIW_GITHUB_APP_KEY=/opt/aiw-code-agent/.github-app-key.pem
+
+# Agent .env file to update with the fresh GITHUB_TOKEN
+AIW_ENV_FILE=/opt/aiw-code-agent/.env
+
+# Swarm service to roll after the .env update. Empty = skip rollout (the next
+# scheduled deploy will pick it up — useful when testing). Production should
+# leave this set so the agent always has a current token.
+AIW_SERVICE_NAME=aiw-code-agent_app
