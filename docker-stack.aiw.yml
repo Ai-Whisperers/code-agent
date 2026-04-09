@@ -46,6 +46,12 @@ services:
     volumes:
       - aiw-m2:/home/appuser/.m2
       - aiw-workspace:/workspace
+      # AIW: mount the host's Lobster installation read-only so the agent
+      # can invoke deterministic workflows via /opt/aiw-lobster/workflows/*.sh
+      # See docs/LOBSTER-INTEGRATION.md. The host install lives outside Swarm
+      # volumes because it's shared across any AIW service that wants to use
+      # Lobster workflows.
+      - /opt/aiw-lobster:/opt/aiw-lobster:ro
     networks:
       - agent-net
       - aiw-internal

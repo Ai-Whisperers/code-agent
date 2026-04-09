@@ -37,22 +37,48 @@ DROPPED_FIELDS = [
     "thinking",           # Claude extended-thinking config
 ]
 
+# AIW: DO NOT drop Anthropic-native fields when routing to Anthropic itself
+# (directly or via OpenRouter). These providers NEED cache_control and thinking
+# to deliver the features the Anthropic Java SDK expects — dropping them
+# silently disables prompt caching and extended thinking on the one route that
+# actually supports them. Identified by the underlying model prefix.
+ANTHROPIC_NATIVE_PREFIXES = (
+    "anthropic/",
+    "openrouter/anthropic/",
+    "bedrock/anthropic.",
+)
+
+
+def is_anthropic_native(backend: str) -> bool:
+    return any(backend.startswith(p) for p in ANTHROPIC_NATIVE_PREFIXES)
+
 
 def main() -> None:
     with open(CONFIG_PATH) as f:
         cfg = yaml.safe_load(f)
 
-    count = 0
+    stripped = 0
+    preserved = 0
     for model in cfg["model_list"]:
         params = model.setdefault("litellm_params", {})
-        params["drop_params"] = True
-        params["additional_drop_params"] = DROPPED_FIELDS
-        count += 1
+        backend = params.get("model", "")
+        if is_anthropic_native(backend):
+            # Clear any previously-applied drop_params so Anthropic sees
+            # cache_control etc. natively.
+            params.pop("drop_params", None)
+            params.pop("additional_drop_params", None)
+            preserved += 1
+        else:
+            params["drop_params"] = True
+            params["additional_drop_params"] = DROPPED_FIELDS
+            stripped += 1
 
     with open(CONFIG_PATH, "w") as f:
         yaml.dump(cfg, f, default_flow_style=False, sort_keys=False)
 
-    print(f"applied drop_params to {count} models in {CONFIG_PATH}")
+    print(f"applied drop_params to {stripped} non-Anthropic models")
+    print(f"preserved Anthropic-native params on {preserved} models")
+    print(f"total: {stripped + preserved} models in {CONFIG_PATH}")
     print("restart litellm to pick up: docker restart litellm")
 
 
