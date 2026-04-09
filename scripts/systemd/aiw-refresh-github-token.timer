@@ -1,0 +1,15 @@
+[Unit]
+Description=AIW Code Agent — periodic GitHub App installation token refresh
+Documentation=https://github.com/Ai-Whisperers/code-agent/blob/aiw/main/docs/DEPLOYMENT-NOTES.md
+
+[Timer]
+# GitHub installation tokens are valid for 1 hour. Refresh every 50 minutes
+# so there's a 10-minute safety window before expiry.
+OnBootSec=2min
+OnUnitActiveSec=50min
+AccuracySec=30s
+Persistent=true
+Unit=aiw-refresh-github-token.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,14 @@
+[Unit]
+Description=AIW Code Agent — refresh GitHub App installation token
+Documentation=https://github.com/Ai-Whisperers/code-agent/blob/aiw/main/docs/DEPLOYMENT-NOTES.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/aiw-code-agent/github-app.conf
+ExecStart=/usr/bin/python3 /opt/aiw-code-agent/scripts/aiw-refresh-github-token.py
+StandardOutput=journal
+StandardError=journal
+# Do not restart on failure automatically — the timer handles retry cadence
+User=root
