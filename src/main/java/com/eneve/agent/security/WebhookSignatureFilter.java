@@ -51,7 +51,17 @@ public class WebhookSignatureFilter implements ContainerRequestFilter {
 
     @Override
     public void filter(ContainerRequestContext ctx) throws IOException {
+        // AIW: strip leading slash before the prefix check. Depending on the
+        // Quarkus REST path config and the container of the provider chain,
+        // ctx.getUriInfo().getPath() may return the path with or without a
+        // leading "/". The upstream code only handled the "no leading slash"
+        // case, silently skipping signature verification for every webhook
+        // when the path was delivered with a leading slash — a P0 auth bypass
+        // that lets any HTTP client trigger agent jobs.
         String path = ctx.getUriInfo().getPath();
+        while (path.startsWith("/")) {
+            path = path.substring(1);
+        }
         if (!path.startsWith("webhooks/")) {
             return;
         }
