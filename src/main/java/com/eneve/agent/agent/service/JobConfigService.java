@@ -77,13 +77,25 @@ public class JobConfigService {
     }
 
     public long resolveMaxTokens(String tier, Integer storedMaxTokens) {
+        long base;
         if (TIER_FAST.equals(tier)) {
-            return 8192L;
+            base = 8192L;
+        } else if (storedMaxTokens != null) {
+            base = storedMaxTokens;
+        } else {
+            base = Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
         }
-        if (storedMaxTokens != null) {
-            return storedMaxTokens;
-        }
-        return Long.parseLong(settings.get("anthropic.max-tokens", "8192"));
+        // AIW: cap output tokens at a provider-safe ceiling. Anthropic allows
+        // up to 64000 but when LiteLLM routes to Groq llama-3.3-70b the cap
+        // is 32768, and requests over that are rejected with 400 before any
+        // tokens are billed. Setting `anthropic.max-output-tokens-ceiling`
+        // to 32000 keeps us comfortably under every provider's limit.
+        // Default 32000 = safe for Groq + SambaNova + Cerebras + Anthropic.
+        // Override via ANTHROPIC_MAX_OUTPUT_TOKENS_CEILING when routing only
+        // to Anthropic-native providers that support higher caps.
+        long ceiling = Long.parseLong(
+                settings.get("anthropic.max-output-tokens-ceiling", "32000"));
+        return Math.min(base, ceiling);
     }
 
     private JobConfigView buildView(String jobType, JobConfigRow row, JobTypeDefault defaults) {
