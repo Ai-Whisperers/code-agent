@@ -72,12 +72,14 @@ services:
         # ─── SERVICE ─────────────────────────────────────────────────
         - "traefik.http.services.aiwca-svc.loadbalancer.server.port=8080"
 
-        # Multi-network disambiguation: this service is on both agent-net (for
-        # Traefik ingress) and aiw-internal (for app↔db). Without this hint,
-        # Traefik tries to reach the VIP on whichever network comes first in
-        # the service spec, which may not be the one it's on.
+        # Multi-network disambiguation: this service is on three overlays
+        # (agent-net, aiw-internal, aiw-llm-net). Tell Traefik which one it
+        # should use for routing.
+        #
+        # Only `traefik.swarm.network` in Traefik 3.5+ — mixing it with the
+        # deprecated `traefik.docker.network` label causes the whole service
+        # to be silently skipped by the swarm provider.
         - "traefik.swarm.network=agent-net"
-        - "traefik.docker.network=agent-net"
 
         # Internal admin access: via SSH + docker exec on the VPS, no Traefik route.
         # Phase 3 (integration:supabase-auth) will add a properly-authenticated

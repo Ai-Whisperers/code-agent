@@ -53,31 +53,40 @@ mismatch where the stack file evaluated `${DATABASE_PASSWORD:-default}`
 to the default, while the app container later loaded a different value
 from `env_file:`. **Fix:** hardcode DB credentials in the stack file.
 
-### 4. Traefik labels not being picked up (deferred)
+### 4. Traefik v3.5 silently skips services with deprecated labels
 
-The stack has correct `traefik.http.*` labels under `deploy.labels` and
-my service IS on `agent-net` (the shared Traefik network). The service
-has a valid router rule (`Host(...) && PathPrefix(/api/webhooks/)`) and
-a valid service label with port 8080. Traefik still returns 404 for any
-request to `code-agent.sunstein.cloud` and the Traefik logs never
-mention `aiwca` at all.
+**FIXED.** Root cause: having BOTH `traefik.swarm.network=agent-net`
+AND `traefik.docker.network=agent-net` labels on the same swarm service
+causes Traefik 3.5's swarm provider to log a deprecation warning for
+`traefik.docker.*` and then **silently skip the entire service** —
+no routers, no logs mentioning the service, nothing. Fun.
 
-Things tried unsuccessfully:
-- Full stack recreate (in case the initial parse was cached bad)
-- Both `traefik.swarm.network=agent-net` and
-  `traefik.docker.network=agent-net` labels
-- Removing the basic-auth middleware (in case `$` escaping was breaking it)
-- Simplified router names
-- Single router without priority
+**Fix:** use only `traefik.swarm.network=agent-net`. The stack file
+now has exactly one network-disambiguation label and Traefik picks up
+the labels immediately.
 
-Theory: Traefik v3 swarm provider may need a specific format or there's
-a subtle validation failure happening silently. Worth debugging in a
-fresh session with `--log.level=DEBUG` and inspecting
-`/api/http/routers` from Traefik's admin API (not currently exposed).
+What gets routed publicly via HTTPS:
 
-**Workaround:** access the agent via SSH + `docker exec` on the VPS.
-This is enough for smoke tests and Phase 4/5 prep. GitHub webhook
-registration (Phase 4/5 real execution) is blocked until HTTPS works.
+| Path | Behavior |
+|---|---|
+| `https://code-agent.sunstein.cloud/api/webhooks/github/*` | ✅ Routes to app, HMAC verified by WebhookSignatureFilter |
+| `https://code-agent.sunstein.cloud/api/webhooks/bitbucket/*` | ✅ Same (legacy, unused) |
+| `https://code-agent.sunstein.cloud/api/chat` | ❌ 404 at Traefik — not in PathPrefix rule |
+| `https://code-agent.sunstein.cloud/api/plans` | ❌ 404 at Traefik |
+| `https://code-agent.sunstein.cloud/q/health` | ❌ 404 at Traefik |
+
+Internal admin access stays via SSH + `docker exec`. Phase 3 (Supabase
+Auth) will add a proper authenticated HTTPS route for the admin API.
+
+Verified:
+```bash
+$ curl -X POST https://code-agent.sunstein.cloud/api/webhooks/github/pull-request \
+    -H 'Content-Type: application/json' -H 'X-GitHub-Event: pull_request' \
+    -d '{"action":"opened","number":1,"pull_request":{"title":"test"}}'
+{"reason":"Missing PR number or repository full_name in payload","action":"ignored"}
+```
+
+HTTP 200 from the app. TLS cert valid via Let's Encrypt (letsencryptresolver).
 
 ## Useful commands (run on the VPS)
 
