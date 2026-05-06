@@ -1,0 +1,15 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    uses: Ai-Whisperers/ci-cd/.github/workflows/deploy-vps.yml@main
+    with:
+      site-name: ${{ github.event.repository.name }}
+    secrets:
+      VPS_HOST: ${{ secrets.VPS_HOST }}
+      VPS_USER: ${{ secrets.VPS_USER }}
+      VPS_KEY: ${{ secrets.VPS_KEY }}
