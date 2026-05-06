@@ -1,0 +1,14 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  ci:
+    uses: Ai-Whisperers/ci-cd/.github/workflows/ci-nextjs.yml@main
+    with:
+      supabase-url: 'https://placeholder.supabase.co'
+      supabase-anon-key: 'placeholder'
