@@ -1,0 +1,13 @@
+name: Governance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  governance:
+    uses: Ai-Whisperers/ci-cd/.github/workflows/governance.yml@main
+    with:
+      working-directory: .
+      fail-on-todo: true
